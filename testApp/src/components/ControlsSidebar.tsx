@@ -9,6 +9,13 @@ import {
   setStructuredExtractModel,
   setStructuredExtractProvider
 } from '../utils/structuredExtractSettings';
+import {
+  loadSemanticSearchStoredSettings,
+  setSemanticSearchApiKey,
+  setSemanticSearchModel,
+  setSemanticSearchProvider,
+  type SemanticSearchProvider
+} from '../utils/semanticSearchSettings';
 
 interface ControlsSidebarProps {
   state: LoadState;
@@ -94,6 +101,11 @@ export function ControlsSidebar({
   const [extractOpenAiApiKey, setExtractOpenAiApiKey] = useState('');
   const [extractGeminiModel, setExtractGeminiModel] = useState('');
   const [extractOpenAiModel, setExtractOpenAiModel] = useState('');
+  const [semanticSearchProvider, setSemanticSearchProviderState] = useState<SemanticSearchProvider>('gemini');
+  const [semanticSearchGeminiApiKey, setSemanticSearchGeminiApiKey] = useState('');
+  const [semanticSearchOpenAiApiKey, setSemanticSearchOpenAiApiKey] = useState('');
+  const [semanticSearchGeminiModel, setSemanticSearchGeminiModel] = useState('');
+  const [semanticSearchOpenAiModel, setSemanticSearchOpenAiModel] = useState('');
 
   useEffect(() => {
     const settings = loadStructuredExtractStoredSettings();
@@ -102,10 +114,23 @@ export function ControlsSidebar({
     setExtractOpenAiApiKey(settings.openaiApiKey);
     setExtractGeminiModel(settings.geminiModel);
     setExtractOpenAiModel(settings.openaiModel);
+
+    const semanticSearchSettings = loadSemanticSearchStoredSettings();
+    setSemanticSearchProviderState(semanticSearchSettings.provider);
+    setSemanticSearchGeminiApiKey(semanticSearchSettings.geminiApiKey);
+    setSemanticSearchOpenAiApiKey(semanticSearchSettings.openaiApiKey);
+    setSemanticSearchGeminiModel(semanticSearchSettings.geminiModel);
+    setSemanticSearchOpenAiModel(semanticSearchSettings.openaiModel);
   }, []);
 
   const currentExtractApiKey = extractProvider === 'openai' ? extractOpenAiApiKey : extractGeminiApiKey;
   const currentExtractModel = extractProvider === 'openai' ? extractOpenAiModel : extractGeminiModel;
+  const currentSemanticSearchApiKey = semanticSearchProvider === 'openai'
+    ? semanticSearchOpenAiApiKey
+    : semanticSearchGeminiApiKey;
+  const currentSemanticSearchModel = semanticSearchProvider === 'openai'
+    ? semanticSearchOpenAiModel
+    : semanticSearchGeminiModel;
 
   const handleExtractProviderChange = (provider: StructuredExtractProvider) => {
     setExtractProviderState(provider);
@@ -128,6 +153,29 @@ export function ControlsSidebar({
       setExtractGeminiModel(value);
     }
     setStructuredExtractModel(extractProvider, value);
+  };
+
+  const handleSemanticSearchProviderChange = (provider: SemanticSearchProvider) => {
+    setSemanticSearchProviderState(provider);
+    setSemanticSearchProvider(provider);
+  };
+
+  const handleSemanticSearchApiKeyChange = (value: string) => {
+    if (semanticSearchProvider === 'openai') {
+      setSemanticSearchOpenAiApiKey(value);
+    } else {
+      setSemanticSearchGeminiApiKey(value);
+    }
+    setSemanticSearchApiKey(semanticSearchProvider, value);
+  };
+
+  const handleSemanticSearchModelChange = (value: string) => {
+    if (semanticSearchProvider === 'openai') {
+      setSemanticSearchOpenAiModel(value);
+    } else {
+      setSemanticSearchGeminiModel(value);
+    }
+    setSemanticSearchModel(semanticSearchProvider, value);
   };
 
   return (
@@ -223,6 +271,35 @@ export function ControlsSidebar({
         </div>
 
         <div className="gemini-extraction-controls">
+          <div className="structured-extract-settings">
+            <div className="structured-extract-settings-title">Semantic Search Provider</div>
+            <select
+              value={semanticSearchProvider}
+              onChange={(event) => handleSemanticSearchProviderChange(event.target.value as SemanticSearchProvider)}
+            >
+              <option value="gemini">Gemini</option>
+              <option value="openai">OpenAI</option>
+            </select>
+            <input
+              type="password"
+              value={currentSemanticSearchApiKey}
+              placeholder={semanticSearchProvider === 'openai' ? 'OpenAI API key' : 'Gemini API key'}
+              onChange={(event) => handleSemanticSearchApiKeyChange(event.target.value)}
+            />
+            <input
+              type="text"
+              value={currentSemanticSearchModel}
+              placeholder={
+                semanticSearchProvider === 'openai'
+                  ? 'Embedding model (e.g., text-embedding-3-small)'
+                  : 'Embedding model (e.g., gemini-embedding-001)'
+              }
+              onChange={(event) => handleSemanticSearchModelChange(event.target.value)}
+            />
+            <span className="structured-extract-settings-note">
+              Used for semantic indexing/search embeddings. Re-index the PDF after changing provider or model.
+            </span>
+          </div>
           <div className="structured-extract-settings">
             <div className="structured-extract-settings-title">Structured Extract Provider</div>
             <select

@@ -3,6 +3,7 @@ import {
   indexDocument,
   semanticSearch,
   loadEmbeddingsByHash,
+  isEmbeddingsCompatibleWithConfig,
   type DocumentEmbeddings,
   type IndexingProgress,
   type SemanticSearchResult,
@@ -115,13 +116,21 @@ export function useSemanticSearch(
     // Check for cached embeddings
     loadEmbeddingsByHash(document.documentHash)
       .then((cached) => {
-        if (cached && currentDocHashRef.current === document.documentHash) {
+        if (cached && currentDocHashRef.current === document.documentHash && isEmbeddingsCompatibleWithConfig(cached, options?.config)) {
           setEmbeddings(cached);
           setIndexingProgress({
             status: 'ready',
             totalChunks: cached.chunks.length,
             processedChunks: cached.chunks.length,
             message: 'Loaded cached embeddings'
+          });
+        } else if (cached && currentDocHashRef.current === document.documentHash) {
+          setEmbeddings(null);
+          setIndexingProgress({
+            status: 'idle',
+            totalChunks: 0,
+            processedChunks: 0,
+            message: 'Semantic index provider/model changed. Re-index required.'
           });
         } else if (options?.autoIndex) {
           // Auto-index if enabled and no cache found
@@ -175,6 +184,11 @@ export function useSemanticSearch(
   const search = useCallback(async (query: string): Promise<SemanticSearchResult[]> => {
     if (!embeddings) {
       setSearchError('Document not indexed yet');
+      return [];
+    }
+
+    if (!isEmbeddingsCompatibleWithConfig(embeddings, options?.config)) {
+      setSearchError('Semantic index provider/model changed. Re-index the document.');
       return [];
     }
 

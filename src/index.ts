@@ -12,6 +12,7 @@ export * from './query/openAiApi.js';
 export * from './query/structuredExtractApi.js';
 export * from './query/openAiStructuredExtract.js';
 export * from './query/lmStudioApi.js';
+export * from './query/embeddingApi.js';
 export * from './query/relevanceAugmenter.js';
 export * from './visual/relevanceTheme.js';
 export * from './visual/relevanceRenderer.js';

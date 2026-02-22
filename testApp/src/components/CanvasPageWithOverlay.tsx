@@ -1464,10 +1464,6 @@ interface CitationTextProps {
 }
 
 function CitationText({ text, onCitationClick, hasExtraction, paragraphText, bounds }: CitationTextProps): JSX.Element {
-  if (!hasExtraction) {
-    return <>{text}</>;
-  }
-
   // Match citation patterns: [1], [15], [1,2,3], [1-5], [1, 2], etc.
   const citationPattern = /\[(\d+(?:\s*[-,]\s*\d+)*)\]/g;
   const parts: Array<{ type: 'text' | 'citation'; content: string; numbers?: string[] }> = [];
@@ -1525,7 +1521,7 @@ function CitationText({ text, onCitationClick, hasExtraction, paragraphText, bou
               e.stopPropagation();
               onCitationClick(firstNumber, e, paragraphText, bounds);
             }}
-            title={`View reference ${part.content}`}
+            title={hasExtraction ? `View reference ${part.content}` : `View citation ${part.content} (run extraction for reference details)`}
           >
             {part.content}
           </span>
@@ -1624,4 +1620,3 @@ function renderTableOverlay(
     </div>
   );
 }
-

@@ -1,4 +1,17 @@
-import { LMStudioAPI, type LMStudioConfig } from 'pdf-layout-parser';
+import {
+  EmbeddingAPI,
+  type EmbeddingApiConfig,
+  type EmbeddingProvider,
+  type LMStudioConfig,
+  DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_OPENAI_EMBEDDING_MODEL
+} from 'pdf-layout-parser';
+import {
+  getSemanticSearchApiKey,
+  getSemanticSearchModel,
+  getSemanticSearchProvider,
+  type SemanticSearchProvider
+} from '../utils/semanticSearchSettings';
 
 // ============================================================================
 // Types
@@ -24,7 +37,9 @@ export interface EmbeddedChunk extends TextChunk {
 export interface DocumentEmbeddings {
   documentId: string;
   documentHash: string;
+  provider?: EmbeddingProvider;
   model: string;
+  schemaVersion?: number;
   createdAt: number;
   chunks: EmbeddedChunk[];
 }
@@ -43,10 +58,28 @@ export interface IndexingProgress {
 
 export interface SemanticSearchConfig {
   lmStudio?: LMStudioConfig;
+  embedding?: {
+    provider?: EmbeddingProvider;
+    apiKey?: string;
+    model?: string;
+    endpoint?: string;
+    apiVersion?: string;
+  };
   batchSize?: number;
   minChunkLength?: number;
   maxChunkLength?: number;
 }
+
+interface ResolvedSemanticEmbeddingConfig {
+  provider: EmbeddingProvider;
+  apiKey?: string;
+  model: string;
+  endpoint?: string;
+  apiVersion?: string;
+  lmStudio?: LMStudioConfig;
+}
+
+const SEMANTIC_EMBEDDINGS_SCHEMA_VERSION = 2;
 
 // ============================================================================
 // IndexedDB Storage
@@ -416,12 +449,64 @@ function groupTextItemsIntoParagraphs(items: PageTextItem[], lineGapThreshold = 
   return paragraphs;
 }
 
+function resolveSemanticEmbeddingConfig(config?: SemanticSearchConfig): ResolvedSemanticEmbeddingConfig {
+  const provider = config?.embedding?.provider ?? getSemanticSearchProvider();
+
+  if (provider === 'lmstudio') {
+    const lmStudioConfig = config?.lmStudio;
+    return {
+      provider,
+      model: config?.embedding?.model?.trim() || lmStudioConfig?.defaultModel?.trim() || 'text-embedding-nomic-embed-text-v2-moe',
+      endpoint: config?.embedding?.endpoint,
+      lmStudio: lmStudioConfig
+    };
+  }
+
+  const remoteProvider = provider as SemanticSearchProvider;
+  const apiKey = config?.embedding?.apiKey?.trim() || getSemanticSearchApiKey(remoteProvider) || undefined;
+  const storedModel = getSemanticSearchModel(remoteProvider) || undefined;
+  const configuredModel = config?.embedding?.model?.trim() || storedModel;
+  const defaultModel = remoteProvider === 'openai' ? DEFAULT_OPENAI_EMBEDDING_MODEL : DEFAULT_GEMINI_EMBEDDING_MODEL;
+
+  return {
+    provider,
+    apiKey,
+    model: configuredModel && configuredModel.length > 0 ? configuredModel : defaultModel,
+    endpoint: config?.embedding?.endpoint,
+    apiVersion: config?.embedding?.apiVersion,
+    lmStudio: config?.lmStudio
+  };
+}
+
+function toEmbeddingApiConfig(config?: SemanticSearchConfig): EmbeddingApiConfig {
+  const resolved = resolveSemanticEmbeddingConfig(config);
+  return {
+    provider: resolved.provider,
+    apiKey: resolved.apiKey,
+    model: resolved.model,
+    endpoint: resolved.endpoint,
+    apiVersion: resolved.apiVersion,
+    lmStudio: resolved.lmStudio
+  };
+}
+
+export function isEmbeddingsCompatibleWithConfig(
+  embeddings: DocumentEmbeddings,
+  config?: SemanticSearchConfig
+): boolean {
+  const resolved = resolveSemanticEmbeddingConfig(config);
+  const provider = embeddings.provider ?? 'lmstudio';
+  const model = embeddings.model?.trim() || '';
+
+  return provider === resolved.provider && model === resolved.model;
+}
+
 // ============================================================================
 // Embedding Generation
 // ============================================================================
 
 /**
- * Generate embeddings for text chunks using LM Studio
+ * Generate embeddings for text chunks using the configured provider
  */
 export async function generateChunkEmbeddings(
   chunks: TextChunk[],
@@ -429,7 +514,7 @@ export async function generateChunkEmbeddings(
   onProgress?: (processed: number, total: number) => void
 ): Promise<EmbeddedChunk[]> {
   const batchSize = config?.batchSize ?? 10;
-  const api = new LMStudioAPI(config?.lmStudio);
+  const api = new EmbeddingAPI(toEmbeddingApiConfig(config));
   const embeddedChunks: EmbeddedChunk[] = [];
 
   for (let i = 0; i < chunks.length; i += batchSize) {
@@ -437,8 +522,10 @@ export async function generateChunkEmbeddings(
     const texts = batch.map((c) => c.text);
 
     try {
-      console.log("emb chunk: ",  texts);
-      const result = await api.generateEmbedding({ input: texts });
+      const result = await api.generateEmbedding({
+        input: texts,
+        taskType: 'retrieval_document'
+      });
 
       for (let j = 0; j < batch.length; j++) {
         const chunk = batch[j];
@@ -501,10 +588,20 @@ export async function semanticSearch(
 ): Promise<SemanticSearchResult[]> {
   const topK = config?.topK ?? 10;
   const minScore = config?.minScore ?? 0.3;
-  const api = new LMStudioAPI(config?.lmStudio);
+  if (!isEmbeddingsCompatibleWithConfig(embeddings, config)) {
+    const cachedProvider = embeddings.provider ?? 'lmstudio';
+    throw new Error(
+      `Semantic index was built with ${cachedProvider}/${embeddings.model}. Re-index to use ${resolveSemanticEmbeddingConfig(config).provider}/${resolveSemanticEmbeddingConfig(config).model}.`
+    );
+  }
+
+  const api = new EmbeddingAPI(toEmbeddingApiConfig(config));
 
   // Generate embedding for query
-  const queryResult = await api.generateEmbedding({ input: query });
+  const queryResult = await api.generateEmbedding({
+    input: query,
+    taskType: 'retrieval_query'
+  });
   const queryEmbedding = queryResult.embeddings[0];
 
   if (!queryEmbedding) {
@@ -554,7 +651,7 @@ export async function indexDocument(options: IndexDocumentOptions): Promise<Docu
   });
 
   const existing = await loadEmbeddingsByHash(documentHash);
-  if (existing) {
+  if (existing && isEmbeddingsCompatibleWithConfig(existing, config)) {
     onProgress?.({
       status: 'ready',
       totalChunks: existing.chunks.length,
@@ -562,6 +659,14 @@ export async function indexDocument(options: IndexDocumentOptions): Promise<Docu
       message: 'Loaded cached embeddings'
     });
     return existing;
+  }
+  if (existing) {
+    onProgress?.({
+      status: 'idle',
+      totalChunks: 0,
+      processedChunks: 0,
+      message: 'Cached embeddings found, but provider/model changed. Re-indexing...'
+    });
   }
 
   // Chunk document - prefer HTML layout for semantic blocks
@@ -591,12 +696,14 @@ export async function indexDocument(options: IndexDocumentOptions): Promise<Docu
     throw new Error('No text chunks found in document');
   }
 
+  const resolvedEmbeddingConfig = resolveSemanticEmbeddingConfig(config);
+
   // Generate embeddings
   onProgress?.({
     status: 'embedding',
     totalChunks: chunks.length,
     processedChunks: 0,
-    message: 'Generating embeddings...'
+    message: `Generating ${resolvedEmbeddingConfig.provider} embeddings...`
   });
 
   const embeddedChunks = await generateChunkEmbeddings(
@@ -627,7 +734,9 @@ export async function indexDocument(options: IndexDocumentOptions): Promise<Docu
   const documentEmbeddings: DocumentEmbeddings = {
     documentId,
     documentHash,
-    model: config?.lmStudio?.defaultModel ?? 'text-embedding-nomic-embed-text-v2-moe',
+    provider: resolvedEmbeddingConfig.provider,
+    model: resolvedEmbeddingConfig.model,
+    schemaVersion: SEMANTIC_EMBEDDINGS_SCHEMA_VERSION,
     createdAt: Date.now(),
     chunks: embeddedChunks
   };
