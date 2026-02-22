@@ -1,0 +1,339 @@
+import type {
+  HtmlContentBlock,
+  HtmlHeadingBlock,
+  HtmlPageLayout,
+  HtmlParagraphBlock,
+  HtmlTableBlock,
+  PDFImageBounds,
+  PDFPage
+} from 'pdf-layout-parser';
+import type { ExtractedTable } from '../types';
+
+export interface HighlightLineData {
+  text: string;
+  bounds?: PDFImageBounds;
+  lineHeight?: number;
+}
+
+export interface HighlightBlockData {
+  bounds: PDFImageBounds;
+  lines: HighlightLineData[];
+  fontFamily?: string;
+  fontSize?: number;
+}
+
+export type TableDetectionSource = 'layout-bounds' | 'cell-bounds' | 'ai';
+
+export type TableDetectionResult = {
+  block: HtmlTableBlock;
+  source: TableDetectionSource;
+};
+
+export type ExtractTableHit = {
+  bounds: PDFImageBounds;
+  model: ExtractedTable;
+};
+
+export type TableAIDetector = (context: {
+  page: HtmlPageLayout;
+  x: number;
+  y: number;
+  tables: HtmlTableBlock[];
+}) => HtmlTableBlock | null;
+
+const TABLE_HIT_TOLERANCE = 6;
+const EXTRACT_TABLE_HIT_TOLERANCE = 10;
+
+export function hasBounds(bounds: any): bounds is PDFImageBounds {
+  if (!bounds) {
+    return false;
+  }
+  return ['minX', 'minY', 'maxX', 'maxY'].every((key) => typeof bounds[key] === 'number' && Number.isFinite(bounds[key]));
+}
+
+export function isPointInBounds(bounds: PDFImageBounds, x: number, y: number): boolean {
+  return x >= bounds.minX && x <= bounds.maxX && y >= bounds.minY && y <= bounds.maxY;
+}
+
+export function isPointNearBounds(bounds: PDFImageBounds, x: number, y: number, tolerance: number): boolean {
+  return (
+    x >= bounds.minX - tolerance &&
+    x <= bounds.maxX + tolerance &&
+    y >= bounds.minY - tolerance &&
+    y <= bounds.maxY + tolerance
+  );
+}
+
+export function boundsArea(bounds: PDFImageBounds): number {
+  return Math.max(0, bounds.maxX - bounds.minX) * Math.max(0, bounds.maxY - bounds.minY);
+}
+
+export function buildHighlightBlockKey(pageNumber: number, bounds: PDFImageBounds): string {
+  return `${pageNumber}-${bounds.minX.toFixed(3)}-${bounds.minY.toFixed(3)}-${bounds.maxX.toFixed(3)}-${bounds.maxY.toFixed(3)}`;
+}
+
+export function buildHighlightBlockData(block: any): HighlightBlockData | null {
+  if (!hasBounds(block?.bounds)) {
+    return null;
+  }
+  return {
+    bounds: block.bounds,
+    lines: extractHighlightLines(block),
+    fontFamily: extractFontFamily(block),
+    fontSize: extractFontSize(block)
+  };
+}
+
+export function findParagraphBlockAtPoint(
+  page: HtmlPageLayout,
+  x: number,
+  y: number
+): HtmlParagraphBlock | HtmlHeadingBlock | null {
+  let candidate: HtmlParagraphBlock | HtmlHeadingBlock | null = null;
+
+  for (const block of page.content) {
+    if (!isParagraphBlock(block) || !hasBounds(block.bounds)) {
+      continue;
+    }
+    if (!isPointInBounds(block.bounds, x, y)) {
+      continue;
+    }
+    if (!candidate) {
+      candidate = block;
+      continue;
+    }
+    const candidateArea = (candidate.bounds.maxX - candidate.bounds.minX) * (candidate.bounds.maxY - candidate.bounds.minY);
+    const blockArea = (block.bounds.maxX - block.bounds.minX) * (block.bounds.maxY - block.bounds.minY);
+    if (blockArea < candidateArea) {
+      candidate = block;
+    }
+  }
+
+  return candidate;
+}
+
+export function isParagraphBlock(block: HtmlContentBlock): block is HtmlParagraphBlock | HtmlHeadingBlock {
+  return block.type === 'paragraph' || block.type === 'heading';
+}
+
+export function isTableBlock(block: HtmlContentBlock): block is HtmlTableBlock {
+  return block.type === 'table';
+}
+
+export function detectTableAtPoint(
+  page: HtmlPageLayout,
+  x: number,
+  y: number,
+  aiDetector?: TableAIDetector
+): TableDetectionResult | null {
+  const tables = page.content.filter(isTableBlock).filter((table) => hasBounds(table.bounds));
+
+  const inBounds = tables
+    .filter((table) => isPointInBounds(table.bounds, x, y))
+    .sort((left, right) => boundsArea(left.bounds) - boundsArea(right.bounds));
+
+  if (inBounds.length > 0) {
+    return { block: inBounds[0], source: 'layout-bounds' };
+  }
+
+  for (const table of tables) {
+    for (const row of table.rows ?? []) {
+      const rowBounds = hasBounds(row.bounds) ? row.bounds : null;
+      if (!rowBounds) {
+        continue;
+      }
+      if (isPointInBounds(rowBounds, x, y) || isPointNearBounds(rowBounds, x, y, TABLE_HIT_TOLERANCE)) {
+        return { block: table, source: 'cell-bounds' };
+      }
+      for (const cell of row.cells ?? []) {
+        const cellBounds = hasBounds(cell.bounds) ? cell.bounds : null;
+        if (cellBounds && (isPointInBounds(cellBounds, x, y) || isPointNearBounds(cellBounds, x, y, TABLE_HIT_TOLERANCE))) {
+          return { block: table, source: 'cell-bounds' };
+        }
+      }
+    }
+  }
+
+  if (aiDetector) {
+    const aiTable = aiDetector({ page, x, y, tables });
+    if (aiTable && isTableBlock(aiTable) && hasBounds(aiTable.bounds)) {
+      return { block: aiTable, source: 'ai' };
+    }
+  }
+
+  return null;
+}
+
+export function detectExtractedTableAtPoint(payload: {
+  tables: ExtractedTable[];
+  page: PDFPage;
+  x: number;
+  y: number;
+}): ExtractTableHit | null {
+  const { tables, page, x, y } = payload;
+  if (!tables || tables.length === 0) {
+    return null;
+  }
+  console.debug('Detecting extracted table', {
+    tableCount: tables.length,
+    page: page.number,
+    pageHeight: page.size.height,
+    x,
+    y
+  });
+
+  for (const table of tables) {
+    if (!table.bounds) {
+      continue;
+    }
+    const tablePage = table.page ?? 0;
+    const matchesPage = tablePage === page.number;
+    if (!matchesPage) {
+      continue;
+    }
+    const { minX, maxX, minY, maxY } = table.bounds;
+
+    if (
+      x >= minX - EXTRACT_TABLE_HIT_TOLERANCE &&
+      x <= maxX + EXTRACT_TABLE_HIT_TOLERANCE &&
+      y >= minY - EXTRACT_TABLE_HIT_TOLERANCE &&
+      y <= maxY + EXTRACT_TABLE_HIT_TOLERANCE
+    ) {
+      console.debug('Table bounds match', { tableId: table.id, page: page.number, minX, maxX, minY, maxY, x, y });
+      return {
+        bounds: { minX, minY, maxX, maxY },
+        model: table
+      };
+    }
+  }
+
+  return null;
+}
+
+export function getOverrideLineHeight(block: HighlightBlockData): number | undefined {
+  if (typeof block.fontSize === 'number' && Number.isFinite(block.fontSize) && block.fontSize > 0) {
+    return block.fontSize;
+  }
+  const lineCount = block.lines.length > 0 ? block.lines.length : 1;
+  const blockHeight = block.bounds.maxY - block.bounds.minY;
+  const averageLineHeight = blockHeight / lineCount;
+  if (Number.isFinite(averageLineHeight) && averageLineHeight > 0) {
+    return averageLineHeight;
+  }
+  return undefined;
+}
+
+function extractHighlightLines(block: any): HighlightLineData[] {
+  if (block?.type === 'table') {
+    return extractTableLines(block);
+  }
+  if (Array.isArray(block.lines) && block.lines.length > 0) {
+    return block.lines.map((line: any) => ({
+      text: deriveLineText(line),
+      bounds: hasBounds(line.bounds) ? line.bounds : undefined,
+      lineHeight: typeof line.lineHeight === 'number' ? line.lineHeight : undefined
+    }));
+  }
+  if (typeof block.text === 'string' && block.text.length > 0) {
+    return [
+      {
+        text: block.text,
+        bounds: hasBounds(block.bounds) ? block.bounds : undefined
+      }
+    ];
+  }
+  return [];
+}
+
+function extractTableLines(block: HtmlTableBlock): HighlightLineData[] {
+  if (!Array.isArray(block.rows) || block.rows.length === 0) {
+    return hasBounds(block.bounds)
+      ? [
+          {
+            text: '',
+            bounds: block.bounds
+          }
+        ]
+      : [];
+  }
+  return block.rows.map((row) => {
+    const rowBounds = hasBounds(row.bounds) ? row.bounds : hasBounds(block.bounds) ? block.bounds : undefined;
+    const rowText = Array.isArray(row.cells)
+      ? row.cells
+          .map((cell) => (typeof cell?.text === 'string' ? cell.text.trim() : ''))
+          .filter((value) => value.length > 0)
+          .join(' | ')
+      : '';
+    return {
+      text: rowText.length > 0 ? rowText : ' ',
+      bounds: rowBounds,
+      lineHeight: rowBounds ? rowBounds.maxY - rowBounds.minY : undefined
+    };
+  });
+}
+
+function deriveLineText(line: any): string {
+  if (typeof line?.text === 'string') {
+    return line.text;
+  }
+  if (Array.isArray(line?.items)) {
+    return line.items.map((item: any) => (typeof item?.text === 'string' ? item.text : '')).join('');
+  }
+  return '';
+}
+
+function extractFontFamily(block: any): string | undefined {
+  const spans = gatherSpans(block);
+  const fontSpan = spans.find((span) => typeof span?.font === 'string' && span.font.trim().length > 0);
+  return fontSpan?.font;
+}
+
+function extractFontSize(block: any): number | undefined {
+  const spans = gatherSpans(block);
+  const sizeCandidates = spans
+    .map((span) => span?.fontSize)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
+  if (sizeCandidates.length > 0) {
+    return average(sizeCandidates);
+  }
+  if (Array.isArray(block.lines)) {
+    const lineHeights = block.lines
+      .map((line: any) => (typeof line?.lineHeight === 'number' ? line.lineHeight : undefined))
+      .filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
+    if (lineHeights.length > 0) {
+      return average(lineHeights) * 0.8;
+    }
+  }
+  if (hasBounds(block.bounds)) {
+    const height = block.bounds.maxY - block.bounds.minY;
+    if (Number.isFinite(height) && height > 0) {
+      return height * 0.3;
+    }
+  }
+  return undefined;
+}
+
+function gatherSpans(block: any): Array<{ font?: string; fontSize?: number }> {
+  if (block?.type === 'table' && Array.isArray(block?.rows)) {
+    return block.rows.flatMap((row: any) =>
+      Array.isArray(row?.cells)
+        ? row.cells.flatMap((cell: any) => (Array.isArray(cell?.spans) ? cell.spans : []))
+        : []
+    );
+  }
+  if (Array.isArray(block?.spans) && block.spans.length > 0) {
+    return block.spans;
+  }
+  if (!Array.isArray(block?.lines)) {
+    return [];
+  }
+  return block.lines.flatMap((line: any) => (Array.isArray(line?.spans) ? line.spans : []));
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return total / values.length;
+}

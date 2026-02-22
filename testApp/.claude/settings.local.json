@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/rad/dev/temp/testCodex/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,0 +1,449 @@
+import { useState, useCallback, useRef, useEffect } from 'react';
+import type { KeyboardEvent, FocusEvent } from 'react';
+import type { IndexingProgress, SemanticSearchResult } from '../search';
+import {
+  type SearchHistoryEntry,
+  addSearchToHistory,
+  getSearchHistory,
+  deleteSearchFromHistory
+} from '../storage/searchHistoryStorage';
+
+interface SemanticSearchBarProps {
+  isIndexed: boolean;
+  isIndexing: boolean;
+  indexingProgress: IndexingProgress;
+  onStartIndexing: () => void;
+  onSearch: (query: string) => Promise<SemanticSearchResult[]>;
+  onClearSearch: () => void;
+  searchResults: SemanticSearchResult[];
+  isSearching: boolean;
+  disabled?: boolean;
+  activeResultIndex: number;
+  onNavigateResult: (index: number) => void;
+  documentId?: string;
+}
+
+export function SemanticSearchBar({
+  isIndexed,
+  isIndexing,
+  indexingProgress,
+  onStartIndexing,
+  onSearch,
+  onClearSearch,
+  searchResults,
+  isSearching,
+  disabled = false,
+  activeResultIndex,
+  onNavigateResult,
+  documentId
+}: SemanticSearchBarProps): JSX.Element {
+  const [query, setQuery] = useState('');
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [lastSearchedQuery, setLastSearchedQuery] = useState('');
+  const [showHistory, setShowHistory] = useState(false);
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const hasResults = searchResults.length > 0;
+  const queryChanged = query.trim() !== lastSearchedQuery;
+
+  // Load search history on mount and when expanded
+  useEffect(() => {
+    if (isExpanded) {
+      getSearchHistory().then(setSearchHistory).catch(() => setSearchHistory([]));
+    }
+  }, [isExpanded]);
+
+  // Close history dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setShowHistory(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const refreshHistory = useCallback(() => {
+    getSearchHistory().then(setSearchHistory).catch(() => setSearchHistory([]));
+  }, []);
+
+  const handleSubmit = useCallback(async () => {
+    const trimmed = query.trim();
+    if (!trimmed || isSearching || !isIndexed) {
+      return;
+    }
+
+    // If query hasn't changed and we have results, navigate to next
+    if (!queryChanged && hasResults) {
+      const nextIndex = (activeResultIndex + 1) % searchResults.length;
+      onNavigateResult(nextIndex);
+      return;
+    }
+
+    // Otherwise perform new search
+    setShowHistory(false);
+    await onSearch(trimmed);
+    setLastSearchedQuery(trimmed);
+
+    // Add to history
+    await addSearchToHistory(trimmed, documentId);
+    refreshHistory();
+  }, [query, isSearching, isIndexed, onSearch, queryChanged, hasResults, activeResultIndex, searchResults.length, onNavigateResult, documentId, refreshHistory]);
+
+  const handleHistoryClick = useCallback(async (entry: SearchHistoryEntry) => {
+    setQuery(entry.query);
+    setShowHistory(false);
+    setHistoryIndex(-1);
+
+    // Execute search immediately
+    if (isIndexed && !isSearching) {
+      await onSearch(entry.query);
+      setLastSearchedQuery(entry.query);
+      // Move to top of history
+      await addSearchToHistory(entry.query, documentId);
+      refreshHistory();
+    }
+  }, [isIndexed, isSearching, onSearch, documentId, refreshHistory]);
+
+  const handleKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>) => {
+    if (showHistory && searchHistory.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setHistoryIndex((prev) => Math.min(prev + 1, searchHistory.length - 1));
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setHistoryIndex((prev) => Math.max(prev - 1, -1));
+        return;
+      }
+      if (event.key === 'Enter' && historyIndex >= 0) {
+        event.preventDefault();
+        const selected = searchHistory[historyIndex];
+        if (selected) {
+          void handleHistoryClick(selected);
+        }
+        return;
+      }
+    }
+
+    if (event.key === 'Enter') {
+      void handleSubmit();
+    } else if (event.key === 'Escape') {
+      if (showHistory) {
+        setShowHistory(false);
+        setHistoryIndex(-1);
+      } else {
+        setQuery('');
+        onClearSearch();
+        inputRef.current?.blur();
+      }
+    }
+  }, [handleSubmit, onClearSearch, showHistory, searchHistory, historyIndex, handleHistoryClick]);
+
+  const handleClear = useCallback(() => {
+    setQuery('');
+    setLastSearchedQuery('');
+    onClearSearch();
+    inputRef.current?.focus();
+  }, [onClearSearch]);
+
+  const handleToggleExpand = useCallback(() => {
+    setIsExpanded((prev) => !prev);
+    if (!isExpanded) {
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [isExpanded]);
+
+  const handleInputFocus = useCallback(() => {
+    if (searchHistory.length > 0) {
+      setShowHistory(true);
+      setHistoryIndex(-1);
+    }
+  }, [searchHistory.length]);
+
+  const handleInputBlur = useCallback((event: FocusEvent<HTMLInputElement>) => {
+    // Don't close if clicking within the container (history dropdown)
+    const relatedTarget = event.relatedTarget as Node | null;
+    if (containerRef.current?.contains(relatedTarget)) {
+      return;
+    }
+    // Delay to allow click events on history items
+    setTimeout(() => setShowHistory(false), 150);
+  }, []);
+
+  const handleDeleteHistory = useCallback(async (event: React.MouseEvent, id: string) => {
+    event.stopPropagation();
+    await deleteSearchFromHistory(id);
+    refreshHistory();
+  }, [refreshHistory]);
+
+  const handleToggleHistory = useCallback(() => {
+    if (showHistory) {
+      setShowHistory(false);
+    } else {
+      refreshHistory();
+      setShowHistory(true);
+      setHistoryIndex(-1);
+    }
+  }, [showHistory, refreshHistory]);
+
+  // Auto-expand when there are results
+  useEffect(() => {
+    if (searchResults.length > 0) {
+      setIsExpanded(true);
+    }
+  }, [searchResults.length]);
+
+  const progressPercent = indexingProgress.totalChunks > 0
+    ? Math.round((indexingProgress.processedChunks / indexingProgress.totalChunks) * 100)
+    : 0;
+
+  const formatTimestamp = (timestamp: number): string => {
+    const now = Date.now();
+    const diff = now - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    if (days < 7) return `${days}d ago`;
+    return new Date(timestamp).toLocaleDateString();
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className={`semantic-search-bar ${isExpanded ? 'semantic-search-bar--expanded' : ''}`}
+    >
+      <div className="semantic-search-bar-inner">
+        {/* Search Icon / Toggle */}
+        <button
+          type="button"
+          className="semantic-search-toggle"
+          onClick={handleToggleExpand}
+          aria-label={isExpanded ? 'Collapse search' : 'Expand search'}
+          title="Semantic Search"
+        >
+          <SearchIcon />
+        </button>
+
+        {/* Search Input */}
+        <div className={`semantic-search-input-wrapper ${isExpanded ? 'semantic-search-input-wrapper--visible' : ''}`}>
+          <input
+            ref={inputRef}
+            type="text"
+            className="semantic-search-input"
+            placeholder={isIndexed ? 'Search document...' : 'Index document first...'}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setHistoryIndex(-1);
+            }}
+            onKeyDown={handleKeyDown}
+            onFocus={handleInputFocus}
+            onBlur={handleInputBlur}
+            disabled={disabled || !isIndexed || isSearching}
+          />
+
+          {/* History Toggle Button */}
+          {isIndexed && searchHistory.length > 0 && (
+            <button
+              type="button"
+              className={`semantic-search-history-btn ${showHistory ? 'semantic-search-history-btn--active' : ''}`}
+              onClick={handleToggleHistory}
+              aria-label="Search history"
+              title="Search history"
+            >
+              <HistoryIcon />
+            </button>
+          )}
+
+          {query && (
+            <button
+              type="button"
+              className="semantic-search-clear"
+              onClick={handleClear}
+              aria-label="Clear search"
+            >
+              <ClearIcon />
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="semantic-search-submit"
+            onClick={handleSubmit}
+            disabled={!query.trim() || !isIndexed || isSearching}
+            aria-label="Search"
+          >
+            {isSearching ? <LoadingIcon /> : <ArrowIcon />}
+          </button>
+
+          {/* Search History Dropdown */}
+          {showHistory && searchHistory.length > 0 && (
+            <div className="semantic-search-history">
+              <div className="semantic-search-history-header">
+                <HistoryIcon />
+                <span>Recent searches</span>
+              </div>
+              <div className="semantic-search-history-list">
+                {searchHistory.map((entry, index) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    className={`semantic-search-history-item ${index === historyIndex ? 'semantic-search-history-item--selected' : ''}`}
+                    onClick={() => handleHistoryClick(entry)}
+                  >
+                    <SearchIcon />
+                    <span className="semantic-search-history-query">{entry.query}</span>
+                    <span className="semantic-search-history-time">{formatTimestamp(entry.timestamp)}</span>
+                    <button
+                      type="button"
+                      className="semantic-search-history-delete"
+                      onClick={(e) => handleDeleteHistory(e, entry.id)}
+                      aria-label="Remove from history"
+                    >
+                      <ClearIcon />
+                    </button>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Index Button */}
+        {!isIndexed && !isIndexing && (
+          <button
+            type="button"
+            className="semantic-search-index-btn"
+            onClick={onStartIndexing}
+            disabled={disabled}
+            title="Index document for semantic search"
+          >
+            <IndexIcon />
+            <span>Index</span>
+          </button>
+        )}
+
+        {/* Indexing Progress */}
+        {isIndexing && (
+          <div className="semantic-search-progress">
+            <div className="semantic-search-progress-bar">
+              <div
+                className="semantic-search-progress-fill"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            <span className="semantic-search-progress-text">
+              {indexingProgress.message || `${progressPercent}%`}
+            </span>
+          </div>
+        )}
+
+        {/* Results Count with position */}
+        {isIndexed && searchResults.length > 0 && (
+          <div className="semantic-search-results-count">
+            {activeResultIndex + 1} / {searchResults.length}
+          </div>
+        )}
+
+        {/* Indexed Badge */}
+        {isIndexed && !isIndexing && searchResults.length === 0 && !query && (
+          <div className="semantic-search-indexed-badge" title={`${indexingProgress.totalChunks} chunks indexed`}>
+            <CheckIcon />
+            <span>Indexed</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SearchIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+      <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path d="M12.5 12.5L17 17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ClearIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d="M4 4l8 8M12 4l-8 8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function ArrowIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d="M3 8h10M9 4l4 4-4 4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function LoadingIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" className="spin">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+      <path d="M14 8a6 6 0 0 1-6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IndexIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true">
+      <rect x="2" y="2" width="14" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M5 6h8M5 9h8M5 12h5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CheckIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path
+        d="M3 8l3.5 3.5L13 5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function HistoryIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M8 4.5V8l2.5 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
