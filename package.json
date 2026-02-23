@@ -12,6 +12,8 @@
     "build": "npm run build:all",
     "build:all": "npm install && npm --prefix testApp install && npm run build:lib && npm --prefix testApp run build",
     "build:lib": "tsc -p tsconfig.json",
+    "pages:build": "bash ./scripts/github-pages-build.sh",
+    "pages:publish": "bash ./scripts/github-pages-publish.sh",
     "clean": "rimraf dist",
     "lint": "tsc --noEmit",
     "test": "vitest"
