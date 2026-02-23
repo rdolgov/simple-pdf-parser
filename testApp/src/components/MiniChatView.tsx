@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
-import { GeminiAPI, createGoogleSearchTool } from 'pdf-layout-parser';
+import { GeminiAPI, OpenAiAPI, createGoogleSearchTool } from 'pdf-layout-parser';
 import {
   type ChatMessage,
   type ChatAnnotationContent,
@@ -15,6 +15,8 @@ import {
 interface MiniChatViewProps {
   contextText: string;
   apiKey: string;
+  provider?: 'gemini' | 'openai';
+  model?: string | null;
   onClose: () => void;
   position?: { top: number; left: number };
   documentId: string;
@@ -38,6 +40,8 @@ Answer the user's questions based on this context. If the question cannot be ans
 export function MiniChatView({
   contextText,
   apiKey,
+  provider = 'gemini',
+  model,
   onClose,
   position,
   documentId,
@@ -188,22 +192,30 @@ export function MiniChatView({
     setIsLoading(true);
 
     try {
-      const tools = enableWebSearch ? [createGoogleSearchTool()] : undefined;
-      const api = new GeminiAPI({ apiKey, tools });
-
       const conversationHistory = messages
         .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
         .join('\n');
 
       const webSearchHint = enableWebSearch
-        ? '\n\nYou have access to web search. If the user asks about topics not covered in the context, feel free to search for additional information and cite your sources.'
+        ? provider === 'gemini'
+          ? '\n\nYou have access to web search. If the user asks about topics not covered in the context, feel free to search for additional information and cite your sources.'
+          : '\n\nIf the answer is not in the provided context, clearly say so.'
         : '';
 
       const fullPrompt = SYSTEM_PROMPT.replace('{context}', contextText) + webSearchHint +
         (conversationHistory ? `\n\nPrevious conversation:\n${conversationHistory}\n\n` : '\n\n') +
         `User: ${trimmed}`;
 
-      const result = await api.generateText(fullPrompt);
+      const result = provider === 'openai'
+        ? await new OpenAiAPI({
+            apiKey,
+            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
+          }).generateText(fullPrompt)
+        : await new GeminiAPI({
+            apiKey,
+            tools: enableWebSearch ? [createGoogleSearchTool()] : undefined,
+            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
+          }).generateText(fullPrompt);
       const assistantMessage: ChatMessage = { role: 'assistant', content: result.text, timestamp: Date.now() };
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (err) {
@@ -212,7 +224,7 @@ export function MiniChatView({
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, apiKey, messages, contextText, enableWebSearch]);
+  }, [input, isLoading, apiKey, model, messages, contextText, enableWebSearch, provider]);
 
   // Auto-send initial query if provided
   useEffect(() => {
@@ -360,7 +372,7 @@ export function MiniChatView({
 
       {!apiKey && (
         <div className="mini-chat-no-key">
-          Gemini API key required. Set it in the Gemini Playground tab.
+          {provider === 'openai' ? 'OpenAI API key required.' : 'Gemini API key required.'}
         </div>
       )}
     </div>

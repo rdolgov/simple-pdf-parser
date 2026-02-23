@@ -60,8 +60,9 @@ export class OpenAiRelevanceService implements RelevanceService {
   async analyze(input: RelevanceQueryInput): Promise<RelevanceResponse> {
     const client = await this.createClient();
     const prompt = buildPrompt(input);
+    const model = sanitizeOpenAiModel(this.config.model);
     const requestPayload = {
-      model: this.config.model ?? 'gpt-4.1-mini',
+      model,
       temperature: this.config.temperature ?? 0.2,
       top_p: this.config.topP,
       max_output_tokens: this.config.maxOutputTokens ?? 1200,
@@ -93,6 +94,24 @@ export class OpenAiRelevanceService implements RelevanceService {
 
     return payload;
   }
+}
+
+function sanitizeOpenAiModel(model: string | undefined): string {
+  const trimmed = model?.trim();
+  if (!trimmed) {
+    return 'gpt-5.2';
+  }
+  const normalized = trimmed.toLowerCase();
+  if (
+    normalized.startsWith('gemini-') ||
+    normalized.startsWith('models/gemini') ||
+    normalized.startsWith('claude-') ||
+    normalized.startsWith('gpt-image-') ||
+    normalized.startsWith('dall-e-')
+  ) {
+    return 'gpt-5.2';
+  }
+  return trimmed;
 }
 
 function resolveCreatedAt(created: unknown): string | undefined {

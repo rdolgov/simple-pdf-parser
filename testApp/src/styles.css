@@ -353,7 +353,8 @@ header p {
 }
 
 .structured-extract-settings select,
-.structured-extract-settings input {
+.structured-extract-settings input,
+.structured-extract-settings textarea {
   width: 100%;
   padding: 7px 10px;
   border: 1px solid #d2d6dc;
@@ -361,6 +362,13 @@ header p {
   background: #ffffff;
   font-size: 0.9rem;
   color: #1f2933;
+}
+
+.structured-extract-settings textarea {
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.3;
+  font-family: inherit;
 }
 
 .structured-extract-settings-note {
@@ -619,31 +627,41 @@ header p {
   min-width: 28px;
   min-height: 28px;
   border-radius: 999px;
-  border: 1px solid rgba(59, 130, 246, 0.4);
-  background: rgba(59, 130, 246, 0.2);
-  color: #0f172a;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.18));
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  color: rgba(15, 23, 42, 0.9);
   cursor: pointer;
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.2);
+  box-shadow:
+    0 8px 18px rgba(15, 23, 42, 0.14),
+    0 1px 2px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
   transition:
     background 0.2s ease,
     transform 0.2s ease,
     box-shadow 0.2s ease,
-    border-color 0.2s ease;
+    border-color 0.2s ease,
+    color 0.2s ease;
 }
 
 .canvas-overlay-toolbar-button:hover {
-  background: rgba(59, 130, 246, 0.35);
-  border-color: rgba(59, 130, 246, 0.8);
-  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.25);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.25));
+  border-color: rgba(255, 255, 255, 0.65);
+  color: rgba(15, 23, 42, 0.95);
+  box-shadow:
+    0 10px 22px rgba(15, 23, 42, 0.16),
+    0 1px 3px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
   transform: translateY(-1px);
 }
 
 .canvas-overlay-toolbar-button:focus-visible {
   outline: none;
   box-shadow:
-    0 0 0 3px rgba(191, 219, 254, 0.9),
-    0 6px 16px rgba(59, 130, 246, 0.35);
-  border-color: rgba(59, 130, 246, 0.9);
+    0 0 0 3px rgba(147, 197, 253, 0.35),
+    0 10px 22px rgba(15, 23, 42, 0.16);
+  border-color: rgba(191, 219, 254, 0.7);
 }
 
 .canvas-overlay-toolbar-icon {
@@ -660,19 +678,37 @@ header p {
   transform: translateY(-50%);
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(241, 245, 249, 0.92));
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  gap: 7px;
+  padding: 7px 9px;
+  background:
+    radial-gradient(120% 140% at 14% 12%, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 45%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.13)),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(226, 232, 240, 0.1));
+  backdrop-filter: blur(24px) saturate(165%);
+  -webkit-backdrop-filter: blur(24px) saturate(165%);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
   box-shadow:
-    0 4px 16px rgba(15, 23, 42, 0.12),
-    0 1px 4px rgba(15, 23, 42, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    0 14px 34px rgba(15, 23, 42, 0.12),
+    0 2px 8px rgba(15, 23, 42, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06);
   pointer-events: auto;
   z-index: 10;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.overlay-toolbar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 40%),
+    radial-gradient(90% 70% at 50% 0%, rgba(255, 255, 255, 0.1), transparent 70%);
+  pointer-events: none;
+  z-index: -1;
 }
 
 .overlay-toolbar--left {
@@ -681,24 +717,62 @@ header p {
 }
 
 .overlay-toolbar-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   padding: 0;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: #475569;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05));
+  color: rgba(51, 65, 85, 0.78);
   cursor: pointer;
-  transition: all 0.15s ease;
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+  overflow: hidden;
+}
+
+.overlay-toolbar-btn::after {
+  content: '';
+  position: absolute;
+  top: -35%;
+  left: -60%;
+  width: 55%;
+  height: 170%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0.22),
+    rgba(255, 255, 255, 0)
+  );
+  transform: rotate(18deg);
+  opacity: 0;
+  pointer-events: none;
 }
 
 .overlay-toolbar-btn:hover {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
-  transform: scale(1.05);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.11));
+  border-color: rgba(255, 255, 255, 0.24);
+  color: rgba(15, 23, 42, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  transform: translateY(-1px);
+}
+
+.overlay-toolbar-btn:hover::after {
+  opacity: 1;
+  animation: overlay-toolbar-sheen 700ms ease-out;
 }
 
 .overlay-toolbar-btn:active {
@@ -707,25 +781,32 @@ header p {
 
 .overlay-toolbar-btn:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4);
+  box-shadow:
+    0 0 0 2px rgba(147, 197, 253, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
 .overlay-toolbar-btn--close {
-  color: #64748b;
+  color: rgba(71, 85, 105, 0.78);
 }
 
 .overlay-toolbar-btn--close:hover {
-  background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.09));
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #b91c1c;
 }
 
 .overlay-toolbar-btn--primary {
-  background: rgba(59, 130, 246, 0.1);
-  color: #2563eb;
+  background:
+    linear-gradient(180deg, rgba(59, 130, 246, 0.12), rgba(59, 130, 246, 0.05));
+  color: rgba(29, 78, 216, 0.88);
 }
 
 .overlay-toolbar-btn--primary:hover {
-  background: rgba(59, 130, 246, 0.2);
+  background:
+    linear-gradient(180deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.08));
+  border-color: rgba(147, 197, 253, 0.26);
 }
 
 .overlay-toolbar-btn--danger {
@@ -733,7 +814,8 @@ header p {
 }
 
 .overlay-toolbar-btn--danger:hover {
-  background: rgba(239, 68, 68, 0.15);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(252, 165, 165, 0.28);
   color: #dc2626;
 }
 
@@ -752,6 +834,98 @@ header p {
   height: 20px;
   background: rgba(148, 163, 184, 0.4);
   margin: 0 2px;
+}
+
+@keyframes overlay-toolbar-sheen {
+  from {
+    left: -60%;
+  }
+  to {
+    left: 120%;
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .overlay-toolbar {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.84)),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(241, 245, 249, 0.82));
+    border-color: rgba(148, 163, 184, 0.32);
+    box-shadow:
+      0 10px 24px rgba(15, 23, 42, 0.16),
+      0 2px 8px rgba(15, 23, 42, 0.1);
+  }
+
+  .overlay-toolbar-btn {
+    background: rgba(255, 255, 255, 0.76);
+    border-color: rgba(148, 163, 184, 0.22);
+    color: rgba(15, 23, 42, 0.86);
+  }
+
+  .canvas-overlay-toolbar-button {
+    background: rgba(255, 255, 255, 0.8);
+    border-color: rgba(148, 163, 184, 0.28);
+    color: rgba(15, 23, 42, 0.9);
+  }
+}
+
+@media (prefers-contrast: more) {
+  .overlay-toolbar {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.34)),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.28), rgba(226, 232, 240, 0.2));
+    border-color: rgba(255, 255, 255, 0.52);
+    box-shadow:
+      0 14px 30px rgba(15, 23, 42, 0.18),
+      0 2px 8px rgba(15, 23, 42, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  }
+
+  .overlay-toolbar-btn,
+  .canvas-overlay-toolbar-button {
+    color: rgba(15, 23, 42, 0.98);
+    border-color: rgba(255, 255, 255, 0.46);
+  }
+
+  .overlay-toolbar-btn {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.1));
+  }
+
+  .overlay-toolbar-btn:hover,
+  .canvas-overlay-toolbar-button:hover {
+    border-color: rgba(255, 255, 255, 0.65);
+  }
+
+  .overlay-toolbar-divider {
+    background: rgba(148, 163, 184, 0.55);
+  }
+}
+
+@media (forced-colors: active) {
+  .overlay-toolbar,
+  .overlay-toolbar-btn,
+  .canvas-overlay-toolbar-button {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: Canvas !important;
+    color: CanvasText !important;
+    border: 1px solid CanvasText !important;
+    box-shadow: none !important;
+  }
+
+  .overlay-toolbar-btn:hover,
+  .overlay-toolbar-btn:focus-visible,
+  .canvas-overlay-toolbar-button:hover,
+  .canvas-overlay-toolbar-button:focus-visible {
+    background: Highlight !important;
+    color: HighlightText !important;
+    border-color: Highlight !important;
+  }
+
+  .overlay-toolbar-divider {
+    background: CanvasText !important;
+  }
 }
 
 /* ============================================================================

@@ -34,6 +34,28 @@ export interface OpenAiGenerateResult {
   model: string;
 }
 
+export interface OpenAiGeneratedImage {
+  data?: string;
+  url?: string;
+  revisedPrompt?: string;
+  mimeType?: string;
+}
+
+export interface OpenAiGenerateImageRequest {
+  prompt: string;
+  model?: string;
+  size?: '1024x1024' | '1024x1536' | '1536x1024' | string;
+  quality?: 'low' | 'medium' | 'high' | 'auto';
+  background?: 'transparent' | 'opaque' | 'auto';
+}
+
+export interface OpenAiGenerateImageResult {
+  images: OpenAiGeneratedImage[];
+  text?: string;
+  model: string;
+  raw: Record<string, unknown>;
+}
+
 type OpenAiResponsesResponse = Record<string, unknown>;
 
 type OpenAiResponsesInputMessage = {
@@ -46,7 +68,8 @@ type OpenAiResponsesInputMessage = {
 };
 
 const DEFAULT_RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
-const DEFAULT_MODEL = 'gpt-4.1';
+const DEFAULT_MODEL = 'gpt-5.2';
+const DEFAULT_IMAGE_MODEL = 'gpt-image-1';
 
 export class OpenAiAPI {
   private readonly apiKey: string;
@@ -60,7 +83,7 @@ export class OpenAiAPI {
     }
     this.apiKey = config.apiKey;
     this.endpoint = normalizeResponsesEndpoint(config.endpoint);
-    this.defaultModel = config.model ?? DEFAULT_MODEL;
+    this.defaultModel = sanitizeOpenAiModel(config.model);
     this.defaultGenerationConfig = config.generationConfig;
   }
 
@@ -71,8 +94,25 @@ export class OpenAiAPI {
     });
   }
 
+  async generateFromImage(
+    imageData: string,
+    mimeType: string,
+    prompt: string,
+    options?: Omit<OpenAiGenerateRequest, 'contents'>
+  ): Promise<OpenAiGenerateResult> {
+    return this.generateContent({
+      contents: {
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType, data: imageData } }
+        ]
+      },
+      ...options
+    });
+  }
+
   async generateContent(request: OpenAiGenerateRequest): Promise<OpenAiGenerateResult> {
-    const model = request.model ?? this.defaultModel;
+    const model = sanitizeOpenAiModel(request.model ?? this.defaultModel);
     const generationConfig = request.generationConfig ?? this.defaultGenerationConfig;
 
     const payload: Record<string, unknown> = {
@@ -109,6 +149,83 @@ export class OpenAiAPI {
       model: modelFromResponse ?? model
     };
   }
+
+  async generateImage(requestOrPrompt: string | OpenAiGenerateImageRequest): Promise<OpenAiGenerateImageResult> {
+    const request = typeof requestOrPrompt === 'string'
+      ? ({ prompt: requestOrPrompt } satisfies OpenAiGenerateImageRequest)
+      : requestOrPrompt;
+
+    const model = sanitizeOpenAiImageModel(request.model);
+    const fetchImpl = resolveFetch();
+    const imagePayload: Record<string, unknown> = {
+      model,
+      prompt: request.prompt,
+      size: request.size ?? '1024x1024',
+      quality: request.quality ?? 'auto',
+      background: request.background ?? 'auto'
+    };
+    // `gpt-image-*` rejects `response_format`; keep it only for legacy DALL-E compatibility.
+    if (model.toLowerCase().startsWith('dall-e-')) {
+      imagePayload.response_format = 'b64_json';
+    }
+
+    const response = await fetchImpl(normalizeImagesEndpoint(this.endpoint), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify(imagePayload)
+    });
+
+    if (!response.ok) {
+      const message = await readErrorBody(response);
+      throw new Error(`OpenAI image generation request failed with status ${response.status}: ${message}`);
+    }
+
+    const raw = (await response.json()) as Record<string, unknown>;
+    const images = extractImages(raw);
+    return {
+      images,
+      text: images[0]?.revisedPrompt,
+      model,
+      raw
+    };
+  }
+}
+
+function sanitizeOpenAiModel(model: string | undefined): string {
+  const trimmed = model?.trim();
+  if (!trimmed) {
+    return DEFAULT_MODEL;
+  }
+  if (looksLikeNonOpenAiModel(trimmed)) {
+    return DEFAULT_MODEL;
+  }
+  return trimmed;
+}
+
+function sanitizeOpenAiImageModel(model: string | undefined): string {
+  const trimmed = model?.trim();
+  if (!trimmed) {
+    return DEFAULT_IMAGE_MODEL;
+  }
+  const normalized = trimmed.toLowerCase();
+  if (normalized.startsWith('gpt-image-') || normalized.startsWith('dall-e-')) {
+    return trimmed;
+  }
+  return DEFAULT_IMAGE_MODEL;
+}
+
+function looksLikeNonOpenAiModel(model: string): boolean {
+  const normalized = model.toLowerCase();
+  return (
+    normalized.startsWith('gemini-') ||
+    normalized.startsWith('models/gemini') ||
+    normalized.startsWith('claude-') ||
+    normalized.startsWith('gpt-image-') ||
+    normalized.startsWith('dall-e-')
+  );
 }
 
 function normalizeResponsesEndpoint(endpoint: string | undefined): string {
@@ -123,6 +240,14 @@ function normalizeResponsesEndpoint(endpoint: string | undefined): string {
     return trimmed;
   }
   return `${trimmed.replace(/\/+$/, '')}/responses`;
+}
+
+function normalizeImagesEndpoint(endpoint: string | undefined): string {
+  const responses = normalizeResponsesEndpoint(endpoint);
+  if (responses.endsWith('/responses')) {
+    return `${responses.slice(0, -'/responses'.length)}/images/generations`;
+  }
+  return `${responses.replace(/\/+$/, '')}/images/generations`;
 }
 
 function applyGenerationConfig(
@@ -202,6 +327,36 @@ function inferFilename(mimeType: string): string {
     return 'document.txt';
   }
   return 'document.bin';
+}
+
+function extractImages(response: Record<string, unknown>): OpenAiGeneratedImage[] {
+  const data = response.data;
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error('OpenAI image generation response did not include images');
+  }
+  const images: OpenAiGeneratedImage[] = [];
+  for (const item of data) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const b64 = normalizeText(record.b64_json);
+    const url = normalizeText(record.url);
+    const revisedPrompt = normalizeText(record.revised_prompt);
+    if (!b64 && !url) {
+      continue;
+    }
+    images.push({
+      data: b64,
+      url,
+      revisedPrompt,
+      mimeType: b64 ? 'image/png' : undefined
+    });
+  }
+  if (images.length === 0) {
+    throw new Error('OpenAI image generation response did not include image payloads');
+  }
+  return images;
 }
 
 function extractText(response: OpenAiResponsesResponse): string | undefined {

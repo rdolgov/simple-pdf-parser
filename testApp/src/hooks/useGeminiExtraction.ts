@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { GeminiAPI } from 'pdf-layout-parser';
+import { GeminiAPI, OpenAiAPI, type StructuredExtractProvider } from 'pdf-layout-parser';
 import {
   type GeminiDocumentExtraction,
   type GeminiExtractionRecord,
@@ -7,8 +7,8 @@ import {
   saveGeminiExtraction,
   parseGeminiExtractionResponse
 } from '../storage/geminiExtractionStorage';
+import { getRewriteApiKey, getRewriteModel, getRewriteProvider, setRewriteApiKey } from '../utils/rewriteProviderSettings';
 
-const GEMINI_API_KEY_STORAGE = 'gemini-overlay-api-key';
 const EXTRACTION_PROMPT = `Convert this PDF to JSON format with the following structure:
 {
   "document_title": "...",
@@ -76,9 +76,18 @@ export function useGeminiExtraction({
         const cached = await getGeminiExtraction(documentHash!);
         if (cancelled) return;
 
-        if (cached) {
+        const activeProvider = getRewriteProvider();
+        const configuredModel = getRewriteModel(activeProvider);
+        const cacheCompatible = cached
+          ? isExtractionCacheCompatible(cached, activeProvider, configuredModel)
+          : false;
+
+        if (cached && cacheCompatible) {
           console.log('[GeminiExtraction] Loaded cached extraction for', documentHash);
           setState({ status: 'ready', extraction: cached.extraction });
+        } else if (cached && !cacheCompatible) {
+          console.log('[GeminiExtraction] Ignoring cached extraction due to provider/model mismatch');
+          setState({ status: 'idle', extraction: null });
         } else if (autoExtract && pdfData) {
           // Auto-extract if enabled and no cache exists
           void triggerExtraction();
@@ -105,52 +114,75 @@ export function useGeminiExtraction({
       return;
     }
 
-    // Get API key from storage
-    let apiKey: string | null = null;
-    try {
-      apiKey = window.localStorage.getItem(GEMINI_API_KEY_STORAGE);
-    } catch {
-      // Ignore storage errors
-    }
+    const provider = getRewriteProvider();
+    let apiKey = getRewriteApiKey(provider);
 
     if (!apiKey) {
-      apiKey = window.prompt('Enter your Gemini API key to extract document structure:');
+      apiKey = window.prompt(
+        `Enter your ${provider === 'openai' ? 'OpenAI' : 'Gemini'} API key to extract document structure:`
+      );
       if (!apiKey) {
         setState({ status: 'error', extraction: null, error: 'API key required' });
         return;
       }
-      try {
-        window.localStorage.setItem(GEMINI_API_KEY_STORAGE, apiKey);
-      } catch {
-        // Ignore storage errors
-      }
+      setRewriteApiKey(provider, apiKey);
     }
 
     setState({ status: 'loading', extraction: null });
 
     try {
-      const client = new GeminiAPI({ apiKey, model: 'gemini-3-pro-image-preview' });
-
       // Convert PDF data to base64
       const pdfBase64 = arrayBufferToBase64(pdfData);
+      const configuredModel = getRewriteModel(provider)?.trim();
 
       // Send request with PDF file
-      const result = await client.generateContent({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType: 'application/pdf',
-                  data: pdfBase64
+      const result = provider === 'openai'
+        ? await (async () => {
+            const openAiModel =
+              configuredModel && !/^(gemini-|models\/gemini|gpt-image-|dall-e-)/i.test(configuredModel)
+                ? configuredModel
+                : undefined;
+            const client = new OpenAiAPI({
+              apiKey,
+              ...(openAiModel ? { model: openAiModel } : {})
+            });
+            return client.generateContent({
+              contents: {
+                parts: [
+                  { text: EXTRACTION_PROMPT },
+                  {
+                    inlineData: {
+                      mimeType: 'application/pdf',
+                      data: pdfBase64
+                    }
+                  }
+                ]
+              }
+            });
+          })()
+        : await (async () => {
+            const geminiModel =
+              configuredModel && !/^gpt-/i.test(configuredModel)
+                ? configuredModel
+                : 'gemini-3-pro-image-preview';
+            const client = new GeminiAPI({ apiKey, model: geminiModel });
+            return client.generateContent({
+              contents: [
+                {
+                  role: 'user',
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType: 'application/pdf',
+                        data: pdfBase64
+                      }
+                    },
+                    { text: EXTRACTION_PROMPT }
+                  ]
                 }
-              },
-              { text: EXTRACTION_PROMPT }
-            ]
-          }
-        ]
-      });
+              ]
+            });
+          })();
 
       // Parse the response
       const extraction = parseGeminiExtractionResponse(result.text);
@@ -160,11 +192,12 @@ export function useGeminiExtraction({
         documentHash,
         extraction,
         createdAt: Date.now(),
+        provider,
         model: result.model
       };
       await saveGeminiExtraction(record);
 
-      console.log('[GeminiExtraction] Extraction complete:', extraction.pages.length, 'pages');
+      console.log('[GeminiExtraction] Extraction complete:', extraction.pages.length, 'pages', 'provider:', provider);
       setState({ status: 'ready', extraction });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to extract document';
@@ -178,6 +211,36 @@ export function useGeminiExtraction({
   }, []);
 
   return { state, triggerExtraction, clearExtraction };
+}
+
+function isExtractionCacheCompatible(
+  cached: GeminiExtractionRecord,
+  provider: StructuredExtractProvider,
+  configuredModel: string | null
+): boolean {
+  const cachedProvider = cached.provider;
+  const normalizedConfiguredModel = configuredModel?.trim() ?? '';
+
+  // Legacy records (before provider support) were Gemini-only.
+  if (!cachedProvider) {
+    if (provider !== 'gemini') {
+      return false;
+    }
+    if (normalizedConfiguredModel.length === 0 || !cached.model) {
+      return true;
+    }
+    return cached.model.trim() === normalizedConfiguredModel;
+  }
+
+  if (cachedProvider !== provider) {
+    return false;
+  }
+
+  if (normalizedConfiguredModel.length === 0) {
+    return true;
+  }
+
+  return (cached.model?.trim() ?? '') === normalizedConfiguredModel;
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {

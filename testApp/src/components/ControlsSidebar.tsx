@@ -16,6 +16,18 @@ import {
   setSemanticSearchProvider,
   type SemanticSearchProvider
 } from '../utils/semanticSearchSettings';
+import {
+  loadRewriteProfileSettings,
+  saveRewriteProfileSettings,
+  type ReaderKnowledgeLevel
+} from '../utils/rewriteProfileSettings';
+import {
+  loadRewriteProviderStoredSettings,
+  setRewriteApiKey,
+  setRewriteModel,
+  setRewriteProvider,
+  type RewriteProvider
+} from '../utils/rewriteProviderSettings';
 
 interface ControlsSidebarProps {
   state: LoadState;
@@ -106,6 +118,16 @@ export function ControlsSidebar({
   const [semanticSearchOpenAiApiKey, setSemanticSearchOpenAiApiKey] = useState('');
   const [semanticSearchGeminiModel, setSemanticSearchGeminiModel] = useState('');
   const [semanticSearchOpenAiModel, setSemanticSearchOpenAiModel] = useState('');
+  const [rewriteMathLevel, setRewriteMathLevel] = useState<ReaderKnowledgeLevel>('intermediate');
+  const [rewriteScienceLevel, setRewriteScienceLevel] = useState<ReaderKnowledgeLevel>('intermediate');
+  const [rewriteOtherKnowledge, setRewriteOtherKnowledge] = useState('');
+  const [rewritePreference, setRewritePreference] = useState('');
+  const [rewriteMemoryNotes, setRewriteMemoryNotes] = useState('');
+  const [rewriteProvider, setRewriteProviderState] = useState<RewriteProvider>('gemini');
+  const [rewriteGeminiApiKey, setRewriteGeminiApiKey] = useState('');
+  const [rewriteOpenAiApiKey, setRewriteOpenAiApiKey] = useState('');
+  const [rewriteGeminiModel, setRewriteGeminiModel] = useState('');
+  const [rewriteOpenAiModel, setRewriteOpenAiModel] = useState('');
 
   useEffect(() => {
     const settings = loadStructuredExtractStoredSettings();
@@ -121,6 +143,20 @@ export function ControlsSidebar({
     setSemanticSearchOpenAiApiKey(semanticSearchSettings.openaiApiKey);
     setSemanticSearchGeminiModel(semanticSearchSettings.geminiModel);
     setSemanticSearchOpenAiModel(semanticSearchSettings.openaiModel);
+
+    const rewriteProfile = loadRewriteProfileSettings();
+    setRewriteMathLevel(rewriteProfile.mathLevel);
+    setRewriteScienceLevel(rewriteProfile.scienceLevel);
+    setRewriteOtherKnowledge(rewriteProfile.otherKnowledge);
+    setRewritePreference(rewriteProfile.rewritePreference);
+    setRewriteMemoryNotes(rewriteProfile.memoryNotes);
+
+    const rewriteProviderSettings = loadRewriteProviderStoredSettings();
+    setRewriteProviderState(rewriteProviderSettings.provider);
+    setRewriteGeminiApiKey(rewriteProviderSettings.geminiApiKey);
+    setRewriteOpenAiApiKey(rewriteProviderSettings.openaiApiKey);
+    setRewriteGeminiModel(rewriteProviderSettings.geminiModel);
+    setRewriteOpenAiModel(rewriteProviderSettings.openaiModel);
   }, []);
 
   const currentExtractApiKey = extractProvider === 'openai' ? extractOpenAiApiKey : extractGeminiApiKey;
@@ -131,6 +167,8 @@ export function ControlsSidebar({
   const currentSemanticSearchModel = semanticSearchProvider === 'openai'
     ? semanticSearchOpenAiModel
     : semanticSearchGeminiModel;
+  const currentRewriteApiKey = rewriteProvider === 'openai' ? rewriteOpenAiApiKey : rewriteGeminiApiKey;
+  const currentRewriteModel = rewriteProvider === 'openai' ? rewriteOpenAiModel : rewriteGeminiModel;
 
   const handleExtractProviderChange = (provider: StructuredExtractProvider) => {
     setExtractProviderState(provider);
@@ -176,6 +214,45 @@ export function ControlsSidebar({
       setSemanticSearchGeminiModel(value);
     }
     setSemanticSearchModel(semanticSearchProvider, value);
+  };
+
+  const persistRewriteProfile = (next: {
+    mathLevel?: ReaderKnowledgeLevel;
+    scienceLevel?: ReaderKnowledgeLevel;
+    otherKnowledge?: string;
+    rewritePreference?: string;
+    memoryNotes?: string;
+  }) => {
+    saveRewriteProfileSettings({
+      mathLevel: next.mathLevel ?? rewriteMathLevel,
+      scienceLevel: next.scienceLevel ?? rewriteScienceLevel,
+      otherKnowledge: next.otherKnowledge ?? rewriteOtherKnowledge,
+      rewritePreference: next.rewritePreference ?? rewritePreference,
+      memoryNotes: next.memoryNotes ?? rewriteMemoryNotes
+    });
+  };
+
+  const handleRewriteProviderChange = (provider: RewriteProvider) => {
+    setRewriteProviderState(provider);
+    setRewriteProvider(provider);
+  };
+
+  const handleRewriteApiKeyChange = (value: string) => {
+    if (rewriteProvider === 'openai') {
+      setRewriteOpenAiApiKey(value);
+    } else {
+      setRewriteGeminiApiKey(value);
+    }
+    setRewriteApiKey(rewriteProvider, value);
+  };
+
+  const handleRewriteModelChange = (value: string) => {
+    if (rewriteProvider === 'openai') {
+      setRewriteOpenAiModel(value);
+    } else {
+      setRewriteGeminiModel(value);
+    }
+    setRewriteModel(rewriteProvider, value);
   };
 
   return (
@@ -251,13 +328,13 @@ export function ControlsSidebar({
               <input
                 type="password"
                 value={openAiConfig.apiKey ?? ''}
-                placeholder="Gemini API key"
+                placeholder="OpenAI API key"
                 onChange={(event) => setOpenAiConfig({ ...openAiConfig, apiKey: event.target.value.trim() })}
               />
               <input
                 type="text"
                 value={openAiConfig.model ?? ''}
-                placeholder="Model (e.g., gemini-2.5-flash)"
+                placeholder="Model (e.g., gpt-5.2)"
                 onChange={(event) => setOpenAiConfig({ ...openAiConfig, model: event.target.value.trim() })}
               />
               {(!useRecordingPlayback && (!openAiConfig.apiKey || openAiConfig.apiKey.length === 0)) && (
@@ -271,6 +348,87 @@ export function ControlsSidebar({
         </div>
 
         <div className="gemini-extraction-controls">
+          <div className="structured-extract-settings">
+            <div className="structured-extract-settings-title">Rewrite Profile</div>
+            <select
+              value={rewriteProvider}
+              onChange={(event) => handleRewriteProviderChange(event.target.value as RewriteProvider)}
+            >
+              <option value="gemini">Rewrite with Gemini</option>
+              <option value="openai">Rewrite with OpenAI</option>
+            </select>
+            <input
+              type="password"
+              value={currentRewriteApiKey}
+              placeholder={rewriteProvider === 'openai' ? 'OpenAI API key' : 'Gemini API key'}
+              onChange={(event) => handleRewriteApiKeyChange(event.target.value)}
+            />
+            <input
+              type="text"
+              value={currentRewriteModel}
+              placeholder={rewriteProvider === 'openai' ? 'Model (e.g., gpt-5.2)' : 'Model (e.g., gemini-3-pro-preview)'}
+              onChange={(event) => handleRewriteModelChange(event.target.value)}
+            />
+            <select
+              value={rewriteMathLevel}
+              onChange={(event) => {
+                const value = event.target.value as ReaderKnowledgeLevel;
+                setRewriteMathLevel(value);
+                persistRewriteProfile({ mathLevel: value });
+              }}
+            >
+              <option value="beginner">Math: Beginner</option>
+              <option value="intermediate">Math: Intermediate</option>
+              <option value="advanced">Math: Advanced</option>
+              <option value="expert">Math: Expert</option>
+            </select>
+            <select
+              value={rewriteScienceLevel}
+              onChange={(event) => {
+                const value = event.target.value as ReaderKnowledgeLevel;
+                setRewriteScienceLevel(value);
+                persistRewriteProfile({ scienceLevel: value });
+              }}
+            >
+              <option value="beginner">Science: Beginner</option>
+              <option value="intermediate">Science: Intermediate</option>
+              <option value="advanced">Science: Advanced</option>
+              <option value="expert">Science: Expert</option>
+            </select>
+            <textarea
+              value={rewriteOtherKnowledge}
+              placeholder="Other background knowledge (domain, programming, finance, etc.)"
+              rows={2}
+              onChange={(event) => {
+                const value = event.target.value;
+                setRewriteOtherKnowledge(value);
+                persistRewriteProfile({ otherKnowledge: value });
+              }}
+            />
+            <textarea
+              value={rewritePreference}
+              placeholder="Rewrite preference (e.g., simpler wording, more intuition, shorter sentences)"
+              rows={2}
+              onChange={(event) => {
+                const value = event.target.value;
+                setRewritePreference(value);
+                persistRewriteProfile({ rewritePreference: value });
+              }}
+            />
+            <textarea
+              value={rewriteMemoryNotes}
+              placeholder="Memory notes for future rewrites (manual for now; can be replaced by conversation memory later)"
+              rows={2}
+              onChange={(event) => {
+                const value = event.target.value;
+                setRewriteMemoryNotes(value);
+                persistRewriteProfile({ memoryNotes: value });
+              }}
+            />
+            <span className="structured-extract-settings-note">
+              Used by the highlight rewrite action. Memory notes are a manual placeholder until conversation memory is added.
+            </span>
+          </div>
           <div className="structured-extract-settings">
             <div className="structured-extract-settings-title">Semantic Search Provider</div>
             <select
@@ -318,7 +476,7 @@ export function ControlsSidebar({
             <input
               type="text"
               value={currentExtractModel}
-              placeholder={extractProvider === 'openai' ? 'Model (e.g., gpt-4.1)' : 'Model (e.g., gemini-3-pro-preview)'}
+              placeholder={extractProvider === 'openai' ? 'Model (e.g., gpt-5.2)' : 'Model (e.g., gemini-3-pro-preview)'}
               onChange={(event) => handleExtractModelChange(event.target.value)}
             />
             <span className="structured-extract-settings-note">
@@ -331,8 +489,9 @@ export function ControlsSidebar({
             disabled={state.status !== 'ready' || geminiExtractionState.status === 'loading'}
           >
             {geminiExtractionState.status === 'loading' ? 'Extracting...' :
-             geminiExtractionState.status === 'ready' ? 'Re-extract with Gemini' :
-             'Extract with Gemini'}
+             geminiExtractionState.status === 'ready'
+               ? `Re-extract with ${rewriteProvider === 'openai' ? 'OpenAI' : 'Gemini'}`
+               : `Extract with ${rewriteProvider === 'openai' ? 'OpenAI' : 'Gemini'}`}
           </button>
           {geminiExtractionState.status === 'ready' && (
             <span className="extraction-status">✓ Extraction cached</span>

@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
-import { GeminiAPI } from 'pdf-layout-parser';
+import { GeminiAPI, OpenAiAPI } from 'pdf-layout-parser';
 import {
   type FormulaExplanation,
   getCachedExplanation,
@@ -17,6 +17,8 @@ interface MathViewPopupProps {
   isLoading?: boolean;
   error?: string | null;
   apiKey?: string;
+  provider?: 'gemini' | 'openai';
+  model?: string | null;
 }
 
 export function MathViewPopup({
@@ -25,7 +27,9 @@ export function MathViewPopup({
   onClose,
   isLoading = false,
   error = null,
-  apiKey
+  apiKey,
+  provider = 'gemini',
+  model
 }: MathViewPopupProps): JSX.Element {
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -143,7 +147,6 @@ export function MathViewPopup({
     setExplainError(null);
 
     try {
-      const client = new GeminiAPI({ apiKey, model: 'gemini-3-pro-preview' });
       const prompt = `Analyze this mathematical formula and provide a structured explanation.
 
 LaTeX formula: ${latex}
@@ -166,7 +169,15 @@ Important:
 - For the behavior section, describe the mathematical relationship
 - Only return the JSON, no markdown code blocks`;
 
-      const response = await client.generateText(prompt);
+      const response = provider === 'openai'
+        ? await new OpenAiAPI({
+            apiKey,
+            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
+          }).generateText(prompt)
+        : await new GeminiAPI({
+            apiKey,
+            model: model && model.trim().length > 0 ? model.trim() : 'gemini-3-pro-preview'
+          }).generateText(prompt);
       let jsonText = response.text.trim();
 
       // Clean up potential markdown code blocks
@@ -184,7 +195,7 @@ Important:
     } finally {
       setIsExplaining(false);
     }
-  }, [apiKey, latex, isExplaining]);
+  }, [apiKey, latex, isExplaining, provider, model]);
 
   const currentPosition = dragPosition ?? position;
   const positionStyle = {
@@ -239,7 +250,7 @@ Important:
                 className="math-view-explain-btn"
                 onClick={handleExplainFormula}
                 disabled={!apiKey}
-                title={apiKey ? 'Explain this formula' : 'API key required'}
+                title={apiKey ? 'Explain this formula' : `${provider === 'openai' ? 'OpenAI' : 'Gemini'} API key required`}
               >
                 <ExplainIcon />
                 <span>Explain Formula</span>

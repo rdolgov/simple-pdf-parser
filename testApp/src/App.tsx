@@ -55,7 +55,7 @@ export default function App(): JSX.Element {
   const [focusProvider, setFocusProvider] = useState<FocusProvider>('mock');
   const [openAiConfig, setOpenAiConfig] = useState<RelevanceServiceConfig>({
     provider: 'openai',
-    model: 'gpt-4.1-mini',
+    model: 'gpt-5.2',
     temperature: 0.2
   });
   const [structuredSelection, setStructuredSelection] = useState<StructuredSelection | null>(null);
@@ -306,7 +306,7 @@ export default function App(): JSX.Element {
           {
             ...config,
             provider: 'openai',
-            model: config.model && config.model.length > 0 ? config.model : 'gpt-4.1-mini',
+            model: config.model && config.model.length > 0 ? config.model : 'gpt-5.2',
             dangerouslyAllowBrowser: true
           },
           clientFactory

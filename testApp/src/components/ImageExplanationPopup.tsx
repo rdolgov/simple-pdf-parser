@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { GeminiAPI } from 'pdf-layout-parser';
+import { GeminiAPI, OpenAiAPI } from 'pdf-layout-parser';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
 
 
@@ -14,6 +14,8 @@ interface ImageExplanationPopupProps {
   position: { top: number; left: number };
   onClose: () => void;
   apiKey?: string;
+  provider?: 'gemini' | 'openai';
+  model?: string | null;
   savedExplanation?: ImageExplanationData | null;
   onSaveExplanation: (explanation: string) => void;
   onDeleteExplanation?: () => void;
@@ -24,6 +26,8 @@ export function ImageExplanationPopup({
   position,
   onClose,
   apiKey,
+  provider = 'gemini',
+  model,
   savedExplanation,
   onSaveExplanation,
   onDeleteExplanation
@@ -100,7 +104,7 @@ export function ImageExplanationPopup({
 
   const handleExplain = useCallback(async () => {
     if (!apiKey) {
-      setError('Gemini API key is required');
+      setError(provider === 'openai' ? 'OpenAI API key is required' : 'Gemini API key is required');
       return;
     }
 
@@ -113,20 +117,23 @@ export function ImageExplanationPopup({
       const mimeMatch = header.match(/data:([^;]+)/);
       const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
 
-      const client = new GeminiAPI({ apiKey });
-      const result = await client.generateFromImage(
-        base64Data,
-        mimeType,
-        `Please analyze this image from an academic/scientific document and provide a clear, comprehensive explanation. Include:
+      const prompt = `Please analyze this image from an academic/scientific document and provide a clear, comprehensive explanation. Include:
 
 1. **What the image shows**: Describe the visual content (diagram, chart, figure, photograph, etc.)
 2. **Key elements**: Identify and explain important components, labels, or data points
 3. **Purpose**: What is this image trying to illustrate or communicate?
 4. **Context**: How might this relate to the surrounding document content?
 
-Keep the explanation concise but thorough, suitable for someone trying to understand the document.`,
-        { mediaResolution: 'high' }
-      );
+Keep the explanation concise but thorough, suitable for someone trying to understand the document.`;
+      const result = provider === 'openai'
+        ? await new OpenAiAPI({
+            apiKey,
+            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
+          }).generateFromImage(base64Data, mimeType, prompt)
+        : await new GeminiAPI({
+            apiKey,
+            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
+          }).generateFromImage(base64Data, mimeType, prompt, { mediaResolution: 'high' });
 
       setExplanation(result.text);
       onSaveExplanation(result.text);
@@ -135,7 +142,7 @@ Keep the explanation concise but thorough, suitable for someone trying to unders
     } finally {
       setIsLoading(false);
     }
-  }, [apiKey, imageDataUri, onSaveExplanation]);
+  }, [apiKey, imageDataUri, onSaveExplanation, provider, model]);
 
   const handleDelete = useCallback(() => {
     setExplanation(null);

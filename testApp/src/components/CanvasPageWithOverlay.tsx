@@ -1,7 +1,7 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { HtmlPageLayout, PDFImageBounds, PDFPage } from 'pdf-layout-parser';
-import { GeminiAPI } from 'pdf-layout-parser';
+import { GeminiAPI, OpenAiAPI } from 'pdf-layout-parser';
 import type { CanvasHighlightSelection, FocusProvider, ExtractedTable } from '../types';
 import type { SemanticSearchResult } from '../search';
 import { TableViewer, type TableSortState } from './TableViewer';
@@ -48,10 +48,16 @@ import {
   type PageAlignedElements,
   alignElementBounds
 } from '../utils/elementBoundsAligner';
+import { buildRewriteHighlightPrompt, loadRewriteProfileSettings } from '../utils/rewriteProfileSettings';
+import {
+  getRewriteApiKey,
+  getRewriteModel,
+  getRewriteProvider,
+  setRewriteApiKey
+} from '../utils/rewriteProviderSettings';
 
 const HIGHLIGHT_PADDING = 12;
 const TABLE_HIT_TOLERANCE = 6;
-const MOCK_EXPLANATION_TEXT = 'here goes explanation of the term in this parapgraph content';
 const GEMINI_STORAGE_KEY = 'gemini-overlay-api-key';
 const IMAGE_PANEL_WIDTH = 500;
 const DEFAULT_PAGE_WIDTH = 612;
@@ -104,6 +110,8 @@ export function CanvasPageWithOverlay({
 }: CanvasPageWithOverlayProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [highlightTextOverrides, setHighlightTextOverrides] = useState<Record<string, string>>({});
+  const [rewriteLoading, setRewriteLoading] = useState<Record<string, boolean>>({});
+  const [rewriteError, setRewriteError] = useState<Record<string, string>>({});
   const [geminiApiKey, setGeminiApiKey] = useState('');
   const [imageMap, setImageMap] = useState<Record<string, { dataUri: string; mimeType?: string; text?: string }>>({});
   const [imageLoading, setImageLoading] = useState<Record<string, boolean>>({});
@@ -161,6 +169,8 @@ export function CanvasPageWithOverlay({
 
   useEffect(() => {
     setHighlightTextOverrides({});
+    setRewriteLoading({});
+    setRewriteError({});
     setImageMap({});
     setImageError({});
     setImageLoading({});
@@ -248,13 +258,6 @@ export function CanvasPageWithOverlay({
     canvasRef.current = element;
     getCanvasRef(page.number)(element);
   }, [getCanvasRef, page.number]);
-
-  const handleToolbarClick = useCallback((blockKey: string) => {
-    setHighlightTextOverrides((current) => ({
-      ...current,
-      [blockKey]: MOCK_EXPLANATION_TEXT
-    }));
-  }, []);
 
   const handleOpenMiniChat = useCallback(
     (contextText: string, blockLeft: number, blockTop: number, blockWidth: number, bounds: AnnotationBounds) => {
@@ -450,7 +453,12 @@ export function CanvasPageWithOverlay({
     if (trimmed.length > 0) {
       return trimmed;
     }
-    const entered = window.prompt('Enter your Gemini API key to generate an image from this text:');
+    const storedRewriteKey = getRewriteApiKey('gemini');
+    if (storedRewriteKey && storedRewriteKey.trim().length > 0) {
+      setGeminiApiKey(storedRewriteKey.trim());
+      return storedRewriteKey.trim();
+    }
+    const entered = window.prompt('Enter your Gemini API key to use Gemini features on this PDF:');
     if (entered && entered.trim().length > 0) {
       const value = entered.trim();
       setGeminiApiKey(value);
@@ -459,10 +467,101 @@ export function CanvasPageWithOverlay({
       } catch (error) {
         console.warn('Unable to persist Gemini API key', error);
       }
+      setRewriteApiKey('gemini', value);
       return value;
     }
     return null;
   }, [geminiApiKey]);
+
+  const ensureOpenAiApiKey = useCallback((): string | null => {
+    const stored = getRewriteApiKey('openai');
+    if (stored && stored.trim().length > 0) {
+      return stored.trim();
+    }
+    const entered = window.prompt('Enter your OpenAI API key to use OpenAI features on this PDF:');
+    if (entered && entered.trim().length > 0) {
+      const value = entered.trim();
+      setRewriteApiKey('openai', value);
+      return value;
+    }
+    return null;
+  }, []);
+
+  const handleRewriteHighlight = useCallback(
+    async (blockKey: string, paragraphText: string) => {
+      const trimmedParagraph = paragraphText.trim();
+      if (trimmedParagraph.length === 0) {
+        setRewriteError((current) => ({ ...current, [blockKey]: 'No paragraph text available to rewrite.' }));
+        return;
+      }
+
+      setRewriteError((current) => {
+        const { [blockKey]: _ignored, ...rest } = current;
+        return rest;
+      });
+      setRewriteLoading((current) => ({ ...current, [blockKey]: true }));
+
+      try {
+        const profile = loadRewriteProfileSettings();
+        const prompt = buildRewriteHighlightPrompt({
+          paragraphText: trimmedParagraph,
+          documentTitle,
+          profile
+        });
+        const rewriteProvider = getRewriteProvider();
+        const response =
+          rewriteProvider === 'openai'
+            ? await (async () => {
+                const openAiKey = ensureOpenAiApiKey();
+                if (!openAiKey) {
+                  throw new Error('OpenAI API key required for rewrite.');
+                }
+                const configuredModel = getRewriteModel('openai')?.trim();
+                const openAiModel =
+                  configuredModel && !/^gemini-/i.test(configuredModel)
+                    ? configuredModel
+                    : undefined;
+                const client = new OpenAiAPI({
+                  apiKey: openAiKey,
+                  ...(openAiModel ? { model: openAiModel } : {})
+                });
+                return client.generateText(prompt);
+              })()
+            : await (async () => {
+                const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
+                if (!key) {
+                  throw new Error('Gemini API key required for rewrite.');
+                }
+                const configuredModel = getRewriteModel('gemini')?.trim();
+                const geminiModel =
+                  configuredModel && !/^gpt-/i.test(configuredModel)
+                    ? configuredModel
+                    : 'gemini-3-pro-preview';
+                const client = new GeminiAPI({ apiKey: key, model: geminiModel });
+                return client.generateText(prompt);
+              })();
+        const rewritten = response.text.trim();
+        if (!rewritten) {
+          throw new Error('Empty rewrite response');
+        }
+        setHighlightTextOverrides((current) => ({
+          ...current,
+          [blockKey]: rewritten
+        }));
+      } catch (error) {
+        setRewriteError((current) => ({
+          ...current,
+          [blockKey]: error instanceof Error ? error.message : 'Failed to rewrite paragraph.'
+        }));
+      } finally {
+        setRewriteLoading((current) => {
+          const { [blockKey]: _ignored, ...rest } = current;
+          return rest;
+        });
+      }
+    },
+    [documentTitle, ensureGeminiApiKey, ensureOpenAiApiKey]
+  );
 
   const handleGenerateImage = useCallback(
     async (blockKey: string, promptText: string, bounds: AnnotationBounds) => {
@@ -477,19 +576,45 @@ export function CanvasPageWithOverlay({
         return rest;
       });
 
-      const key = ensureGeminiApiKey();
-      if (!key) {
-        return;
-      }
-
       setImageLoading((current) => ({ ...current, [blockKey]: true }));
 
       try {
-        const client = new GeminiAPI({ apiKey: key });
-        const response = await client.generateImage(trimmedPrompt);
+        const provider = getRewriteProvider();
+        const response = provider === 'openai'
+          ? await (async () => {
+              const openAiKey = ensureOpenAiApiKey();
+              if (!openAiKey) {
+                throw new Error('OpenAI API key required for image generation.');
+              }
+              const configuredModel = getRewriteModel('openai')?.trim();
+              const imageModel = configuredModel && /^(gpt-image-|dall-e-)/i.test(configuredModel)
+                ? configuredModel
+                : undefined;
+              const client = new OpenAiAPI({
+                apiKey: openAiKey,
+                ...(imageModel ? { model: imageModel } : {})
+              });
+              return client.generateImage(trimmedPrompt);
+            })()
+          : await (async () => {
+              const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
+              if (!key) {
+                throw new Error('Gemini API key required for image generation.');
+              }
+              const configuredModel = getRewriteModel('gemini')?.trim();
+              const geminiModel = configuredModel && !/^gpt-/i.test(configuredModel) ? configuredModel : undefined;
+              const client = new GeminiAPI({ apiKey: key, ...(geminiModel ? { model: geminiModel } : {}) });
+              return client.generateImage(trimmedPrompt);
+            })();
+
         const image = response.images[0];
-        const mimeType = image.mimeType ?? 'image/png';
-        const dataUri = `data:${mimeType};base64,${image.data}`;
+        const mimeType = image?.mimeType ?? 'image/png';
+        const dataUri = image?.data
+          ? `data:${mimeType};base64,${image.data}`
+          : image?.url;
+        if (!dataUri) {
+          throw new Error('Image response did not include image data');
+        }
         setImageMap((current) => ({ ...current, [blockKey]: { dataUri, mimeType, text: response.text } }));
         // Save to storage
         try {
@@ -510,7 +635,7 @@ export function CanvasPageWithOverlay({
         });
       }
     },
-    [ensureGeminiApiKey, documentId, pageNumber]
+    [ensureGeminiApiKey, ensureOpenAiApiKey, documentId, pageNumber]
   );
 
   const handleDetectMath = useCallback(
@@ -542,16 +667,7 @@ export function CanvasPageWithOverlay({
         // Cache miss or error - continue to API call
       }
 
-      const key = ensureGeminiApiKey();
-      if (!key) {
-        setMathViewState((prev) =>
-          prev ? { ...prev, isLoading: false, error: 'Gemini API key required' } : null
-        );
-        return;
-      }
-
       try {
-        const client = new GeminiAPI({ apiKey: key, model: 'gemini-3-pro-preview' });
         const prompt = `Analyze the following text from a PDF document. If it contains a mathematical formula, equation, or expression, convert it to valid LaTeX code. If it does NOT contain any math, respond with exactly "NO_MATH".
 
 Rules:
@@ -566,7 +682,36 @@ Text to analyze:
 ${trimmedText}
 """`;
 
-        const response = await client.generateText(prompt);
+        const provider = getRewriteProvider();
+        const response = provider === 'openai'
+          ? await (async () => {
+              const openAiKey = ensureOpenAiApiKey();
+              if (!openAiKey) {
+                throw new Error('OpenAI API key required');
+              }
+              const configuredModel = getRewriteModel('openai')?.trim();
+              const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
+                ? configuredModel
+                : undefined;
+              const client = new OpenAiAPI({
+                apiKey: openAiKey,
+                ...(textModel ? { model: textModel } : {})
+              });
+              return client.generateText(prompt);
+            })()
+          : await (async () => {
+              const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
+              if (!key) {
+                throw new Error('Gemini API key required');
+              }
+              const configuredModel = getRewriteModel('gemini')?.trim();
+              const geminiModel =
+                configuredModel && !/^gpt-/i.test(configuredModel)
+                  ? configuredModel
+                  : 'gemini-3-pro-preview';
+              const client = new GeminiAPI({ apiKey: key, model: geminiModel });
+              return client.generateText(prompt);
+            })();
         const result = response.text.trim();
 
         if (result === 'NO_MATH' || result.toUpperCase() === 'NO_MATH') {
@@ -600,7 +745,7 @@ ${trimmedText}
         );
       }
     },
-    [ensureGeminiApiKey]
+    [ensureGeminiApiKey, ensureOpenAiApiKey]
   );
 
   const handleCloseMathView = useCallback(() => {
@@ -610,6 +755,12 @@ ${trimmedText}
   const handleCloseImageExplanation = useCallback(() => {
     setImageExplanationState(null);
   }, []);
+
+  const overlayAiProvider = getRewriteProvider();
+  const overlayAiModel = getRewriteModel(overlayAiProvider);
+  const overlayAiKey = overlayAiProvider === 'openai'
+    ? (getRewriteApiKey('openai') ?? '')
+    : (getRewriteApiKey('gemini') ?? geminiApiKey ?? '');
 
   const handleSaveImageExplanation = useCallback(
     (explanation: string) => {
@@ -1086,6 +1237,8 @@ ${trimmedText}
                 : block.lines;
               const highlightText = lines.map((line) => line.text).join(' ').trim();
               const imageEntry = imageMap[blockKey];
+              const isRewriting = Boolean(rewriteLoading[blockKey]);
+              const rewriteErrorMessage = rewriteError[blockKey];
               const isLoadingImage = Boolean(imageLoading[blockKey]);
               const imageErrorMessage = imageError[blockKey];
               const hasRequestedImage = isLoadingImage || Boolean(imageEntry) || Boolean(imageErrorMessage);
@@ -1113,10 +1266,11 @@ ${trimmedText}
                 >
                   <OverlayToolbar onClose={() => onCanvasHighlight(null)}>
                     <OverlayToolbarButton
-                      onClick={() => handleToolbarClick(blockKey)}
-                      icon={<ExplainIcon />}
-                      label="Explain highlight"
-                      title="Explain this highlight"
+                      onClick={() => void handleRewriteHighlight(blockKey, highlightText)}
+                      icon={isRewriting ? <LoadingIcon /> : <ExplainIcon />}
+                      label="Rewrite by profile"
+                      title="Rewrite this paragraph using your reading profile"
+                      disabled={isRewriting}
                     />
                     <OverlayToolbarButton
                       onClick={() => handleOpenMiniChat(highlightText, blockLeft, blockTop, blockWidth, bounds)}
@@ -1208,6 +1362,11 @@ ${trimmedText}
                             ))}
                           </div>
                         ) : null}
+                        {rewriteErrorMessage && (
+                          <div className="canvas-overlay-image canvas-overlay-image--error" style={{ margin: '8px 12px 0 12px' }}>
+                            {rewriteErrorMessage}
+                          </div>
+                        )}
                       </div>
 
                       {hasRequestedImage && (
@@ -1257,7 +1416,9 @@ ${trimmedText}
         <MiniChatView
           key={boundsKey}
           contextText={chatState.contextText}
-          apiKey={geminiApiKey}
+          apiKey={overlayAiKey}
+          provider={overlayAiProvider}
+          model={overlayAiModel}
           onClose={() => handleCloseMiniChat(boundsKey)}
           position={chatState.position}
           documentId={documentId}
@@ -1338,8 +1499,12 @@ ${trimmedText}
               type="button"
               className="reference-popup-explain-btn"
               onClick={handleExplainConnection}
-              disabled={!geminiApiKey}
-              title={geminiApiKey ? 'Explain how this reference connects to the paragraph' : 'Gemini API key required'}
+              disabled={!overlayAiKey.trim()}
+              title={
+                overlayAiKey.trim()
+                  ? 'Explain how this reference connects to the paragraph'
+                  : `${overlayAiProvider === 'openai' ? 'OpenAI' : 'Gemini'} API key required`
+              }
             >
               <ConnectionIcon /> Explain Connection
             </button>
@@ -1351,7 +1516,9 @@ ${trimmedText}
       {connectionChatState && (
         <MiniChatView
           contextText={connectionChatState.contextText}
-          apiKey={geminiApiKey}
+          apiKey={overlayAiKey}
+          provider={overlayAiProvider}
+          model={overlayAiModel}
           onClose={handleCloseConnectionChat}
           position={connectionChatState.position}
           documentId={documentId}
@@ -1381,7 +1548,9 @@ ${trimmedText}
           onClose={handleCloseMathView}
           isLoading={mathViewState.isLoading}
           error={mathViewState.error}
-          apiKey={geminiApiKey ?? undefined}
+          apiKey={overlayAiKey || undefined}
+          provider={overlayAiProvider}
+          model={overlayAiModel}
         />
       )}
 
@@ -1391,7 +1560,9 @@ ${trimmedText}
           imageDataUri={imageExplanationState.imageDataUri}
           position={imageExplanationState.position}
           onClose={handleCloseImageExplanation}
-          apiKey={geminiApiKey || undefined}
+          apiKey={overlayAiKey || undefined}
+          provider={overlayAiProvider}
+          model={overlayAiModel}
           savedExplanation={imageExplanationState.savedExplanation}
           onSaveExplanation={handleSaveImageExplanation}
           onDeleteExplanation={handleDeleteImageExplanation}
