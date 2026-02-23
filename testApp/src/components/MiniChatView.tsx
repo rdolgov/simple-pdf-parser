@@ -40,7 +40,7 @@ Answer the user's questions based on this context. If the question cannot be ans
 export function MiniChatView({
   contextText,
   apiKey,
-  provider = 'gemini',
+  provider = 'openai',
   model,
   onClose,
   position,

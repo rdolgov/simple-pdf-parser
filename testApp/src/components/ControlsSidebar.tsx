@@ -28,6 +28,7 @@ import {
   setRewriteProvider,
   type RewriteProvider
 } from '../utils/rewriteProviderSettings';
+import { resetLocalAppData } from '../utils/resetLocalAppData';
 
 interface ControlsSidebarProps {
   state: LoadState;
@@ -108,12 +109,12 @@ export function ControlsSidebar({
   enableWebSearch,
   setEnableWebSearch
 }: ControlsSidebarProps): JSX.Element {
-  const [extractProvider, setExtractProviderState] = useState<StructuredExtractProvider>('gemini');
+  const [extractProvider, setExtractProviderState] = useState<StructuredExtractProvider>('openai');
   const [extractGeminiApiKey, setExtractGeminiApiKey] = useState('');
   const [extractOpenAiApiKey, setExtractOpenAiApiKey] = useState('');
   const [extractGeminiModel, setExtractGeminiModel] = useState('');
   const [extractOpenAiModel, setExtractOpenAiModel] = useState('');
-  const [semanticSearchProvider, setSemanticSearchProviderState] = useState<SemanticSearchProvider>('gemini');
+  const [semanticSearchProvider, setSemanticSearchProviderState] = useState<SemanticSearchProvider>('openai');
   const [semanticSearchGeminiApiKey, setSemanticSearchGeminiApiKey] = useState('');
   const [semanticSearchOpenAiApiKey, setSemanticSearchOpenAiApiKey] = useState('');
   const [semanticSearchGeminiModel, setSemanticSearchGeminiModel] = useState('');
@@ -123,11 +124,13 @@ export function ControlsSidebar({
   const [rewriteOtherKnowledge, setRewriteOtherKnowledge] = useState('');
   const [rewritePreference, setRewritePreference] = useState('');
   const [rewriteMemoryNotes, setRewriteMemoryNotes] = useState('');
-  const [rewriteProvider, setRewriteProviderState] = useState<RewriteProvider>('gemini');
+  const [rewriteProvider, setRewriteProviderState] = useState<RewriteProvider>('openai');
   const [rewriteGeminiApiKey, setRewriteGeminiApiKey] = useState('');
   const [rewriteOpenAiApiKey, setRewriteOpenAiApiKey] = useState('');
   const [rewriteGeminiModel, setRewriteGeminiModel] = useState('');
   const [rewriteOpenAiModel, setRewriteOpenAiModel] = useState('');
+  const [isResettingLocalData, setIsResettingLocalData] = useState(false);
+  const [resetLocalDataError, setResetLocalDataError] = useState<string | null>(null);
 
   useEffect(() => {
     const settings = loadStructuredExtractStoredSettings();
@@ -253,6 +256,32 @@ export function ControlsSidebar({
       setRewriteGeminiModel(value);
     }
     setRewriteModel(rewriteProvider, value);
+  };
+
+  const handleResetLocalData = async () => {
+    if (isResettingLocalData) {
+      return;
+    }
+    const confirmed = window.confirm(
+      'Clear all local app data (cached PDFs, extracted data, annotations, search caches, and saved API keys) and reload?'
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setResetLocalDataError(null);
+    setIsResettingLocalData(true);
+    try {
+      const result = await resetLocalAppData();
+      if (result.failedIndexedDbNames.length > 0) {
+        const failedNames = result.failedIndexedDbNames.map((item) => item.name).join(', ');
+        throw new Error(`Failed to clear some IndexedDB databases: ${failedNames}. Close other tabs and retry.`);
+      }
+      window.location.reload();
+    } catch (error) {
+      setResetLocalDataError(error instanceof Error ? error.message : 'Failed to reset local app data.');
+      setIsResettingLocalData(false);
+    }
   };
 
   return (
@@ -560,6 +589,22 @@ export function ControlsSidebar({
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="local-reset-controls">
+          <div className="structured-extract-settings-title">Local Data</div>
+          <button
+            type="button"
+            className="local-reset-button"
+            onClick={handleResetLocalData}
+            disabled={isResettingLocalData}
+          >
+            {isResettingLocalData ? 'Clearing local data…' : 'Clear local cache / DB and reload'}
+          </button>
+          <span className="structured-extract-settings-note">
+            Clears this app&apos;s IndexedDB caches and localStorage settings (including saved API keys), then reloads.
+          </span>
+          {resetLocalDataError && <span className="focus-error">{resetLocalDataError}</span>}
         </div>
       </section>
       </div>

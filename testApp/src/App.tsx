@@ -37,10 +37,13 @@ import { cleanupFocusPdfDecorations } from './utils/pdfDecoration';
 import { ViewerColumn } from './components/ViewerColumn';
 import { ControlsSidebar } from './components/ControlsSidebar';
 import { EmptyView } from './components/EmptyView';
+import { GlobalErrorDialog } from './components/GlobalErrorDialog';
+import { GlobalProgressOverlay } from './components/GlobalProgressOverlay';
 import { findChapterBounds, getHeadingLevel, collectChapterText, collectChapterBlocks } from './utils/structured';
 import { useSemanticSearch } from './search';
 import { SemanticSearchBar } from './components/SemanticSearchBar';
 import { useZoom, useViewMode, useRecordings, useDocumentLoader, useGeminiExtraction } from './hooks';
+import { useGlobalFetchActivity } from './hooks/useGlobalFetchActivity';
 
 export default function App(): JSX.Element {
   const { viewMode, setViewMode, showFocusView } = useViewMode('canvas');
@@ -102,6 +105,7 @@ export default function App(): JSX.Element {
   const {
     state,
     setState,
+    isOpeningFile,
     loadedFileName,
     loadedFileHash,
     loadedPdfData,
@@ -116,6 +120,8 @@ export default function App(): JSX.Element {
     handleOpenCachedFile,
     handleDeleteCachedFile
   } = useDocumentLoader({ onDocumentLoad: handleDocumentLoad });
+
+  const { activeRequestCount, isNetworkBusy, lastError, dismissLastError } = useGlobalFetchActivity();
 
   // Gemini extraction for detecting references and other elements
   const {
@@ -245,6 +251,115 @@ export default function App(): JSX.Element {
   }, [semanticSearchResults]);
 
   const [activeSemanticResultIndex, setActiveSemanticResultIndex] = useState(0);
+
+  const globalProgressOverlay = useMemo(() => {
+    if (isOpeningFile) {
+      return {
+        visible: true,
+        title: 'Opening PDF',
+        message: 'Reading and parsing the PDF before extraction starts.',
+        progress: null as number | null,
+        detail: loadedFileName ? `File: ${loadedFileName}` : null
+      };
+    }
+
+    if (extractState.status === 'loading') {
+      return {
+        visible: true,
+        title: 'Preparing Document',
+        message: 'Detecting document structure (tables, images, and metadata) before interactive features are available.',
+        progress: null as number | null,
+        detail: loadedFileName ? `Processing ${loadedFileName}` : 'Initial structured extraction is running.'
+      };
+    }
+
+    if (geminiExtractionState.status === 'loading') {
+      return {
+        visible: true,
+        title: 'Analyzing PDF Layout',
+        message: 'Extracting references, formulas, and page elements for citation/formula interactions.',
+        progress: null as number | null,
+        detail: 'This runs on top of the PDF and may take a few seconds.'
+      };
+    }
+
+    if (isIndexing) {
+      const total = indexingProgress.totalChunks;
+      const processed = indexingProgress.processedChunks;
+      const progress = total > 0 ? processed / total : null;
+      return {
+        visible: true,
+        title: 'Building Semantic Index',
+        message: 'Creating embeddings for semantic search and RAG-style lookup.',
+        progress,
+        detail:
+          indexingProgress.message ??
+          (total > 0 ? `Processed ${Math.min(processed, total)} of ${total} chunks.` : 'Preparing chunks...')
+      };
+    }
+
+    if (isSearching) {
+      return {
+        visible: true,
+        title: 'Running Semantic Search',
+        message: 'Querying embeddings and ranking the most relevant passages.',
+        progress: null as number | null,
+        detail: null
+      };
+    }
+
+    if (focusState.status === 'loading') {
+      return {
+        visible: true,
+        title: 'Analyzing Relevance',
+        message: 'Calling the AI model to highlight relevant sections for your query.',
+        progress: null as number | null,
+        detail: focusState.query ? `Query: ${focusState.query}` : null
+      };
+    }
+
+    if (structuredState.status === 'loading') {
+      return {
+        visible: true,
+        title: 'Loading Structured View',
+        message: 'Loading structured demo data for the current view.',
+        progress: null as number | null,
+        detail: null
+      };
+    }
+
+    if (isNetworkBusy) {
+      return {
+        visible: true,
+        title: 'Waiting for API Response',
+        message: 'An API request is in progress. Please wait before continuing.',
+        progress: null as number | null,
+        detail: activeRequestCount > 1 ? `${activeRequestCount} active requests` : '1 active request'
+      };
+    }
+
+    return {
+      visible: false,
+      title: '',
+      message: '',
+      progress: null as number | null,
+      detail: null as string | null
+    };
+  }, [
+    isOpeningFile,
+    loadedFileName,
+    extractState.status,
+    geminiExtractionState.status,
+    isIndexing,
+    indexingProgress.totalChunks,
+    indexingProgress.processedChunks,
+    indexingProgress.message,
+    isSearching,
+    focusState,
+    structuredState.status,
+    isNetworkBusy,
+    activeRequestCount
+  ]);
 
   // Reset active index when results change and auto-navigate to first result
   useEffect(() => {
@@ -883,6 +998,17 @@ export default function App(): JSX.Element {
           setEnableWebSearch={setEnableWebSearch}
         />
       )}
+      <GlobalProgressOverlay
+        visible={globalProgressOverlay.visible}
+        title={globalProgressOverlay.title}
+        message={globalProgressOverlay.message}
+        progress={globalProgressOverlay.progress}
+        detail={globalProgressOverlay.detail}
+      />
+      <GlobalErrorDialog
+        error={lastError}
+        onClose={dismissLastError}
+      />
     </div>
   );
 }

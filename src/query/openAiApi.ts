@@ -1,3 +1,5 @@
+import { normalizeProviderApiError, readFormattedOpenAiErrorBody } from './apiErrorUtils.js';
+
 export type OpenAiContent = string | OpenAiContentParts | OpenAiContentParts[];
 
 export interface OpenAiContentParts {
@@ -122,17 +124,22 @@ export class OpenAiAPI {
     applyGenerationConfig(payload, generationConfig);
 
     const fetchImpl = resolveFetch();
-    const response = await fetchImpl(this.endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`
-      },
-      body: JSON.stringify(payload)
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(this.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      throw normalizeProviderApiError('OpenAI', error);
+    }
 
     if (!response.ok) {
-      const message = await readErrorBody(response);
+      const message = await readFormattedOpenAiErrorBody(response);
       throw new Error(`OpenAI request failed with status ${response.status}: ${message}`);
     }
 
@@ -169,17 +176,22 @@ export class OpenAiAPI {
       imagePayload.response_format = 'b64_json';
     }
 
-    const response = await fetchImpl(normalizeImagesEndpoint(this.endpoint), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`
-      },
-      body: JSON.stringify(imagePayload)
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(normalizeImagesEndpoint(this.endpoint), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify(imagePayload)
+      });
+    } catch (error) {
+      throw normalizeProviderApiError('OpenAI', error);
+    }
 
     if (!response.ok) {
-      const message = await readErrorBody(response);
+      const message = await readFormattedOpenAiErrorBody(response);
       throw new Error(`OpenAI image generation request failed with status ${response.status}: ${message}`);
     }
 
@@ -421,13 +433,4 @@ function resolveFetch(): typeof fetch {
     return globalThis.fetch;
   }
   throw new Error('A global fetch implementation is required to call the OpenAI API.');
-}
-
-async function readErrorBody(response: Response): Promise<string> {
-  try {
-    const text = await response.text();
-    return text.length > 0 ? text : response.statusText;
-  } catch (error) {
-    return (error as Error).message;
-  }
 }

@@ -28,7 +28,7 @@ export function MathViewPopup({
   isLoading = false,
   error = null,
   apiKey,
-  provider = 'gemini',
+  provider = 'openai',
   model
 }: MathViewPopupProps): JSX.Element {
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);

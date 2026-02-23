@@ -4,6 +4,7 @@ import type {
   RelevanceService,
   RelevanceServiceConfig
 } from './relevanceTypes.js';
+import { normalizeProviderApiError, readFormattedOpenAiErrorBody } from './apiErrorUtils.js';
 
 interface OpenAiLikeClient {
   responses: {
@@ -190,16 +191,21 @@ function createFetchResponsesClient(apiKey: string, endpoint?: string): OpenAiLi
   return {
     responses: {
       async create(input: Record<string, unknown>) {
-        const response = await fetchImpl(targetEndpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`
-          },
-          body: JSON.stringify(input)
-        });
+        let response: Response;
+        try {
+          response = await fetchImpl(targetEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`
+            },
+            body: JSON.stringify(input)
+          });
+        } catch (error) {
+          throw normalizeProviderApiError('OpenAI', error);
+        }
         if (!response.ok) {
-          const message = await readErrorBody(response);
+          const message = await readFormattedOpenAiErrorBody(response);
           throw new Error(`OpenAI request failed with status ${response.status}: ${message}`);
         }
         return (await response.json()) as RawOpenAiResponse;
@@ -218,13 +224,4 @@ function resolveFetch(): typeof fetch {
   throw new Error(
     'Neither the "openai" package nor a global fetch implementation is available. Install "openai" or polyfill fetch.'
   );
-}
-
-async function readErrorBody(response: Response): Promise<string> {
-  try {
-    const text = await response.text();
-    return text.length > 0 ? text : response.statusText;
-  } catch (error) {
-    return (error as Error).message;
-  }
 }

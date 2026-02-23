@@ -1,4 +1,5 @@
 import { LMStudioAPI, type LMStudioConfig } from './lmStudioApi.js';
+import { normalizeProviderApiError, readFormattedOpenAiErrorBody } from './apiErrorUtils.js';
 
 export type EmbeddingProvider = 'lmstudio' | 'openai' | 'gemini';
 export type EmbeddingTaskType = 'retrieval_document' | 'retrieval_query';
@@ -105,20 +106,25 @@ export class EmbeddingAPI {
 
     const model = this.resolveModel(request.model);
     const fetchImpl = resolveFetch();
-    const response = await fetchImpl(normalizeOpenAiEmbeddingsEndpoint(this.endpoint), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey.trim()}`
-      },
-      body: JSON.stringify({
-        model,
-        input: request.input
-      })
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(normalizeOpenAiEmbeddingsEndpoint(this.endpoint), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey.trim()}`
+        },
+        body: JSON.stringify({
+          model,
+          input: request.input
+        })
+      });
+    } catch (error) {
+      throw normalizeProviderApiError('OpenAI', error);
+    }
 
     if (!response.ok) {
-      const message = await safeReadText(response);
+      const message = await readFormattedOpenAiErrorBody(response);
       throw new Error(`OpenAI embeddings request failed with status ${response.status}: ${message}`);
     }
 
@@ -174,21 +180,26 @@ export class EmbeddingAPI {
     request: EmbeddingRequest
   ): Promise<EmbeddingResult | null> {
     const fetchImpl = resolveFetch();
-    const response = await fetchImpl(buildGeminiBatchEmbeddingsUrl(this.endpoint, this.apiVersion, model, this.apiKey as string), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        requests: inputs.map((text) => buildGeminiEmbeddingRequestBody(text, model, request))
-      })
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(buildGeminiBatchEmbeddingsUrl(this.endpoint, this.apiVersion, model, this.apiKey as string), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          requests: inputs.map((text) => buildGeminiEmbeddingRequestBody(text, model, request))
+        })
+      });
+    } catch (error) {
+      throw normalizeProviderApiError('Gemini', error);
+    }
 
     if (!response.ok) {
       if (response.status === 400 || response.status === 404) {
         return null;
       }
-      const message = await safeReadText(response);
+      const message = normalizeProviderApiError('Gemini', await safeReadText(response)).message;
       throw new Error(`Gemini embeddings request failed with status ${response.status}: ${message}`);
     }
 
@@ -208,16 +219,21 @@ export class EmbeddingAPI {
     request: EmbeddingRequest
   ): Promise<{ embedding: number[]; raw: unknown }> {
     const fetchImpl = resolveFetch();
-    const response = await fetchImpl(buildGeminiSingleEmbeddingUrl(this.endpoint, this.apiVersion, model, this.apiKey as string), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(buildGeminiEmbeddingRequestBody(text, model, request, true))
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(buildGeminiSingleEmbeddingUrl(this.endpoint, this.apiVersion, model, this.apiKey as string), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(buildGeminiEmbeddingRequestBody(text, model, request, true))
+      });
+    } catch (error) {
+      throw normalizeProviderApiError('Gemini', error);
+    }
 
     if (!response.ok) {
-      const message = await safeReadText(response);
+      const message = normalizeProviderApiError('Gemini', await safeReadText(response)).message;
       throw new Error(`Gemini embeddings request failed with status ${response.status}: ${message}`);
     }
 

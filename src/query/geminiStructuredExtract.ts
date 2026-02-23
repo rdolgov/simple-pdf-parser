@@ -440,7 +440,8 @@ function toStructuredElement(
   }
 
   const bounds = toPdfBounds(box, page.width, page.height);
-  const type = normalizeType(raw.type);
+  const rows = readTableRows(raw);
+  const type = rows.length > 0 ? 'table' : normalizeType(raw.type);
   const pathBase = readPathBase(raw.path, type);
   const path = nextPath(pathBase, counters);
   const text = readText(raw.text, raw.content);
@@ -459,7 +460,6 @@ function toStructuredElement(
   }
 
   if (pathBase === '//Document/Table') {
-    const rows = readTableRows(raw);
     if (rows.length > 0) {
       const fileName = `tables/${pathToName(path)}.xlsx`.toLowerCase();
       element.filePaths = [fileName];
@@ -540,7 +540,23 @@ function normalizeType(value: unknown): string {
   if (typeof value !== 'string') {
     return 'paragraph';
   }
-  return value.trim().toLowerCase();
+  const normalized = value.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return 'paragraph';
+  }
+  if (normalized === 'table' || normalized.includes('tabular') || normalized.includes('spreadsheet')) {
+    return 'table';
+  }
+  if (normalized.includes('figure') || normalized.includes('image') || normalized.includes('diagram')) {
+    return 'figure';
+  }
+  if (normalized === 'header') {
+    return 'heading';
+  }
+  if (normalized === 'subheading' || normalized === 'sub-header') {
+    return 'h2';
+  }
+  return normalized;
 }
 
 function readPathBase(path: unknown, type: string): string {

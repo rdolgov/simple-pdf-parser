@@ -26,7 +26,7 @@ export function ImageExplanationPopup({
   position,
   onClose,
   apiKey,
-  provider = 'gemini',
+  provider = 'openai',
   model,
   savedExplanation,
   onSaveExplanation,

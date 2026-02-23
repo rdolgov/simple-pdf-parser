@@ -33,13 +33,13 @@ export function loadStructuredExtractStoredSettings(): StructuredExtractStoredSe
 
 export function getStructuredExtractProvider(): StructuredExtractProvider {
   if (!canUseLocalStorage()) {
-    return 'gemini';
+    return 'openai';
   }
   try {
     const raw = window.localStorage.getItem(STRUCTURED_EXTRACT_PROVIDER_STORAGE_KEY)?.trim().toLowerCase();
-    return raw === 'openai' ? 'openai' : 'gemini';
+    return raw === 'gemini' ? 'gemini' : 'openai';
   } catch {
-    return 'gemini';
+    return 'openai';
   }
 }
 

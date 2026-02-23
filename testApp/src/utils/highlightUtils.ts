@@ -42,7 +42,8 @@ export type TableAIDetector = (context: {
 }) => HtmlTableBlock | null;
 
 const TABLE_HIT_TOLERANCE = 6;
-const EXTRACT_TABLE_HIT_TOLERANCE = 10;
+const EXTRACT_TABLE_HIT_TOLERANCE = 18;
+const EXTRACT_TABLE_NEAR_HIT_TOLERANCE = 42;
 
 export function hasBounds(bounds: any): bounds is PDFImageBounds {
   if (!bounds) {
@@ -182,6 +183,12 @@ export function detectExtractedTableAtPoint(payload: {
     y
   });
 
+  let bestDirectHit: ExtractTableHit | null = null;
+  let bestDirectArea = Number.POSITIVE_INFINITY;
+  let bestNearHit: ExtractTableHit | null = null;
+  let bestNearDistance = Number.POSITIVE_INFINITY;
+  let bestNearArea = Number.POSITIVE_INFINITY;
+
   for (const table of tables) {
     if (!table.bounds) {
       continue;
@@ -191,23 +198,80 @@ export function detectExtractedTableAtPoint(payload: {
     if (!matchesPage) {
       continue;
     }
-    const { minX, maxX, minY, maxY } = table.bounds;
+    const normalizedBounds = normalizeBounds(table.bounds);
+    const { minX, maxX, minY, maxY } = normalizedBounds;
+    const width = Math.max(0, maxX - minX);
+    const height = Math.max(0, maxY - minY);
+    const area = width * height;
+    if (width <= 0 || height <= 0) {
+      continue;
+    }
+
+    const adaptiveTolerance = Math.max(
+      EXTRACT_TABLE_HIT_TOLERANCE,
+      Math.min(32, Math.round(Math.min(width, height) * 0.08))
+    );
 
     if (
-      x >= minX - EXTRACT_TABLE_HIT_TOLERANCE &&
-      x <= maxX + EXTRACT_TABLE_HIT_TOLERANCE &&
-      y >= minY - EXTRACT_TABLE_HIT_TOLERANCE &&
-      y <= maxY + EXTRACT_TABLE_HIT_TOLERANCE
+      x >= minX - adaptiveTolerance &&
+      x <= maxX + adaptiveTolerance &&
+      y >= minY - adaptiveTolerance &&
+      y <= maxY + adaptiveTolerance
     ) {
       console.debug('Table bounds match', { tableId: table.id, page: page.number, minX, maxX, minY, maxY, x, y });
-      return {
-        bounds: { minX, minY, maxX, maxY },
-        model: table
-      };
+      if (area < bestDirectArea) {
+        bestDirectArea = area;
+        bestDirectHit = {
+          bounds: { minX, minY, maxX, maxY },
+          model: table
+        };
+      }
+      continue;
+    }
+
+    const nearDistance = distanceToBounds({ minX, minY, maxX, maxY }, x, y);
+    if (nearDistance <= EXTRACT_TABLE_NEAR_HIT_TOLERANCE) {
+      if (nearDistance < bestNearDistance || (nearDistance === bestNearDistance && area < bestNearArea)) {
+        bestNearDistance = nearDistance;
+        bestNearArea = area;
+        bestNearHit = {
+          bounds: { minX, minY, maxX, maxY },
+          model: table
+        };
+      }
     }
   }
 
+  if (bestDirectHit) {
+    return bestDirectHit;
+  }
+  if (bestNearHit) {
+    console.debug('Near table bounds fallback match', {
+      tableId: bestNearHit.model.id,
+      page: page.number,
+      distance: bestNearDistance,
+      x,
+      y
+    });
+    return bestNearHit;
+  }
+
   return null;
+}
+
+function normalizeBounds(bounds: PDFImageBounds): PDFImageBounds {
+  return {
+    minX: Math.min(bounds.minX, bounds.maxX),
+    minY: Math.min(bounds.minY, bounds.maxY),
+    maxX: Math.max(bounds.minX, bounds.maxX),
+    maxY: Math.max(bounds.minY, bounds.maxY)
+  };
+}
+
+function distanceToBounds(bounds: PDFImageBounds, x: number, y: number): number {
+  const dx = x < bounds.minX ? bounds.minX - x : x > bounds.maxX ? x - bounds.maxX : 0;
+  const dy = y < bounds.minY ? bounds.minY - y : y > bounds.maxY ? y - bounds.maxY : 0;
+  return Math.hypot(dx, dy);
 }
 
 export function getOverrideLineHeight(block: HighlightBlockData): number | undefined {

@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { normalizeProviderApiError } from './apiErrorUtils.js';
 
 export type GeminiContent = string | GeminiContentParts | GeminiContentParts[];
 
@@ -204,7 +205,12 @@ export class GeminiAPI {
   ): Promise<GeminiGenerateResult> {
     const payload = this.buildRequest(request);
     const client = useAlphaClient ? this.clientAlpha : this.client;
-    const response = await client.models.generateContent(payload);
+    let response: GeminiGenerateContentResponse;
+    try {
+      response = await client.models.generateContent(payload);
+    } catch (error) {
+      throw normalizeProviderApiError('Gemini', error);
+    }
     const text = extractText(response);
     if (!text) {
       throw new Error('Gemini response did not include text content');
@@ -242,9 +248,14 @@ export class GeminiAPI {
     };
 
     // Use alpha client for image generation
-    const response = await this.clientAlpha.models.generateContent(
-      payload as unknown as GeminiGenerateContentRequest
-    );
+    let response: GeminiGenerateContentResponse;
+    try {
+      response = await this.clientAlpha.models.generateContent(
+        payload as unknown as GeminiGenerateContentRequest
+      );
+    } catch (error) {
+      throw normalizeProviderApiError('Gemini', error);
+    }
     const images = extractInlineImages(response);
     if (images.length === 0) {
       throw new Error('Gemini response did not include inline image data');

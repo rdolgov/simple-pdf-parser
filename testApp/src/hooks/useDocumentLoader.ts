@@ -23,7 +23,7 @@ import {
   setStructuredExtractApiKey
 } from '../utils/structuredExtractSettings';
 
-const EXTRACT_CACHE_SCHEMA_VERSION = 3;
+const EXTRACT_CACHE_SCHEMA_VERSION = 4;
 
 export interface ExtractState {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -33,6 +33,7 @@ export interface ExtractState {
 export interface UseDocumentLoaderResult {
   state: LoadState;
   setState: React.Dispatch<React.SetStateAction<LoadState>>;
+  isOpeningFile: boolean;
   loadedFileName: string;
   loadedFileHash: string;
   loadedPdfData: ArrayBuffer | null;
@@ -57,6 +58,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
   const { onDocumentLoad } = options;
 
   const [state, setState] = useState<LoadState>({ status: 'idle' });
+  const [isOpeningFile, setIsOpeningFile] = useState(false);
   const [loadedFileName, setLoadedFileName] = useState<string>('');
   const [loadedFileHash, setLoadedFileHash] = useState<string>('');
   const [loadedPdfData, setLoadedPdfData] = useState<ArrayBuffer | null>(null);
@@ -115,12 +117,12 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
               return;
             }
             const boundsTuple = element.attributes?.BBox ?? element.Bounds;
-            if (!Array.isArray(boundsTuple) || boundsTuple.length !== 4) {
+            const normalizedBounds = normalizeExtractTableBounds(boundsTuple);
+            if (!normalizedBounds) {
               return;
             }
             const pageNumberZeroBased = typeof element.Page === 'number' ? element.Page : 0;
             const pageNumber = pageNumberZeroBased + 1; // PDF pages are 1-based in renderer
-            const [minX, minY, maxX, maxY] = boundsTuple;
             const tableFilePath = Array.isArray(element.filePaths)
               ? element.filePaths.find(
                   (filePath: string) => typeof filePath === 'string' && filePath.toLowerCase().endsWith('.xlsx')
@@ -131,12 +133,6 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
               parsedTableMap.delete(normalizeTableName(tableFilePath));
             }
 
-            const normalizedBounds: TableBounds = {
-              minX,
-              minY,
-              maxX,
-              maxY
-            };
             const id = `${path}-${pageNumber}`;
             if (seenTables.has(id)) {
               return;
@@ -241,6 +237,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         return;
       }
 
+      setIsOpeningFile(true);
       try {
         const bytes = await file.arrayBuffer();
         const document = PDFDocument.from(bytes);
@@ -252,6 +249,8 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unable to parse PDF.';
         setState({ status: 'error', message });
+      } finally {
+        setIsOpeningFile(false);
       }
     },
     [onDocumentLoad, runExtract]
@@ -292,6 +291,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
   return {
     state,
     setState,
+    isOpeningFile,
     loadedFileName,
     loadedFileHash,
     loadedPdfData,
@@ -322,4 +322,34 @@ function resolveApiKeyForExtract(provider: 'gemini' | 'openai'): string | null {
   }
   setStructuredExtractApiKey(provider, normalized);
   return normalized;
+}
+
+function normalizeExtractTableBounds(value: unknown): TableBounds | null {
+  if (!Array.isArray(value) || value.length !== 4) {
+    return null;
+  }
+
+  const raw = value.map((item) => (typeof item === 'number' ? item : Number(item)));
+  if (raw.some((item) => !Number.isFinite(item))) {
+    return null;
+  }
+
+  let [a, b, c, d] = raw as [number, number, number, number];
+
+  // Some extractions occasionally return [x, y, width, height] instead of [minX, minY, maxX, maxY].
+  if (c > 0 && d > 0 && (c <= a || d <= b)) {
+    c = a + c;
+    d = b + d;
+  }
+
+  const minX = Math.min(a, c);
+  const maxX = Math.max(a, c);
+  const minY = Math.min(b, d);
+  const maxY = Math.max(b, d);
+
+  if (maxX - minX <= 1 || maxY - minY <= 1) {
+    return null;
+  }
+
+  return { minX, minY, maxX, maxY };
 }

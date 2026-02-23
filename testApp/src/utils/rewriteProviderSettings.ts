@@ -35,13 +35,13 @@ export function loadRewriteProviderStoredSettings(): RewriteProviderStoredSettin
 
 export function getRewriteProvider(): RewriteProvider {
   if (!canUseLocalStorage()) {
-    return 'gemini';
+    return 'openai';
   }
   try {
     const raw = window.localStorage.getItem(REWRITE_PROVIDER_STORAGE_KEY)?.trim().toLowerCase();
-    return raw === 'openai' ? 'openai' : 'gemini';
+    return raw === 'gemini' ? 'gemini' : 'openai';
   } catch {
-    return 'gemini';
+    return 'openai';
   }
 }
 
