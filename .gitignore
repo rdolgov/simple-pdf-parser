@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+**/dist/
+
+# Testing artifacts
+coverage/
+.vitest/
+
+# Logs and editor detritus
+*.log
+.DS_Store
+.env.local
+.idea/

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash*",
+      "Bash(strings:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(npm run lint)",
+      "Bash(npm test:*)",
+      "Bash(cat:*)",
+      "Bash(python3 -c \"\nimport json, sys\ndata = json.load(sys.stdin)\n# Parse the nested JSON string\ninner = json.loads(data[''''candidates''''][0][''''content''''][''''parts''''][0][''''text''''])\nfor page in inner[''''pages'''']:\n    for el in page[''''elements'''']:\n        if el[''''type''''] == ''''formula'''' and ''''FFN'''' in str(el.get(''''content'''', '''''''')):\n            print(f\"\"Page {page[''''page_number'''']}: {el[''''content''''][:50]}... bbox: {el[''''bounding_box'''']}\"\")\n\")",
+      "Bash(npm run build:*)",
+      "Bash(node:*)",
+      "Bash(npx vitest:*)",
+      "Bash(python3:*)",
+      "Bash(xxd:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
