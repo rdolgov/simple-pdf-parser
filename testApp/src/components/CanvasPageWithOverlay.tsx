@@ -127,6 +127,8 @@ export function CanvasPageWithOverlay({
   onInlineSuggestionAnalysisActivityChange
 }: CanvasPageWithOverlayProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const formulaSuggestionAttentionTimeoutRef = useRef<number | null>(null);
+  const previousFormulaSuggestionSignatureRef = useRef<Record<string, string>>({});
   const [highlightTextOverrides, setHighlightTextOverrides] = useState<Record<string, string>>({});
   const [rewriteLoading, setRewriteLoading] = useState<Record<string, boolean>>({});
   const [rewriteError, setRewriteError] = useState<Record<string, string>>({});
@@ -191,6 +193,7 @@ export function CanvasPageWithOverlay({
     isLoading: boolean;
     error: string | null;
   } | null>(null);
+  const [formulaSuggestionAttentionKey, setFormulaSuggestionAttentionKey] = useState<string | null>(null);
   const [formulaSuggestionState, setFormulaSuggestionState] = useState<
     Record<string, { status: 'loading' | 'ready' | 'error'; hasMath: boolean }>
   >({});
@@ -212,7 +215,16 @@ export function CanvasPageWithOverlay({
     setHoveredElement(null);
     setImageExplanationState(null);
     setInteractiveWidgetState(null);
+    setFormulaSuggestionAttentionKey(null);
   }, [focusLayout, canvasHighlight]);
+
+  useEffect(() => {
+    return () => {
+      if (formulaSuggestionAttentionTimeoutRef.current !== null) {
+        window.clearTimeout(formulaSuggestionAttentionTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Compute aligned elements when gemini extraction or page changes
   useEffect(() => {
@@ -1119,6 +1131,29 @@ export function CanvasPageWithOverlay({
     requestMathLatexFromModel
   ]);
 
+  useEffect(() => {
+    if (!activeTextSelectionKey) {
+      setFormulaSuggestionAttentionKey(null);
+      return;
+    }
+
+    const entry = formulaSuggestionState[activeTextSelectionKey];
+    const nextSignature = entry ? `${entry.status}:${entry.hasMath ? '1' : '0'}` : 'none';
+    const previousSignature = previousFormulaSuggestionSignatureRef.current[activeTextSelectionKey];
+    previousFormulaSuggestionSignatureRef.current[activeTextSelectionKey] = nextSignature;
+
+    if (entry?.status === 'ready' && entry.hasMath && previousSignature !== nextSignature) {
+      setFormulaSuggestionAttentionKey(activeTextSelectionKey);
+      if (formulaSuggestionAttentionTimeoutRef.current !== null) {
+        window.clearTimeout(formulaSuggestionAttentionTimeoutRef.current);
+      }
+      formulaSuggestionAttentionTimeoutRef.current = window.setTimeout(() => {
+        setFormulaSuggestionAttentionKey((current) => current === activeTextSelectionKey ? null : current);
+        formulaSuggestionAttentionTimeoutRef.current = null;
+      }, 1500);
+    }
+  }, [activeTextSelectionKey, formulaSuggestionState]);
+
   const handleSaveImageExplanation = useCallback(
     (explanation: string) => {
       if (!imageExplanationState) return;
@@ -1617,7 +1652,10 @@ export function CanvasPageWithOverlay({
                 buildHighlightBlockKey(page.number, activeTextSelection.block.bounds) === blockKey
                   ? activeTextSelection
                   : null;
-              const showFormulaSuggestion = formulaSuggestionState[blockKey]?.status === 'ready' && formulaSuggestionState[blockKey]?.hasMath;
+              const formulaSuggestionEntry = formulaSuggestionState[blockKey];
+              const isDetectingInterestingStuff = formulaSuggestionEntry?.status === 'loading';
+              const showFormulaSuggestion = formulaSuggestionEntry?.status === 'ready' && formulaSuggestionEntry?.hasMath;
+              const highlightFormulaSuggestion = showFormulaSuggestion && formulaSuggestionAttentionKey === blockKey;
 
               return (
                 <div
@@ -1659,12 +1697,24 @@ export function CanvasPageWithOverlay({
                       title="Generate a sandboxed interactive widget for this paragraph"
                       disabled={isGeneratingInteractiveWidget}
                     />
+                    {isDetectingInterestingStuff && (
+                      <OverlayToolbarButton
+                        onClick={() => {}}
+                        icon={<LoadingIcon />}
+                        label="Detecting interesting stuff"
+                        title="Detecting interesting stuff inside this selection..."
+                        ariaDisabled
+                        className="overlay-toolbar-btn--busy"
+                      />
+                    )}
                     {showFormulaSuggestion && (
                       <OverlayToolbarButton
                         onClick={() => handleDetectMath(highlightText, blockTop + blockHeight + 10, blockLeft)}
                         icon={<MathIcon />}
                         label="Formula widget"
                         title="Open the detected formula widget for this text"
+                        variant="primary"
+                        className={highlightFormulaSuggestion ? 'overlay-toolbar-btn--suggested' : ''}
                       />
                     )}
                   </OverlayToolbar>

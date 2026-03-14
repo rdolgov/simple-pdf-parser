@@ -46,7 +46,9 @@ interface OverlayToolbarButtonProps {
   label: string;
   title?: string;
   disabled?: boolean;
+  ariaDisabled?: boolean;
   variant?: 'default' | 'primary' | 'danger';
+  className?: string;
 }
 
 export function OverlayToolbarButton({
@@ -55,23 +57,30 @@ export function OverlayToolbarButton({
   label,
   title,
   disabled = false,
-  variant = 'default'
+  ariaDisabled = false,
+  variant = 'default',
+  className = ''
 }: OverlayToolbarButtonProps): JSX.Element {
   const variantClass = variant !== 'default' ? `overlay-toolbar-btn--${variant}` : '';
 
   const handleClick = (event: MouseEvent) => {
     event.stopPropagation();
+    if (disabled || ariaDisabled) {
+      return;
+    }
     onClick();
   };
 
   return (
     <button
       type="button"
-      className={`overlay-toolbar-btn ${variantClass}`}
+      className={`overlay-toolbar-btn ${variantClass} ${className}`.trim()}
       onClick={handleClick}
       aria-label={label}
+      aria-disabled={ariaDisabled || undefined}
       title={title ?? label}
       disabled={disabled}
+      tabIndex={ariaDisabled ? -1 : undefined}
     >
       {icon}
     </button>
