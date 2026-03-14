@@ -6,10 +6,11 @@ import type { CanvasHighlightSelection, FocusProvider, ExtractedTable } from '..
 import type { SemanticSearchResult } from '../search';
 import { TableViewer, type TableSortState } from './TableViewer';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
-import { ExploreIcon, ImageIcon, LoadingIcon, MathIcon } from './OverlayIcons';
+import { ExploreIcon, ImageIcon, LoadingIcon, MathIcon, WidgetIcon } from './OverlayIcons';
 import { MiniChatView } from './MiniChatView';
 import { ImagePreviewPopup } from './ImagePreviewPopup';
 import { MathViewPopup } from './MathViewPopup';
+import { InteractiveWidgetPopup } from './InteractiveWidgetPopup';
 import { ImageExplanationPopup, type ImageExplanationData } from './ImageExplanationPopup';
 import { getCachedImageExplanation, setCachedImageExplanation, deleteCachedImageExplanation } from '../storage/imageExplanationCache';
 import {
@@ -17,9 +18,11 @@ import {
   type AnnotationSummary,
   type ChatAnnotationContent,
   type ImageAnnotationContent,
+  type WidgetAnnotationContent,
   getAnnotation,
   getAnnotationsByPage,
   saveOrUpdateImageAnnotation,
+  saveOrUpdateWidgetAnnotation,
   deleteAnnotation
 } from '../storage/annotationStorage';
 import { getCachedLatex, setCachedLatex } from '../storage/mathCache';
@@ -56,6 +59,12 @@ import {
   getRewriteProvider,
   setRewriteApiKey
 } from '../utils/rewriteProviderSettings';
+import { buildSectionContext } from '../utils/sectionContext';
+import {
+  buildInteractiveWidgetPrompt,
+  buildInteractiveWidgetSrcDoc,
+  parseInteractiveWidgetSpec
+} from '../utils/interactiveWidget';
 
 const HIGHLIGHT_PADDING = 12;
 const TABLE_HIT_TOLERANCE = 6;
@@ -86,6 +95,7 @@ interface CanvasPageWithOverlayProps {
   enableImageHighlight?: boolean;
   enableWebSearch?: boolean;
   onInlineImageGenerationActivityChange?: (delta: number) => void;
+  onInteractiveWidgetGenerationActivityChange?: (delta: number) => void;
 }
 
 export function CanvasPageWithOverlay({
@@ -109,7 +119,8 @@ export function CanvasPageWithOverlay({
   enableTableHighlight = true,
   enableImageHighlight = true,
   enableWebSearch = false,
-  onInlineImageGenerationActivityChange
+  onInlineImageGenerationActivityChange,
+  onInteractiveWidgetGenerationActivityChange
 }: CanvasPageWithOverlayProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [highlightTextOverrides, setHighlightTextOverrides] = useState<Record<string, string>>({});
@@ -169,6 +180,13 @@ export function CanvasPageWithOverlay({
     position: { top: number; left: number };
     savedExplanation: ImageExplanationData | null;
   } | null>(null);
+  const [interactiveWidgetState, setInteractiveWidgetState] = useState<{
+    title: string;
+    srcDoc: string;
+    position: { top: number; left: number };
+    isLoading: boolean;
+    error: string | null;
+  } | null>(null);
 
   useEffect(() => {
     setHighlightTextOverrides({});
@@ -186,6 +204,7 @@ export function CanvasPageWithOverlay({
     setMathViewState(null);
     setHoveredElement(null);
     setImageExplanationState(null);
+    setInteractiveWidgetState(null);
   }, [focusLayout, canvasHighlight]);
 
   // Compute aligned elements when gemini extraction or page changes
@@ -328,6 +347,21 @@ export function CanvasPageWithOverlay({
     });
   }, []);
 
+  const getWidgetPopupPosition = useCallback(
+    (bounds: AnnotationBounds) => {
+      const canvasPadding = 16 * zoom;
+      const blockLeft = bounds.minX * zoom + canvasPadding;
+      const blockTop = (page.size.height - bounds.maxY) * zoom + canvasPadding;
+      const blockWidth = (bounds.maxX - bounds.minX) * zoom;
+
+      return {
+        top: blockTop - HIGHLIGHT_PADDING - 20,
+        left: blockLeft + blockWidth + HIGHLIGHT_PADDING + 16
+      };
+    },
+    [zoom, page.size.height]
+  );
+
   const handleImageMarkerClick = useCallback(
     async (annotationId: string, bounds: AnnotationBounds) => {
       try {
@@ -355,6 +389,32 @@ export function CanvasPageWithOverlay({
       }
     },
     [zoom, page.size.height]
+  );
+
+  const handleWidgetMarkerClick = useCallback(
+    async (annotationId: string, bounds: AnnotationBounds) => {
+      try {
+        const annotation = await getAnnotation(annotationId);
+        if (!annotation || annotation.type !== 'widget') return;
+
+        const widgetContent = annotation.content as WidgetAnnotationContent;
+        setInteractiveWidgetState({
+          title: widgetContent.title?.trim() || 'Interactive explainer',
+          srcDoc: buildInteractiveWidgetSrcDoc({
+            title: widgetContent.title?.trim() || 'Interactive explainer',
+            html: widgetContent.html,
+            css: widgetContent.css,
+            js: widgetContent.js
+          }),
+          position: getWidgetPopupPosition(bounds),
+          isLoading: false,
+          error: null
+        });
+      } catch (err) {
+        console.error('Failed to load widget annotation:', err);
+      }
+    },
+    [getWidgetPopupPosition]
   );
 
   const handleDeleteImageAnnotation = useCallback(async () => {
@@ -765,11 +825,141 @@ ${trimmedText}
     setImageExplanationState(null);
   }, []);
 
+  const handleCloseInteractiveWidget = useCallback(() => {
+    setInteractiveWidgetState(null);
+  }, []);
+
+  const handleGenerateInteractiveWidget = useCallback(
+    async (
+      selectedText: string,
+      position: { top: number; left: number },
+      bounds: AnnotationBounds,
+      selectedBlock: Extract<CanvasHighlightSelection, { kind: 'text' }> | null
+    ) => {
+      const trimmedText = selectedText.trim();
+      if (trimmedText.length === 0) {
+        return;
+      }
+
+      const textSelection =
+        selectedBlock && selectedBlock.kind === 'text'
+          ? selectedBlock.block
+          : null;
+      const sectionContext = buildSectionContext(htmlPage, textSelection);
+      const defaultTitle = sectionContext.sectionHeading?.trim() || 'Interactive explainer';
+
+      setInteractiveWidgetState({
+        title: defaultTitle,
+        srcDoc: '',
+        position,
+        isLoading: true,
+        error: null
+      });
+
+      let tracksInlineActivity = false;
+
+      try {
+        onInteractiveWidgetGenerationActivityChange?.(1);
+        tracksInlineActivity = true;
+
+        const prompt = buildInteractiveWidgetPrompt({
+          documentTitle,
+          selectedText: trimmedText,
+          sectionHeading: sectionContext.sectionHeading,
+          sectionText: sectionContext.sectionText
+        });
+        const provider = getRewriteProvider();
+        const response = provider === 'openai'
+          ? await (async () => {
+              const openAiKey = ensureOpenAiApiKey();
+              if (!openAiKey) {
+                throw new Error('OpenAI API key required for interactive widgets.');
+              }
+              const configuredModel = getRewriteModel('openai')?.trim();
+              const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
+                ? configuredModel
+                : undefined;
+              const client = new OpenAiAPI({
+                apiKey: openAiKey,
+                ...(textModel ? { model: textModel } : {})
+              });
+              return client.generateText(prompt);
+            })()
+          : await (async () => {
+              const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
+              if (!key) {
+                throw new Error('Gemini API key required for interactive widgets.');
+              }
+              const configuredModel = getRewriteModel('gemini')?.trim();
+              const geminiModel =
+                configuredModel && !/^gpt-/i.test(configuredModel)
+                  ? configuredModel
+                  : 'gemini-3-pro-preview';
+              const client = new GeminiAPI({ apiKey: key, model: geminiModel });
+              return client.generateText(prompt);
+            })();
+
+        const spec = parseInteractiveWidgetSpec(response.text);
+        const srcDoc = buildInteractiveWidgetSrcDoc(spec);
+        setInteractiveWidgetState({
+          title: spec.title,
+          srcDoc,
+          position,
+          isLoading: false,
+          error: null
+        });
+        try {
+          await saveOrUpdateWidgetAnnotation(
+            documentId,
+            pageNumber,
+            bounds,
+            spec.title,
+            spec.html,
+            spec.css,
+            spec.js,
+            trimmedText
+          );
+          setAnnotationVersion((current) => current + 1);
+        } catch (saveError) {
+          console.error('Failed to save widget annotation:', saveError);
+        }
+      } catch (error) {
+        setInteractiveWidgetState((current) => ({
+          title: current?.title ?? defaultTitle,
+          srcDoc: current?.srcDoc ?? '',
+          position,
+          isLoading: false,
+          error: error instanceof Error ? error.message : 'Failed to generate interactive widget.'
+        }));
+      } finally {
+        if (tracksInlineActivity) {
+          onInteractiveWidgetGenerationActivityChange?.(-1);
+        }
+      }
+    },
+    [
+      documentId,
+      documentTitle,
+      ensureGeminiApiKey,
+      ensureOpenAiApiKey,
+      htmlPage,
+      onInteractiveWidgetGenerationActivityChange,
+      pageNumber
+    ]
+  );
+
   const overlayAiProvider = getRewriteProvider();
   const overlayAiModel = getRewriteModel(overlayAiProvider);
   const overlayAiKey = overlayAiProvider === 'openai'
     ? (getRewriteApiKey('openai') ?? '')
     : (getRewriteApiKey('gemini') ?? geminiApiKey ?? '');
+  const activeTextSelection =
+    !focusMode &&
+    canvasHighlight?.pageNumber === page.number &&
+    canvasHighlight.kind === 'text'
+      ? canvasHighlight
+      : null;
+  const isGeneratingInteractiveWidget = interactiveWidgetState?.isLoading ?? false;
 
   const handleSaveImageExplanation = useCallback(
     (explanation: string) => {
@@ -1261,6 +1451,11 @@ ${trimmedText}
               const blockHeight = (bounds.maxY - bounds.minY) * scaleY;
               const hasLineGeometry = lines.length > 0 && lines.every((line) => Boolean(line.bounds));
               const extraImageWidth = hasRequestedImage ? IMAGE_PANEL_WIDTH + HIGHLIGHT_PADDING : 0;
+              const selectedBlockForWidget =
+                activeTextSelection &&
+                buildHighlightBlockKey(page.number, activeTextSelection.block.bounds) === blockKey
+                  ? activeTextSelection
+                  : null;
 
               return (
                 <div
@@ -1300,6 +1495,20 @@ ${trimmedText}
                       icon={<MathIcon />}
                       label="Detect formula"
                       title="Detect and render mathematical formula"
+                    />
+                    <OverlayToolbarButton
+                      onClick={() =>
+                        void handleGenerateInteractiveWidget(
+                          highlightText,
+                          getWidgetPopupPosition(bounds),
+                          bounds,
+                          selectedBlockForWidget
+                        )
+                      }
+                      icon={isGeneratingInteractiveWidget ? <LoadingIcon /> : <WidgetIcon />}
+                      label="Create interactive widget"
+                      title="Generate a sandboxed interactive widget for this paragraph"
+                      disabled={isGeneratingInteractiveWidget}
                     />
                   </OverlayToolbar>
                   <div className="canvas-overlay-highlight-inner">
@@ -1442,7 +1651,7 @@ ${trimmedText}
         />
       ))}
 
-      {/* Annotation markers for saved chats and images */}
+      {/* Annotation markers for saved chats, images, and widgets */}
       {pageAnnotations.length > 0 && canvasRef.current && (
         <div className="canvas-overlay-layer">
           {pageAnnotations
@@ -1453,15 +1662,20 @@ ${trimmedText}
             const markerTop = (page.size.height - annotation.bounds.maxY) * scaleY + canvasPadding;
             const isChat = annotation.type === 'chat';
             const isImage = annotation.type === 'image';
+            const isWidget = annotation.type === 'widget';
             const handleClick = isChat
               ? () => handleAnnotationMarkerClick(annotation.id, annotation.bounds)
               : isImage
               ? () => handleImageMarkerClick(annotation.id, annotation.bounds)
+              : isWidget
+              ? () => handleWidgetMarkerClick(annotation.id, annotation.bounds)
               : undefined;
             const title = isChat
               ? 'Click to open chat'
               : isImage
               ? 'Click to view generated image'
+              : isWidget
+              ? 'Click to reopen interactive widget'
               : annotation.type;
             return (
               <button
@@ -1477,6 +1691,7 @@ ${trimmedText}
               >
                 {isChat && <ChatMarkerIcon />}
                 {isImage && <ImageMarkerIcon />}
+                {isWidget && <WidgetMarkerIcon />}
               </button>
             );
           })}
@@ -1581,6 +1796,17 @@ ${trimmedText}
           onDeleteExplanation={handleDeleteImageExplanation}
         />
       )}
+
+      {interactiveWidgetState && (
+        <InteractiveWidgetPopup
+          title={interactiveWidgetState.title}
+          position={interactiveWidgetState.position}
+          srcDoc={interactiveWidgetState.srcDoc}
+          isLoading={interactiveWidgetState.isLoading}
+          error={interactiveWidgetState.error}
+          onClose={handleCloseInteractiveWidget}
+        />
+      )}
     </div>
   );
 }
@@ -1622,6 +1848,23 @@ function ImageMarkerIcon(): JSX.Element {
       <rect x="1" y="2" width="14" height="12" rx="2" fill="currentColor" />
       <circle cx="5" cy="6" r="1.5" fill="white" />
       <path d="M3 12l3-4 2 2 4-5 3 7H3z" fill="white" />
+    </svg>
+  );
+}
+
+function WidgetMarkerIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+      <rect x="1.5" y="2" width="13" height="11.5" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M4.2 5.3h3.2M4.2 8h2.2M4.2 10.7h3.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path
+        d="M10.2 6.2l1 1 1.8-2M10.2 10l1 1 1.8-2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

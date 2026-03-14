@@ -70,3 +70,26 @@ export function MathIcon(): JSX.Element {
     </svg>
   );
 }
+
+export function WidgetIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+      <rect x="4" y="5" width="16" height="14" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M7.5 9.25h4M7.5 12h3M7.5 14.75h4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M15.2 10.1l1.4 1.4 2.2-2.4M15.2 14.2l1.4 1.4 2.2-2.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}

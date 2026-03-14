@@ -7,7 +7,7 @@
 // Types
 // ============================================================================
 
-export type AnnotationType = 'chat' | 'image' | 'note' | 'highlight';
+export type AnnotationType = 'chat' | 'image' | 'widget' | 'note' | 'highlight';
 
 export interface AnnotationBounds {
   minX: number;
@@ -33,6 +33,14 @@ export interface ImageAnnotationContent {
   prompt?: string;
 }
 
+export interface WidgetAnnotationContent {
+  title: string;
+  html: string;
+  css: string;
+  js: string;
+  sourceText?: string;
+}
+
 export interface NoteAnnotationContent {
   text: string;
 }
@@ -45,6 +53,7 @@ export interface HighlightAnnotationContent {
 export type AnnotationContent =
   | ChatAnnotationContent
   | ImageAnnotationContent
+  | WidgetAnnotationContent
   | NoteAnnotationContent
   | HighlightAnnotationContent;
 
@@ -136,6 +145,10 @@ export function getAnnotationPreview(annotation: Annotation): string {
     case 'image': {
       const image = annotation.content as ImageAnnotationContent;
       return image.prompt?.slice(0, 50) || 'Generated image';
+    }
+    case 'widget': {
+      const widget = annotation.content as WidgetAnnotationContent;
+      return widget.title?.trim() || widget.sourceText?.slice(0, 50) || 'Interactive widget';
     }
     case 'note': {
       const note = annotation.content as NoteAnnotationContent;
@@ -406,4 +419,54 @@ export async function getImageAnnotation(
   bounds: AnnotationBounds
 ): Promise<Annotation | null> {
   return findAnnotationAtBounds(documentId, pageNumber, bounds, 'image');
+}
+
+// ============================================================================
+// Widget-specific helpers
+// ============================================================================
+
+export async function saveOrUpdateWidgetAnnotation(
+  documentId: string,
+  pageNumber: number,
+  bounds: AnnotationBounds,
+  title: string,
+  html: string,
+  css: string,
+  js: string,
+  sourceText?: string
+): Promise<Annotation> {
+  const existing = await findAnnotationAtBounds(documentId, pageNumber, bounds, 'widget');
+  const now = Date.now();
+
+  if (existing) {
+    const updated: Annotation = {
+      ...existing,
+      content: { title, html, css, js, sourceText } as WidgetAnnotationContent,
+      updatedAt: now
+    };
+    await saveAnnotation(updated);
+    return updated;
+  }
+
+  const newAnnotation: Annotation = {
+    id: generateAnnotationId(),
+    documentId,
+    type: 'widget',
+    pageNumber,
+    bounds,
+    content: { title, html, css, js, sourceText } as WidgetAnnotationContent,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  await saveAnnotation(newAnnotation);
+  return newAnnotation;
+}
+
+export async function getWidgetAnnotation(
+  documentId: string,
+  pageNumber: number,
+  bounds: AnnotationBounds
+): Promise<Annotation | null> {
+  return findAnnotationAtBounds(documentId, pageNumber, bounds, 'widget');
 }

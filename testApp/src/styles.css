@@ -3700,6 +3700,16 @@ footer code {
   box-shadow: 0 3px 10px rgba(245, 158, 11, 0.4);
 }
 
+.annotation-marker--widget {
+  background: linear-gradient(135deg, #0f766e, #155e75);
+  color: #ffffff;
+  box-shadow: 0 3px 10px rgba(15, 118, 110, 0.38);
+}
+
+.annotation-marker--widget:hover {
+  box-shadow: 0 5px 16px rgba(15, 118, 110, 0.56);
+}
+
 .annotation-marker--note {
   background: linear-gradient(135deg, #10b981, #059669);
   color: #ffffff;
@@ -4038,6 +4048,140 @@ footer code {
   border-radius: 4px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ============================================================================
+   Interactive Widget Popup - Shows a sandboxed HTML/JS explainer beside a selection
+   ============================================================================ */
+
+.interactive-widget-popup {
+  position: absolute;
+  width: min(560px, calc(100vw - 48px));
+  height: min(560px, calc(100vh - 48px));
+  min-height: 320px;
+  max-height: min(760px, calc(100vh - 24px));
+  background: rgba(255, 255, 255, 0.84);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 16px;
+  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.16), 0 6px 18px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 1000;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.interactive-widget-drag-handle {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  cursor: grab;
+  color: rgba(71, 85, 105, 0.5);
+  transition: color 0.15s ease;
+  z-index: 2;
+}
+
+.interactive-widget-drag-handle:hover {
+  color: rgba(71, 85, 105, 0.78);
+}
+
+.interactive-widget-drag-handle:active {
+  cursor: grabbing;
+}
+
+.interactive-widget-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #475569;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.interactive-widget-close:hover {
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  transform: translateY(-1px);
+}
+
+.interactive-widget-content {
+  flex: 1;
+  min-height: 0;
+  background: rgba(255, 255, 255, 0.72);
+  padding-top: 22px;
+}
+
+.interactive-widget-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: none;
+  background: #ffffff;
+}
+
+.interactive-widget-loading,
+.interactive-widget-error {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+}
+
+.interactive-widget-loading {
+  flex-direction: column;
+  gap: 10px;
+  color: #475569;
+  font-size: 0.92rem;
+}
+
+.interactive-widget-error {
+  background: rgba(254, 242, 242, 0.7);
+  color: #991b1b;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.interactive-widget-resize-handle {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: rgba(71, 85, 105, 0.76);
+  cursor: nwse-resize;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+@media (max-width: 720px) {
+  .interactive-widget-popup {
+    width: min(100vw - 24px, 560px);
+    height: min(68vh, 560px);
+  }
 }
 
 /* ============================================================================

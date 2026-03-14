@@ -57,6 +57,7 @@ export default function App(): JSX.Element {
   const [structuredState, setStructuredState] = useState<StructuredDataState>({ status: 'idle' });
   const [focusProvider, setFocusProvider] = useState<FocusProvider>('mock');
   const [inlineImageGenerationCount, setInlineImageGenerationCount] = useState(0);
+  const [interactiveWidgetGenerationCount, setInteractiveWidgetGenerationCount] = useState(0);
   const [openAiConfig, setOpenAiConfig] = useState<RelevanceServiceConfig>({
     provider: 'openai',
     model: 'gpt-5.2',
@@ -125,6 +126,9 @@ export default function App(): JSX.Element {
   const { activeRequestCount, isNetworkBusy, lastError, dismissLastError } = useGlobalFetchActivity();
   const handleInlineImageGenerationActivityChange = useCallback((delta: number) => {
     setInlineImageGenerationCount((count) => Math.max(0, count + delta));
+  }, []);
+  const handleInteractiveWidgetGenerationActivityChange = useCallback((delta: number) => {
+    setInteractiveWidgetGenerationCount((count) => Math.max(0, count + delta));
   }, []);
 
   // Gemini extraction for detecting references and other elements
@@ -332,7 +336,7 @@ export default function App(): JSX.Element {
       };
     }
 
-    if (isNetworkBusy && inlineImageGenerationCount === 0) {
+    if (isNetworkBusy && inlineImageGenerationCount === 0 && interactiveWidgetGenerationCount === 0) {
       return {
         visible: true,
         title: 'Waiting for API Response',
@@ -363,7 +367,8 @@ export default function App(): JSX.Element {
     structuredState.status,
     isNetworkBusy,
     activeRequestCount,
-    inlineImageGenerationCount
+    inlineImageGenerationCount,
+    interactiveWidgetGenerationCount
   ]);
 
   // Reset active index when results change and auto-navigate to first result
@@ -953,6 +958,7 @@ export default function App(): JSX.Element {
           enableTableHighlight={enableTableHighlight}
           enableWebSearch={enableWebSearch}
           onInlineImageGenerationActivityChange={handleInlineImageGenerationActivityChange}
+          onInteractiveWidgetGenerationActivityChange={handleInteractiveWidgetGenerationActivityChange}
         />
       )}
       <button
