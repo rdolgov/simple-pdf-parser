@@ -56,8 +56,9 @@ export default function App(): JSX.Element {
   const [canvasRevision, setCanvasRevision] = useState(0);
   const [structuredState, setStructuredState] = useState<StructuredDataState>({ status: 'idle' });
   const [focusProvider, setFocusProvider] = useState<FocusProvider>('mock');
-  const [inlineImageGenerationCount, setInlineImageGenerationCount] = useState(0);
-  const [interactiveWidgetGenerationCount, setInteractiveWidgetGenerationCount] = useState(0);
+  const [, setInlineImageGenerationCount] = useState(0);
+  const [, setInteractiveWidgetGenerationCount] = useState(0);
+  const [, setInlineSuggestionAnalysisCount] = useState(0);
   const [openAiConfig, setOpenAiConfig] = useState<RelevanceServiceConfig>({
     provider: 'openai',
     model: 'gpt-5.2',
@@ -123,12 +124,15 @@ export default function App(): JSX.Element {
     handleDeleteCachedFile
   } = useDocumentLoader({ onDocumentLoad: handleDocumentLoad });
 
-  const { activeRequestCount, isNetworkBusy, lastError, dismissLastError } = useGlobalFetchActivity();
+  const { lastError, dismissLastError } = useGlobalFetchActivity();
   const handleInlineImageGenerationActivityChange = useCallback((delta: number) => {
     setInlineImageGenerationCount((count) => Math.max(0, count + delta));
   }, []);
   const handleInteractiveWidgetGenerationActivityChange = useCallback((delta: number) => {
     setInteractiveWidgetGenerationCount((count) => Math.max(0, count + delta));
+  }, []);
+  const handleInlineSuggestionAnalysisActivityChange = useCallback((delta: number) => {
+    setInlineSuggestionAnalysisCount((count) => Math.max(0, count + delta));
   }, []);
 
   // Gemini extraction for detecting references and other elements
@@ -336,16 +340,6 @@ export default function App(): JSX.Element {
       };
     }
 
-    if (isNetworkBusy && inlineImageGenerationCount === 0 && interactiveWidgetGenerationCount === 0) {
-      return {
-        visible: true,
-        title: 'Waiting for API Response',
-        message: 'An API request is in progress. Please wait before continuing.',
-        progress: null as number | null,
-        detail: activeRequestCount > 1 ? `${activeRequestCount} active requests` : '1 active request'
-      };
-    }
-
     return {
       visible: false,
       title: '',
@@ -364,11 +358,7 @@ export default function App(): JSX.Element {
     indexingProgress.message,
     isSearching,
     focusState,
-    structuredState.status,
-    isNetworkBusy,
-    activeRequestCount,
-    inlineImageGenerationCount,
-    interactiveWidgetGenerationCount
+    structuredState.status
   ]);
 
   // Reset active index when results change and auto-navigate to first result
@@ -959,6 +949,7 @@ export default function App(): JSX.Element {
           enableWebSearch={enableWebSearch}
           onInlineImageGenerationActivityChange={handleInlineImageGenerationActivityChange}
           onInteractiveWidgetGenerationActivityChange={handleInteractiveWidgetGenerationActivityChange}
+          onInlineSuggestionAnalysisActivityChange={handleInlineSuggestionAnalysisActivityChange}
         />
       )}
       <button

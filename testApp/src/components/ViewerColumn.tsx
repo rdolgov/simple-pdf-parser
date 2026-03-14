@@ -58,6 +58,7 @@ interface ViewerColumnProps {
   enableWebSearch: boolean;
   onInlineImageGenerationActivityChange: (delta: number) => void;
   onInteractiveWidgetGenerationActivityChange: (delta: number) => void;
+  onInlineSuggestionAnalysisActivityChange: (delta: number) => void;
 }
 
 export function ViewerColumn({
@@ -96,7 +97,8 @@ export function ViewerColumn({
   enableTableHighlight,
   enableWebSearch,
   onInlineImageGenerationActivityChange,
-  onInteractiveWidgetGenerationActivityChange
+  onInteractiveWidgetGenerationActivityChange,
+  onInlineSuggestionAnalysisActivityChange
 }: ViewerColumnProps): JSX.Element {
   return (
     <div className="viewer-column">
@@ -131,6 +133,7 @@ export function ViewerColumn({
                       enableWebSearch={enableWebSearch}
                       onInlineImageGenerationActivityChange={onInlineImageGenerationActivityChange}
                       onInteractiveWidgetGenerationActivityChange={onInteractiveWidgetGenerationActivityChange}
+                      onInlineSuggestionAnalysisActivityChange={onInlineSuggestionAnalysisActivityChange}
                     />
                   ))
               ) : (

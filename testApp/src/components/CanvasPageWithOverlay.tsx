@@ -65,6 +65,7 @@ import {
   buildInteractiveWidgetSrcDoc,
   parseInteractiveWidgetSpec
 } from '../utils/interactiveWidget';
+import { buildMathDetectionPrompt, parseMathDetectionResponse } from '../utils/mathDetection';
 
 const HIGHLIGHT_PADDING = 12;
 const TABLE_HIT_TOLERANCE = 6;
@@ -72,6 +73,7 @@ const GEMINI_STORAGE_KEY = 'gemini-overlay-api-key';
 const IMAGE_PANEL_WIDTH = 500;
 const DEFAULT_PAGE_WIDTH = 612;
 const DEFAULT_PAGE_HEIGHT = 792;
+const FORMULA_SUGGESTION_LOG_PREFIX = '[FormulaSuggestion]';
 
 interface CanvasPageWithOverlayProps {
   page: PDFPage;
@@ -96,6 +98,7 @@ interface CanvasPageWithOverlayProps {
   enableWebSearch?: boolean;
   onInlineImageGenerationActivityChange?: (delta: number) => void;
   onInteractiveWidgetGenerationActivityChange?: (delta: number) => void;
+  onInlineSuggestionAnalysisActivityChange?: (delta: number) => void;
 }
 
 export function CanvasPageWithOverlay({
@@ -120,7 +123,8 @@ export function CanvasPageWithOverlay({
   enableImageHighlight = true,
   enableWebSearch = false,
   onInlineImageGenerationActivityChange,
-  onInteractiveWidgetGenerationActivityChange
+  onInteractiveWidgetGenerationActivityChange,
+  onInlineSuggestionAnalysisActivityChange
 }: CanvasPageWithOverlayProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [highlightTextOverrides, setHighlightTextOverrides] = useState<Record<string, string>>({});
@@ -187,6 +191,9 @@ export function CanvasPageWithOverlay({
     isLoading: boolean;
     error: string | null;
   } | null>(null);
+  const [formulaSuggestionState, setFormulaSuggestionState] = useState<
+    Record<string, { status: 'loading' | 'ready' | 'error'; hasMath: boolean }>
+  >({});
 
   useEffect(() => {
     setHighlightTextOverrides({});
@@ -707,12 +714,83 @@ export function CanvasPageWithOverlay({
     [ensureGeminiApiKey, ensureOpenAiApiKey, documentId, pageNumber, onInlineImageGenerationActivityChange]
   );
 
+  const getCachedMathResult = useCallback(async (trimmedText: string): Promise<{ found: boolean; latex: string | null }> => {
+    try {
+      const cached = await getCachedLatex(trimmedText);
+      if (cached === null) {
+        return { found: false, latex: null };
+      }
+      const normalized = cached.trim();
+      return { found: true, latex: normalized.length > 0 ? normalized : null };
+    } catch {
+      return { found: false, latex: null };
+    }
+  }, []);
+
+  const requestMathLatexFromModel = useCallback(
+    async (trimmedText: string): Promise<string | null> => {
+      const prompt = buildMathDetectionPrompt(trimmedText);
+      const provider = getRewriteProvider();
+      console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} sending LLM math analysis request`, {
+        pageNumber,
+        provider,
+        excerpt: summarizeForLog(trimmedText)
+      });
+      const response = provider === 'openai'
+        ? await (async () => {
+            const openAiKey = ensureOpenAiApiKey();
+            if (!openAiKey) {
+              throw new Error('OpenAI API key required');
+            }
+            const configuredModel = getRewriteModel('openai')?.trim();
+            const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
+              ? configuredModel
+              : undefined;
+            const client = new OpenAiAPI({
+              apiKey: openAiKey,
+              ...(textModel ? { model: textModel } : {})
+            });
+            return client.generateText(prompt);
+          })()
+        : await (async () => {
+            const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
+            if (!key) {
+              throw new Error('Gemini API key required');
+            }
+            const configuredModel = getRewriteModel('gemini')?.trim();
+            const geminiModel =
+              configuredModel && !/^gpt-/i.test(configuredModel)
+                ? configuredModel
+                : 'gemini-3-pro-preview';
+            const client = new GeminiAPI({ apiKey: key, model: geminiModel });
+            return client.generateText(prompt);
+          })();
+      const latex = parseMathDetectionResponse(response.text);
+      console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} received LLM math analysis response`, {
+        pageNumber,
+        provider,
+        hasMath: Boolean(latex),
+        excerpt: summarizeForLog(trimmedText),
+        latexPreview: latex ? summarizeForLog(latex) : null
+      });
+      return latex;
+    },
+    [ensureGeminiApiKey, ensureOpenAiApiKey, pageNumber]
+  );
+
   const handleDetectMath = useCallback(
     async (text: string, positionTop: number, positionLeft: number) => {
       const trimmedText = text.trim();
       if (trimmedText.length === 0) {
         return;
       }
+
+      console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} explicit formula widget requested`, {
+        pageNumber,
+        excerpt: summarizeForLog(trimmedText),
+        positionTop,
+        positionLeft
+      });
 
       // Open the popup immediately in loading state
       setMathViewState({
@@ -722,87 +800,42 @@ export function CanvasPageWithOverlay({
         error: null
       });
 
-      // Check cache first
       try {
-        const cached = await getCachedLatex(trimmedText);
-        if (cached !== null) {
-          // Cache hit - use cached result
+        const cached = await getCachedMathResult(trimmedText);
+        if (cached.found) {
+          console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} explicit formula widget resolved from cache`, {
+            pageNumber,
+            hasMath: Boolean(cached.latex),
+            excerpt: summarizeForLog(trimmedText)
+          });
           setMathViewState((prev) =>
-            prev ? { ...prev, latex: cached, isLoading: false, error: null } : null
+            prev ? { ...prev, latex: cached.latex ?? '', isLoading: false, error: null } : null
           );
           return;
         }
-      } catch {
-        // Cache miss or error - continue to API call
-      }
 
-      try {
-        const prompt = `Analyze the following text from a PDF document. If it contains a mathematical formula, equation, or expression, convert it to valid LaTeX code. If it does NOT contain any math, respond with exactly "NO_MATH".
-
-Rules:
-- Only output the LaTeX code itself, no explanations or markdown code blocks
-- Use standard LaTeX math notation (e.g., \\frac{a}{b}, \\sum, \\int, x^2, etc.)
-- If there are multiple formulas, combine them appropriately
-- For inline math, don't add delimiters - just the LaTeX content
-- If the text is clearly not mathematical (just regular text), respond with exactly "NO_MATH"
-
-Text to analyze:
-"""
-${trimmedText}
-"""`;
-
-        const provider = getRewriteProvider();
-        const response = provider === 'openai'
-          ? await (async () => {
-              const openAiKey = ensureOpenAiApiKey();
-              if (!openAiKey) {
-                throw new Error('OpenAI API key required');
-              }
-              const configuredModel = getRewriteModel('openai')?.trim();
-              const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
-                ? configuredModel
-                : undefined;
-              const client = new OpenAiAPI({
-                apiKey: openAiKey,
-                ...(textModel ? { model: textModel } : {})
-              });
-              return client.generateText(prompt);
-            })()
-          : await (async () => {
-              const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
-              if (!key) {
-                throw new Error('Gemini API key required');
-              }
-              const configuredModel = getRewriteModel('gemini')?.trim();
-              const geminiModel =
-                configuredModel && !/^gpt-/i.test(configuredModel)
-                  ? configuredModel
-                  : 'gemini-3-pro-preview';
-              const client = new GeminiAPI({ apiKey: key, model: geminiModel });
-              return client.generateText(prompt);
-            })();
-        const result = response.text.trim();
-
-        if (result === 'NO_MATH' || result.toUpperCase() === 'NO_MATH') {
-          // Cache the "no math" result as empty string
-          await setCachedLatex(trimmedText, '').catch(() => {});
+        const latex = await requestMathLatexFromModel(trimmedText);
+        await setCachedLatex(trimmedText, latex ?? '').catch(() => {});
+        console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} explicit formula widget stored fresh result`, {
+          pageNumber,
+          hasMath: Boolean(latex),
+          excerpt: summarizeForLog(trimmedText)
+        });
+        if (!latex) {
           setMathViewState((prev) =>
             prev ? { ...prev, latex: '', isLoading: false, error: null } : null
           );
         } else {
-          // Clean up the result - remove any markdown code block markers if present
-          let latex = result;
-          if (latex.startsWith('```')) {
-            latex = latex.replace(/^```(?:latex)?\n?/, '').replace(/\n?```$/, '');
-          }
-          latex = latex.trim();
-          // Cache the result
-          await setCachedLatex(trimmedText, latex).catch(() => {});
           setMathViewState((prev) =>
             prev ? { ...prev, latex, isLoading: false, error: null } : null
           );
         }
       } catch (error) {
+        console.error(`${FORMULA_SUGGESTION_LOG_PREFIX} explicit formula widget failed`, {
+          pageNumber,
+          excerpt: summarizeForLog(trimmedText),
+          error
+        });
         setMathViewState((prev) =>
           prev
             ? {
@@ -814,7 +847,7 @@ ${trimmedText}
         );
       }
     },
-    [ensureGeminiApiKey, ensureOpenAiApiKey]
+    [getCachedMathResult, pageNumber, requestMathLatexFromModel]
   );
 
   const handleCloseMathView = useCallback(() => {
@@ -959,7 +992,132 @@ ${trimmedText}
     canvasHighlight.kind === 'text'
       ? canvasHighlight
       : null;
+  const activeTextSelectionKey = activeTextSelection
+    ? buildHighlightBlockKey(page.number, activeTextSelection.block.bounds)
+    : null;
+  const activeTextSelectionText = activeTextSelection?.block.text.trim() ?? '';
   const isGeneratingInteractiveWidget = interactiveWidgetState?.isLoading ?? false;
+
+  useEffect(() => {
+    if (!enableFormulaHighlight || !activeTextSelectionKey || activeTextSelectionText.length === 0) {
+      if (activeTextSelectionKey && activeTextSelectionText.length > 0 && !enableFormulaHighlight) {
+        console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} automatic suggestion skipped because formula highlights are disabled`, {
+          pageNumber,
+          blockKey: activeTextSelectionKey,
+          excerpt: summarizeForLog(activeTextSelectionText)
+        });
+      }
+      return;
+    }
+
+    const existing = formulaSuggestionState[activeTextSelectionKey];
+    if (existing) {
+      console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} reusing existing automatic suggestion state`, {
+        pageNumber,
+        blockKey: activeTextSelectionKey,
+        status: existing.status,
+        hasMath: existing.hasMath,
+        excerpt: summarizeForLog(activeTextSelectionText)
+      });
+      return;
+    }
+
+    let isCurrent = true;
+
+    console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} starting automatic suggestion analysis`, {
+      pageNumber,
+      blockKey: activeTextSelectionKey,
+      excerpt: summarizeForLog(activeTextSelectionText)
+    });
+
+    setFormulaSuggestionState((current) => ({
+      ...current,
+      [activeTextSelectionKey]: { status: 'loading', hasMath: false }
+    }));
+
+    void (async () => {
+      const cached = await getCachedMathResult(activeTextSelectionText);
+      if (!isCurrent) {
+        return;
+      }
+
+      if (cached.found) {
+        console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} automatic suggestion resolved from cache`, {
+          pageNumber,
+          blockKey: activeTextSelectionKey,
+          hasMath: Boolean(cached.latex),
+          excerpt: summarizeForLog(activeTextSelectionText)
+        });
+        setFormulaSuggestionState((current) => ({
+          ...current,
+          [activeTextSelectionKey]: { status: 'ready', hasMath: Boolean(cached.latex) }
+        }));
+        return;
+      }
+
+      console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} automatic suggestion cache miss, requesting LLM analysis`, {
+        pageNumber,
+        blockKey: activeTextSelectionKey,
+        excerpt: summarizeForLog(activeTextSelectionText)
+      });
+
+      let tracksInlineActivity = false;
+
+      try {
+        onInlineSuggestionAnalysisActivityChange?.(1);
+        tracksInlineActivity = true;
+        const latex = await requestMathLatexFromModel(activeTextSelectionText);
+        await setCachedLatex(activeTextSelectionText, latex ?? '').catch(() => {});
+        if (!isCurrent) {
+          return;
+        }
+        console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} automatic suggestion stored fresh result`, {
+          pageNumber,
+          blockKey: activeTextSelectionKey,
+          hasMath: Boolean(latex),
+          excerpt: summarizeForLog(activeTextSelectionText)
+        });
+        setFormulaSuggestionState((current) => ({
+          ...current,
+          [activeTextSelectionKey]: { status: 'ready', hasMath: Boolean(latex) }
+        }));
+      } catch (error) {
+        console.error(`${FORMULA_SUGGESTION_LOG_PREFIX} automatic suggestion failed`, {
+          pageNumber,
+          blockKey: activeTextSelectionKey,
+          excerpt: summarizeForLog(activeTextSelectionText),
+          error
+        });
+        if (!isCurrent) {
+          return;
+        }
+        setFormulaSuggestionState((current) => ({
+          ...current,
+          [activeTextSelectionKey]: { status: 'error', hasMath: false }
+        }));
+      } finally {
+        if (tracksInlineActivity) {
+          onInlineSuggestionAnalysisActivityChange?.(-1);
+        }
+      }
+    })();
+
+    return () => {
+      isCurrent = false;
+      console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} automatic suggestion effect cleaned up`, {
+        pageNumber,
+        blockKey: activeTextSelectionKey
+      });
+    };
+  }, [
+    activeTextSelectionKey,
+    activeTextSelectionText,
+    enableFormulaHighlight,
+    getCachedMathResult,
+    pageNumber,
+    onInlineSuggestionAnalysisActivityChange,
+    requestMathLatexFromModel
+  ]);
 
   const handleSaveImageExplanation = useCallback(
     (explanation: string) => {
@@ -1333,6 +1491,11 @@ ${trimmedText}
     }
 
     const refinedBlock = refineTextBlockForSelection(block, { x: pdfX, y: pdfY });
+    console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} paragraph selected`, {
+      pageNumber,
+      excerpt: summarizeForLog(refinedBlock.text),
+      bounds: refinedBlock.bounds
+    });
     onCanvasHighlight({ kind: 'text', pageNumber: page.number, block: refinedBlock });
   }, [focusMode, htmlPage, onCanvasHighlight, page.number, page.size.height, page.size.width, extractedTables, geminiExtraction, pageNumber, zoom, documentId, enableImageHighlight]);
 
@@ -1437,8 +1600,6 @@ ${trimmedText}
                 : block.lines;
               const highlightText = lines.map((line) => line.text).join(' ').trim();
               const imageEntry = imageMap[blockKey];
-              const isRewriting = Boolean(rewriteLoading[blockKey]);
-              const rewriteErrorMessage = rewriteError[blockKey];
               const isLoadingImage = Boolean(imageLoading[blockKey]);
               const imageErrorMessage = imageError[blockKey];
               const hasRequestedImage = isLoadingImage || Boolean(imageEntry) || Boolean(imageErrorMessage);
@@ -1456,6 +1617,7 @@ ${trimmedText}
                 buildHighlightBlockKey(page.number, activeTextSelection.block.bounds) === blockKey
                   ? activeTextSelection
                   : null;
+              const showFormulaSuggestion = formulaSuggestionState[blockKey]?.status === 'ready' && formulaSuggestionState[blockKey]?.hasMath;
 
               return (
                 <div
@@ -1471,13 +1633,6 @@ ${trimmedText}
                 >
                   <OverlayToolbar onClose={() => onCanvasHighlight(null)}>
                     <OverlayToolbarButton
-                      onClick={() => void handleRewriteHighlight(blockKey, highlightText)}
-                      icon={isRewriting ? <LoadingIcon /> : <ExplainIcon />}
-                      label="Rewrite by profile"
-                      title="Rewrite this paragraph using your reading profile"
-                      disabled={isRewriting}
-                    />
-                    <OverlayToolbarButton
                       onClick={() => handleOpenMiniChat(highlightText, blockLeft, blockTop, blockWidth, bounds)}
                       icon={<ExploreIcon />}
                       label="Chat about this"
@@ -1489,12 +1644,6 @@ ${trimmedText}
                       label="Generate Gemini image"
                       title="Generate Gemini image for this text"
                       disabled={isLoadingImage}
-                    />
-                    <OverlayToolbarButton
-                      onClick={() => handleDetectMath(highlightText, blockTop + blockHeight + 10, blockLeft)}
-                      icon={<MathIcon />}
-                      label="Detect formula"
-                      title="Detect and render mathematical formula"
                     />
                     <OverlayToolbarButton
                       onClick={() =>
@@ -1510,6 +1659,14 @@ ${trimmedText}
                       title="Generate a sandboxed interactive widget for this paragraph"
                       disabled={isGeneratingInteractiveWidget}
                     />
+                    {showFormulaSuggestion && (
+                      <OverlayToolbarButton
+                        onClick={() => handleDetectMath(highlightText, blockTop + blockHeight + 10, blockLeft)}
+                        icon={<MathIcon />}
+                        label="Formula widget"
+                        title="Open the detected formula widget for this text"
+                      />
+                    )}
                   </OverlayToolbar>
                   <div className="canvas-overlay-highlight-inner">
                     <div
@@ -1581,11 +1738,6 @@ ${trimmedText}
                             ))}
                           </div>
                         ) : null}
-                        {rewriteErrorMessage && (
-                          <div className="canvas-overlay-image canvas-overlay-image--error" style={{ margin: '8px 12px 0 12px' }}>
-                            {rewriteErrorMessage}
-                          </div>
-                        )}
                       </div>
 
                       {hasRequestedImage && (
@@ -1809,6 +1961,14 @@ ${trimmedText}
       )}
     </div>
   );
+}
+
+function summarizeForLog(value: string, maxLength = 120): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 function ExplainIcon(): JSX.Element {
