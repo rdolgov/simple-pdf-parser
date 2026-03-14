@@ -56,6 +56,7 @@ interface ViewerColumnProps {
   enableFormulaHighlight: boolean;
   enableTableHighlight: boolean;
   enableWebSearch: boolean;
+  onInlineImageGenerationActivityChange: (delta: number) => void;
 }
 
 export function ViewerColumn({
@@ -92,7 +93,8 @@ export function ViewerColumn({
   onTriggerGeminiExtraction,
   enableFormulaHighlight,
   enableTableHighlight,
-  enableWebSearch
+  enableWebSearch,
+  onInlineImageGenerationActivityChange
 }: ViewerColumnProps): JSX.Element {
   return (
     <div className="viewer-column">
@@ -125,6 +127,7 @@ export function ViewerColumn({
                       enableFormulaHighlight={enableFormulaHighlight}
                       enableTableHighlight={enableTableHighlight}
                       enableWebSearch={enableWebSearch}
+                      onInlineImageGenerationActivityChange={onInlineImageGenerationActivityChange}
                     />
                   ))
               ) : (

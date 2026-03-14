@@ -119,7 +119,15 @@ export async function getGeminiExtraction(documentHash: string): Promise<GeminiE
     };
 
     request.onsuccess = () => {
-      resolve(request.result ?? null);
+      const record = request.result as GeminiExtractionRecord | null | undefined;
+      if (!record) {
+        resolve(null);
+        return;
+      }
+      resolve({
+        ...record,
+        extraction: normalizeGeminiExtractionDocument(record.extraction)
+      });
     };
   });
 }
@@ -380,5 +388,155 @@ export function parseGeminiExtractionResponse(text: string): GeminiDocumentExtra
   }
   jsonText = jsonText.trim();
 
-  return JSON.parse(jsonText) as GeminiDocumentExtraction;
+  const parsed = JSON.parse(jsonText) as unknown;
+  return normalizeGeminiExtractionDocument(parsed);
+}
+
+function normalizeGeminiExtractionDocument(raw: unknown): GeminiDocumentExtraction {
+  if (!raw || typeof raw !== 'object') {
+    return { pages: [] };
+  }
+
+  const record = raw as Record<string, unknown>;
+  const normalizedPages = Array.isArray(record.pages)
+    ? record.pages.map((page, index) => normalizeGeminiPage(page, index)).filter(Boolean) as GeminiPageExtraction[]
+    : buildPagesFromFlatElements(record.elements);
+
+  const documentTitle =
+    typeof record.document_title === 'string'
+      ? record.document_title
+      : typeof record.documentTitle === 'string'
+      ? record.documentTitle
+      : undefined;
+
+  return {
+    ...(documentTitle ? { document_title: documentTitle } : {}),
+    pages: normalizedPages
+  };
+}
+
+function buildPagesFromFlatElements(rawElements: unknown): GeminiPageExtraction[] {
+  if (!Array.isArray(rawElements)) {
+    return [];
+  }
+
+  const byPage = new Map<number, GeminiElement[]>();
+  for (const rawElement of rawElements) {
+    const source = rawElement as Record<string, unknown>;
+    const pageNumber = normalizePageNumber(source.page_number ?? source.page);
+    const element = normalizeGeminiElement(rawElement);
+    if (!element) {
+      continue;
+    }
+    const page = pageNumber ?? 1;
+    const existing = byPage.get(page);
+    if (existing) {
+      existing.push(element);
+    } else {
+      byPage.set(page, [element]);
+    }
+  }
+
+  return Array.from(byPage.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([page_number, elements]) => ({ page_number, elements }));
+}
+
+function normalizeGeminiPage(raw: unknown, index: number): GeminiPageExtraction | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const source = raw as Record<string, unknown>;
+  const page_number = normalizePageNumber(source.page_number) ?? index + 1;
+  const rawElements = Array.isArray(source.elements) ? source.elements : [];
+  const elements = rawElements.map(normalizeGeminiElement).filter(Boolean) as GeminiElement[];
+  return { page_number, elements };
+}
+
+function normalizeGeminiElement(raw: unknown): GeminiElement | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const source = raw as Record<string, unknown>;
+  const bounding_box = normalizeBoundingBox(
+    source.bounding_box ?? source.bbox ?? source.bounds ?? source.box
+  );
+  if (!bounding_box) {
+    return null;
+  }
+
+  const type = typeof source.type === 'string' && source.type.trim().length > 0
+    ? (source.type.trim().toLowerCase() as GeminiElementType)
+    : 'paragraph';
+
+  let content: string | Record<string, unknown> = '';
+  if (typeof source.content === 'string' || (source.content && typeof source.content === 'object')) {
+    content = source.content as string | Record<string, unknown>;
+  } else if (typeof source.text === 'string') {
+    content = source.text;
+  } else if (typeof source.description === 'string') {
+    content = source.description;
+  }
+
+  const description =
+    typeof source.description === 'string'
+      ? source.description
+      : undefined;
+
+  return {
+    type,
+    content,
+    ...(description ? { description } : {}),
+    bounding_box
+  };
+}
+
+function normalizeBoundingBox(value: unknown): [number, number, number, number] | null {
+  if (Array.isArray(value) && value.length === 4) {
+    const nums = value.map((item) => (typeof item === 'number' ? item : Number(item)));
+    if (nums.every((n) => Number.isFinite(n))) {
+      const [x, y, w, h] = nums as [number, number, number, number];
+      if (w > 0 && h > 0) {
+        return [x, y, w, h];
+      }
+    }
+    return null;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const data = value as Record<string, unknown>;
+  const x = toFiniteNumber(data.x ?? data.left);
+  const y = toFiniteNumber(data.y ?? data.top);
+  const width = toFiniteNumber(data.width);
+  const height = toFiniteNumber(data.height);
+  if (x !== null && y !== null && width !== null && height !== null && width > 0 && height > 0) {
+    return [x, y, width, height];
+  }
+
+  const left = toFiniteNumber(data.left);
+  const top = toFiniteNumber(data.top);
+  const right = toFiniteNumber(data.right);
+  const bottom = toFiniteNumber(data.bottom);
+  if (left !== null && top !== null && right !== null && bottom !== null && right > left && bottom > top) {
+    return [left, top, right - left, bottom - top];
+  }
+
+  return null;
+}
+
+function normalizePageNumber(value: unknown): number | null {
+  const num = toFiniteNumber(value);
+  if (num === null) {
+    return null;
+  }
+  return Math.max(1, Math.round(num));
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
 }

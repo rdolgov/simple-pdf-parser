@@ -1611,6 +1611,11 @@ header p {
   background: rgba(255, 255, 255, 0.7);
 }
 
+.canvas-overlay-image--loading {
+  flex-direction: column;
+  gap: 8px;
+}
+
 .canvas-overlay-image--error {
   color: #991b1b;
   background: rgba(254, 226, 226, 0.8);

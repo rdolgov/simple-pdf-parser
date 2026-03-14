@@ -33,6 +33,7 @@ import {
   detectExtractedTableAtPoint,
   getOverrideLineHeight
 } from '../utils/highlightUtils';
+import { refineTextBlockForSelection } from '../utils/textBlockSelection';
 import {
   type GeminiDocumentExtraction,
   type GeminiElement,
@@ -84,6 +85,7 @@ interface CanvasPageWithOverlayProps {
   enableTableHighlight?: boolean;
   enableImageHighlight?: boolean;
   enableWebSearch?: boolean;
+  onInlineImageGenerationActivityChange?: (delta: number) => void;
 }
 
 export function CanvasPageWithOverlay({
@@ -106,7 +108,8 @@ export function CanvasPageWithOverlay({
   enableFormulaHighlight = true,
   enableTableHighlight = true,
   enableImageHighlight = true,
-  enableWebSearch = false
+  enableWebSearch = false,
+  onInlineImageGenerationActivityChange
 }: CanvasPageWithOverlayProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [highlightTextOverrides, setHighlightTextOverrides] = useState<Record<string, string>>({});
@@ -577,8 +580,11 @@ export function CanvasPageWithOverlay({
       });
 
       setImageLoading((current) => ({ ...current, [blockKey]: true }));
+      let tracksInlineActivity = false;
 
       try {
+        onInlineImageGenerationActivityChange?.(1);
+        tracksInlineActivity = true;
         const provider = getRewriteProvider();
         const response = provider === 'openai'
           ? await (async () => {
@@ -629,13 +635,16 @@ export function CanvasPageWithOverlay({
           [blockKey]: error instanceof Error ? error.message : 'Failed to generate image.'
         }));
       } finally {
+        if (tracksInlineActivity) {
+          onInlineImageGenerationActivityChange?.(-1);
+        }
         setImageLoading((current) => {
           const { [blockKey]: _ignored, ...rest } = current;
           return rest;
         });
       }
     },
-    [ensureGeminiApiKey, ensureOpenAiApiKey, documentId, pageNumber]
+    [ensureGeminiApiKey, ensureOpenAiApiKey, documentId, pageNumber, onInlineImageGenerationActivityChange]
   );
 
   const handleDetectMath = useCallback(
@@ -1133,7 +1142,8 @@ ${trimmedText}
       return;
     }
 
-    onCanvasHighlight({ kind: 'text', pageNumber: page.number, block });
+    const refinedBlock = refineTextBlockForSelection(block, { x: pdfX, y: pdfY });
+    onCanvasHighlight({ kind: 'text', pageNumber: page.number, block: refinedBlock });
   }, [focusMode, htmlPage, onCanvasHighlight, page.number, page.size.height, page.size.width, extractedTables, geminiExtraction, pageNumber, zoom, documentId, enableImageHighlight]);
 
   const highlightBlocks: HighlightBlockData[] = [];
@@ -1377,7 +1387,10 @@ ${trimmedText}
                               {imageEntry.text && <div className="canvas-overlay-image-caption">{imageEntry.text}</div>}
                             </div>
                           ) : isLoadingImage ? (
-                            <div className="canvas-overlay-image canvas-overlay-image--loading">Generating image…</div>
+                            <div className="canvas-overlay-image canvas-overlay-image--loading">
+                              <LoadingIcon />
+                              <span>Generating image…</span>
+                            </div>
                           ) : imageErrorMessage ? (
                             <div className="canvas-overlay-image canvas-overlay-image--error">{imageErrorMessage}</div>
                           ) : null}

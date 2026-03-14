@@ -56,6 +56,7 @@ export default function App(): JSX.Element {
   const [canvasRevision, setCanvasRevision] = useState(0);
   const [structuredState, setStructuredState] = useState<StructuredDataState>({ status: 'idle' });
   const [focusProvider, setFocusProvider] = useState<FocusProvider>('mock');
+  const [inlineImageGenerationCount, setInlineImageGenerationCount] = useState(0);
   const [openAiConfig, setOpenAiConfig] = useState<RelevanceServiceConfig>({
     provider: 'openai',
     model: 'gpt-5.2',
@@ -122,6 +123,9 @@ export default function App(): JSX.Element {
   } = useDocumentLoader({ onDocumentLoad: handleDocumentLoad });
 
   const { activeRequestCount, isNetworkBusy, lastError, dismissLastError } = useGlobalFetchActivity();
+  const handleInlineImageGenerationActivityChange = useCallback((delta: number) => {
+    setInlineImageGenerationCount((count) => Math.max(0, count + delta));
+  }, []);
 
   // Gemini extraction for detecting references and other elements
   const {
@@ -328,7 +332,7 @@ export default function App(): JSX.Element {
       };
     }
 
-    if (isNetworkBusy) {
+    if (isNetworkBusy && inlineImageGenerationCount === 0) {
       return {
         visible: true,
         title: 'Waiting for API Response',
@@ -358,7 +362,8 @@ export default function App(): JSX.Element {
     focusState,
     structuredState.status,
     isNetworkBusy,
-    activeRequestCount
+    activeRequestCount,
+    inlineImageGenerationCount
   ]);
 
   // Reset active index when results change and auto-navigate to first result
@@ -947,6 +952,7 @@ export default function App(): JSX.Element {
           enableFormulaHighlight={enableFormulaHighlight}
           enableTableHighlight={enableTableHighlight}
           enableWebSearch={enableWebSearch}
+          onInlineImageGenerationActivityChange={handleInlineImageGenerationActivityChange}
         />
       )}
       <button
