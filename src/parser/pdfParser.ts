@@ -2422,7 +2422,18 @@ export class PDFParser {
     }
 
     if (!resource.toUnicodeMap) {
+      const encodingInfo = extractEncodingInfo(fontObject.dictionarySource, objects);
       const encodingMap = buildEncodingMap(fontObject, objects);
+
+      if (!encodingInfo) {
+        const embeddedType1Encoding = this.extractEmbeddedType1EncodingMap(fontObject, objects, rawContent);
+        if (embeddedType1Encoding) {
+          for (const [code, value] of embeddedType1Encoding.entries()) {
+            encodingMap.set(code, value);
+          }
+        }
+      }
+
       if (encodingMap.size > 0) {
         resource.encodingMap = encodingMap;
         resource.maxCodeLength = Math.max(resource.maxCodeLength, 1);
@@ -2472,6 +2483,66 @@ export class PDFParser {
     }
 
     return resource;
+  }
+
+  private extractEmbeddedType1EncodingMap(
+    fontObject: PDFRawObject,
+    objects: Map<string, PDFRawObject>,
+    rawContent: string
+  ): Map<number, string> | undefined {
+    const subtypeMatch = fontObject.dictionarySource.match(/\/Subtype\s*\/([A-Za-z0-9]+)/);
+    const subtype = subtypeMatch?.[1];
+    if (subtype !== 'Type1' && subtype !== 'MMType1') {
+      return undefined;
+    }
+
+    const descriptor = this.resolveFontDescriptorObject(fontObject, objects);
+    if (!descriptor) {
+      return undefined;
+    }
+
+    const fontFileMatch = descriptor.dictionarySource.match(/\/FontFile\s+(\d+)\s+(\d+)\s+R/);
+    if (!fontFileMatch) {
+      return undefined;
+    }
+
+    const fontFileKey = objectKey(Number(fontFileMatch[1]), Number(fontFileMatch[2]));
+    const fontFileObject = objects.get(fontFileKey);
+    if (!fontFileObject) {
+      return undefined;
+    }
+
+    const fontProgram = this.resolveStreamContent(fontFileObject, objects, rawContent);
+    if (!fontProgram) {
+      return undefined;
+    }
+
+    const eexecIndex = fontProgram.indexOf('eexec');
+    const cleartextSource = eexecIndex === -1 ? fontProgram : fontProgram.slice(0, eexecIndex);
+    const normalizedCleartextSource = cleartextSource.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const encodingBlockMatch = normalizedCleartextSource.match(/\/Encoding\b([\s\S]*?)\n(?:readonly\s+)?def\b/);
+    if (!encodingBlockMatch) {
+      return undefined;
+    }
+
+    const map = new Map<number, string>();
+    const entryRegex = /dup\s+(\d+)\s+\/([^\s/]+)\s+put\b/g;
+    let entryMatch: RegExpExecArray | null;
+
+    while ((entryMatch = entryRegex.exec(encodingBlockMatch[1])) !== null) {
+      const code = Number(entryMatch[1]);
+      const glyphName = entryMatch[2];
+      if (!Number.isFinite(code) || !glyphName) {
+        continue;
+      }
+
+      const value = glyphNameToUnicode(glyphName);
+      if (value !== undefined) {
+        map.set(code & 0xff, value);
+      }
+    }
+
+    return map.size > 0 ? map : undefined;
   }
 
   /**
@@ -3095,6 +3166,46 @@ export class PDFParser {
     }
 
     return undefined;
+  }
+
+  private resolveFontDescriptorObject(
+    fontObject: PDFRawObject,
+    objects: Map<string, PDFRawObject>
+  ): PDFRawObject | undefined {
+    const directDescriptor = this.lookupFontDescriptorObject(fontObject.dictionarySource, objects);
+    if (directDescriptor) {
+      return directDescriptor;
+    }
+
+    if (/\/Subtype\s*\/Type0\b/.test(fontObject.dictionarySource)) {
+      const descendants = this.extractDescendantFontRefs(fontObject.dictionarySource);
+      for (const ref of descendants) {
+        const descendant = objects.get(objectKey(ref.id, ref.generation));
+        if (!descendant) {
+          continue;
+        }
+
+        const descendantDescriptor = this.lookupFontDescriptorObject(descendant.dictionarySource, objects);
+        if (descendantDescriptor) {
+          return descendantDescriptor;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private lookupFontDescriptorObject(
+    dictionarySource: string,
+    objects: Map<string, PDFRawObject>
+  ): PDFRawObject | undefined {
+    const descriptorMatch = dictionarySource.match(/\/FontDescriptor\s+(\d+)\s+(\d+)\s+R/);
+    if (!descriptorMatch) {
+      return undefined;
+    }
+
+    const descriptorKey = objectKey(Number(descriptorMatch[1]), Number(descriptorMatch[2]));
+    return objects.get(descriptorKey);
   }
 
   private findBaseFontName(dictionarySource: string): string | undefined {

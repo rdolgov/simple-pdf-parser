@@ -71,6 +71,21 @@ describe('PDF layout integration', () => {
     });
   });
 
+  it('recovers ligature-heavy body text on platonicspaces page 2', () => {
+    const document = loadPlatonicSpacesDocument();
+    const page = document.getPage(2);
+
+    expect(page).toBeDefined();
+
+    const pageText = page!.textItems.map((item) => item.text).join('\n');
+
+    expect(pageText).toContain(
+      'and Morley [7] tried to find out. They figured that light moving in the same'
+    );
+    expect(pageText).not.toContain('tried to nd out');
+    expect(pageText).not.toContain('They gured');
+  });
+
   it('renders the margin stamp rotated while keeping the main title horizontal', () => {
     const document = loadPlatonicSpacesDocument();
     const context = new RecordingContext();
