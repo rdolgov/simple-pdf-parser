@@ -76,6 +76,8 @@ export function mergeTextRuns(
       maxX: Math.max(lastBounds.maxX, currentBounds.maxX),
       maxY: Math.max(lastBounds.maxY, currentBounds.maxY)
     };
+    last.baselineStart = clonePoint(last.baselineStart ?? current.baselineStart);
+    last.baselineEnd = clonePoint(current.baselineEnd ?? current.baselineStart ?? last.baselineEnd);
     lastEndX = last.bounds.maxX;
     last.font = last.font ?? current.font;
     if (last.fontSize === undefined) {
@@ -251,11 +253,17 @@ function cloneItem(item: PDFTextItem): PDFTextItem {
   return {
     ...item,
     text: item.text,
-    bounds: { ...item.bounds }
+    bounds: { ...item.bounds },
+    baselineStart: clonePoint(item.baselineStart),
+    baselineEnd: clonePoint(item.baselineEnd)
   };
 }
 
 function baselineY(item: PDFTextItem): number {
   const bounds = getBounds(item);
   return Math.min(bounds.minY, bounds.maxY);
+}
+
+function clonePoint(point: PDFTextItem['baselineStart']): PDFTextItem['baselineStart'] {
+  return point ? { ...point } : undefined;
 }

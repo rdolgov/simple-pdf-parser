@@ -1813,6 +1813,8 @@ export class PDFParser {
     const ascenderHeight = metrics.fontSize * ascenderRatio;
     const descenderDepth = metrics.fontSize * descenderRatio;
 
+    const textStart = transformPoint(startMatrix, 0, state.textRise);
+    const textEnd = transformPoint(startMatrix, metrics.advance, state.textRise);
     const baselineStart = transformPoint(startMatrix, 0, state.textRise - descenderDepth);
     const baselineEnd = transformPoint(startMatrix, metrics.advance, state.textRise - descenderDepth);
     const topStart = transformPoint(startMatrix, 0, state.textRise + ascenderHeight);
@@ -1832,6 +1834,8 @@ export class PDFParser {
         maxX: Math.max(...xs),
         maxY: Math.max(...ys)
       },
+      baselineStart: textStart,
+      baselineEnd: textEnd,
       font: fontFamily,
       fontSize: state.fontSize,
       fontWeight: this.extractFontWeight(baseFontName),
@@ -3250,7 +3254,9 @@ export class PDFParser {
     if (isIdentity) {
       return items.map((item) => ({
         ...item,
-        bounds: { ...item.bounds }
+        bounds: { ...item.bounds },
+        baselineStart: item.baselineStart ? { ...item.baselineStart } : undefined,
+        baselineEnd: item.baselineEnd ? { ...item.baselineEnd } : undefined
       }));
     }
 
@@ -3272,6 +3278,12 @@ export class PDFParser {
           maxX: Math.max(...xs),
           maxY: Math.max(...ys)
         },
+        baselineStart: item.baselineStart
+          ? transformPoint(matrix, item.baselineStart.x, item.baselineStart.y)
+          : undefined,
+        baselineEnd: item.baselineEnd
+          ? transformPoint(matrix, item.baselineEnd.x, item.baselineEnd.y)
+          : undefined,
         fontSize: Number.isFinite(height) && height > 0 ? height : item.fontSize
       };
     });

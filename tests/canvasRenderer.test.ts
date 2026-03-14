@@ -11,6 +11,8 @@ class MockContext {
   lineWidth = 1;
   font = '';
   textBaseline = 'alphabetic';
+  imageSmoothingEnabled = true;
+  textRendering?: string;
   operations: string[] = [];
 
   setTransform() {
@@ -39,6 +41,18 @@ class MockContext {
 
   fillText(text: string, x: number, y: number) {
     this.operations.push(`fillText:${text}@${x},${y}`);
+  }
+
+  measureText(text: string) {
+    return { width: Math.max(text.length * 10, 1) } as TextMetrics;
+  }
+
+  translate(x: number, y: number) {
+    this.operations.push(`translate:${x},${y}`);
+  }
+
+  rotate(angle: number) {
+    this.operations.push(`rotate:${angle.toFixed(3)}`);
   }
 
   beginPath() {
@@ -93,6 +107,8 @@ describe('CanvasRenderer', () => {
             }
           ],
           imageItems: [],
+          lineItems: [],
+          rectItems: [],
           size: { width: 612, height: 792 }
         }
       ]
@@ -123,5 +139,39 @@ describe('CanvasRenderer', () => {
     const renderer = new CanvasRenderer();
 
     expect(() => renderer.render(canvas, document, 1)).toThrow('Page 1 does not exist.');
+  });
+
+  it('renders rotated text items using their baseline geometry', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: 'arXiv:1610.04457v1 [physics.pop-ph] 28 Sep 2016',
+              bounds: { minX: 16, minY: 187, maxX: 36, maxY: 677 },
+              baselineStart: { x: 26, y: 187 },
+              baselineEnd: { x: 26, y: 677 },
+              fontSize: 20
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 612, height: 792 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+    renderer.render(canvas, document, 1);
+
+    const operations = contextImpl.operations;
+    expect(operations.some((entry) => entry.startsWith('rotate:-1.571'))).toBe(true);
+    expect(operations.some((entry) => entry.startsWith('fillText:arXiv:1610.04457v1'))).toBe(true);
   });
 });

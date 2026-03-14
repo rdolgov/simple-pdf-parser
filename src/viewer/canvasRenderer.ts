@@ -536,7 +536,8 @@ export class CanvasRenderer {
       const fontSize = item.fontSize ?? 12;
       context.font = this.composeFont(item.font, fontSize, options.fontFallback, item.fontWeight, item.fontStyle);
 
-      const projectedWidth = width * options.scale;
+      const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
+      const projectedWidth = textPlacement.projectedWidth;
       const measuredWidth = context.measureText(item.text).width;
 
       // Scale horizontally to fit width
@@ -544,13 +545,6 @@ export class CanvasRenderer {
       if (measuredWidth > 0 && projectedWidth > 0) {
         scaleX = projectedWidth / measuredWidth;
       }
-
-      // Position baseline to ensure text stays within bounds
-      // Place baseline at 25% from bottom of bounds (more conservative than standard 20%)
-      // This leaves more room above for the ascender
-      const baselineOffset = height * 0.25;
-      const baselineY = item.bounds.minY + baselineOffset;
-      const baseline = projectPoint(item.bounds.minX, baselineY);
 
       const overlapsImage = this.intersectsAnyImage(item.bounds, page.imageItems);
       if (overlapsImage) {
@@ -581,18 +575,59 @@ export class CanvasRenderer {
         continue;
       }
 
-      if (Math.abs(scaleX - 1) > 0.02) {
+      const needsRotation = Math.abs(textPlacement.rotation) > 0.001;
+      if (Math.abs(scaleX - 1) > 0.02 || needsRotation) {
         context.save();
-        context.translate(baseline.x, baseline.y);
+        context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
+        if (needsRotation) {
+          context.rotate(textPlacement.rotation);
+        }
         context.scale(scaleX, 1);
         context.fillText(item.text, 0, 0);
         context.restore();
       } else {
-        context.fillText(item.text, baseline.x, baseline.y);
+        context.fillText(item.text, textPlacement.baseline.x, textPlacement.baseline.y);
       }
     }
 
     context.restore();
+  }
+
+  private resolveTextPlacement(
+    item: PDFTextItem,
+    projectPoint: (x: number, y: number) => { x: number; y: number },
+    scale: number
+  ): { baseline: { x: number; y: number }; projectedWidth: number; rotation: number } {
+    const width = item.bounds.maxX - item.bounds.minX;
+    const height = item.bounds.maxY - item.bounds.minY;
+    const fallbackBaseline = projectPoint(item.bounds.minX, item.bounds.minY + height * 0.25);
+
+    if (!item.baselineStart || !item.baselineEnd) {
+      return {
+        baseline: fallbackBaseline,
+        projectedWidth: width * scale,
+        rotation: 0
+      };
+    }
+
+    const baselineStart = projectPoint(item.baselineStart.x, item.baselineStart.y);
+    const baselineEnd = projectPoint(item.baselineEnd.x, item.baselineEnd.y);
+    const directionX = baselineEnd.x - baselineStart.x;
+    const directionY = baselineEnd.y - baselineStart.y;
+    const projectedWidth = Math.hypot(directionX, directionY);
+    if (!(projectedWidth > 0.01)) {
+      return {
+        baseline: fallbackBaseline,
+        projectedWidth: width * scale,
+        rotation: 0
+      };
+    }
+
+    return {
+      baseline: baselineStart,
+      projectedWidth,
+      rotation: Math.atan2(directionY, directionX)
+    };
   }
 
   private drawType3TextItem(

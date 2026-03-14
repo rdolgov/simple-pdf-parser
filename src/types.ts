@@ -30,6 +30,10 @@ export interface PDFTextItem {
   fontSize?: number;
   fontWeight?: 'normal' | 'bold';
   fontStyle?: 'normal' | 'italic';
+  /** Baseline start point in page coordinates, used for rotated text rendering */
+  baselineStart?: Vector2D;
+  /** Baseline end point in page coordinates, used for rotated text rendering */
+  baselineEnd?: Vector2D;
   /** For Type3 fonts: per-character glyph path data for canvas rendering */
   type3Glyphs?: Type3Glyph[];
   /** For Type3 fonts: the font matrix [a b c d e f] */
