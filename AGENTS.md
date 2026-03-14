@@ -1,5 +1,6 @@
 # Repository Guidelines
-Do not run test for now, it can hangs, instead do changes and ask me to run to verify
+Do not run the full test suite for now, it can hang; instead do changes and ask me to run broader verification.
+Exception: for any change that affects PDF rendering or layout (parser output, text geometry, canvas rendering, HTML layout conversion, or viewer rendering), always run `npx vitest run tests/pdfLayout.integration.test.ts`.
 When adding new feature, create new module/file where new code should go, and in general keep the project organize into smaller component/modules.
 
 ## Project Structure & Module Organization
@@ -13,6 +14,7 @@ Follow Python 3.11 conventions with 4-space indentation and UTF-8 source files. 
 
 ## Testing Guidelines
 We rely on pytest with freezegun for deterministic time-based tests. Name test modules `test_<module>.py` and fixtures `fixture_<purpose>.py`. Aim for ≥90% line coverage (`make coverage` or `pytest --cov=src --cov-report=term-missing`). Include regression tests for every bug fix and document edge cases in test docstrings.
+For this repository's PDF rendering/layout changes, the required targeted regression command is `npx vitest run tests/pdfLayout.integration.test.ts`, even when the full suite is otherwise being skipped.
 
 ## Commit & Pull Request Guidelines
 Adopt Conventional Commits (e.g., `feat: add profile agent router`) with scope tags when relevant. Keep commits focused; separate refactors from behavior changes. PRs must describe intent, surface risks, and link issues (`Closes #123`). Attach screenshots or logs for UX or CLI changes, and list follow-up tasks explicitly. Request review once CI passes and note any flaky tests in the PR body.
