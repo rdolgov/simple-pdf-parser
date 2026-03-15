@@ -1,5 +1,6 @@
 import type { PDFImageBounds, PDFImageItem, PDFLineItem, PDFPage, PDFRectItem, PDFTextItem, Type3Glyph } from '../types.js';
 import type { PDFDocument } from '../pdfDocument.js';
+import { resolveCanvasFontFallback } from './fontFallback.js';
 
 export interface RenderOptions {
   backgroundColor?: string;
@@ -16,6 +17,11 @@ export interface RenderOptions {
    */
   devicePixelRatio?: number;
 }
+
+type VerticalTextFit = {
+  scaleY: number;
+  localYOffset: number;
+};
 
 export interface CanvasLike {
   width: number;
@@ -538,13 +544,16 @@ export class CanvasRenderer {
 
       const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
       const projectedWidth = textPlacement.projectedWidth;
-      const measuredWidth = context.measureText(item.text).width;
+      const textMetrics = context.measureText(item.text);
+      const measuredWidth = textMetrics.width;
+      const verticalFit = this.resolveVerticalTextFit(item, textMetrics, textPlacement.rotation, options.scale);
 
       // Scale horizontally to fit width
       let scaleX = 1;
       if (measuredWidth > 0 && projectedWidth > 0) {
         scaleX = projectedWidth / measuredWidth;
       }
+      const scaleY = verticalFit.scaleY;
 
       const overlapsImage = this.intersectsAnyImage(item.bounds, page.imageItems);
       if (overlapsImage) {
@@ -576,14 +585,15 @@ export class CanvasRenderer {
       }
 
       const needsRotation = Math.abs(textPlacement.rotation) > 0.001;
-      if (Math.abs(scaleX - 1) > 0.02 || needsRotation) {
+      const needsVerticalFit = Math.abs(scaleY - 1) > 0.02 || Math.abs(verticalFit.localYOffset) > 0.01;
+      if (Math.abs(scaleX - 1) > 0.02 || needsRotation || needsVerticalFit) {
         context.save();
         context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
         if (needsRotation) {
           context.rotate(textPlacement.rotation);
         }
-        context.scale(scaleX, 1);
-        context.fillText(item.text, 0, 0);
+        context.scale(scaleX, scaleY);
+        context.fillText(item.text, 0, verticalFit.localYOffset);
         context.restore();
       } else {
         context.fillText(item.text, textPlacement.baseline.x, textPlacement.baseline.y);
@@ -765,6 +775,66 @@ export class CanvasRenderer {
     }
   }
 
+  private resolveVerticalTextFit(
+    item: PDFTextItem,
+    textMetrics: TextMetrics,
+    rotation: number,
+    scale: number
+  ): VerticalTextFit {
+    if (Math.abs(rotation) > 0.001) {
+      return { scaleY: 1, localYOffset: 0 };
+    }
+
+    const fontName = item.font ?? '';
+    if (!/(cmsy|cmex)/i.test(fontName)) {
+      return { scaleY: 1, localYOffset: 0 };
+    }
+
+    if (!/[√∑∈∞∗]/.test(item.text)) {
+      return { scaleY: 1, localYOffset: 0 };
+    }
+
+    const baselineY = item.baselineStart?.y;
+    if (typeof baselineY !== 'number' || !Number.isFinite(baselineY)) {
+      return { scaleY: 1, localYOffset: 0 };
+    }
+
+    const actualAscent =
+      this.readPositiveMetric(textMetrics.actualBoundingBoxAscent) ??
+      this.readPositiveMetric(textMetrics.fontBoundingBoxAscent);
+    const actualDescent =
+      this.readPositiveMetric(textMetrics.actualBoundingBoxDescent) ??
+      this.readPositiveMetric(textMetrics.fontBoundingBoxDescent) ??
+      0;
+    if (actualAscent === undefined) {
+      return { scaleY: 1, localYOffset: 0 };
+    }
+
+    const desiredAscent = Math.max(0, (item.bounds.maxY - baselineY) * scale);
+    const desiredDescent = Math.max(0, (baselineY - item.bounds.minY) * scale);
+    const measuredHeight = actualAscent + actualDescent;
+    const desiredHeight = desiredAscent + desiredDescent;
+    if (!(measuredHeight > 0) || !(desiredHeight > 0)) {
+      return { scaleY: 1, localYOffset: 0 };
+    }
+
+    const unclampedScaleY = desiredHeight / measuredHeight;
+    const scaleY = Math.min(Math.max(unclampedScaleY, 0.85), 1.15);
+    const yOffset = scaleY * actualAscent - desiredAscent;
+
+    return {
+      scaleY,
+      localYOffset: scaleY !== 0 ? yOffset / scaleY : 0
+    };
+  }
+
+  private readPositiveMetric(value: number | undefined): number | undefined {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      return undefined;
+    }
+    return value;
+  }
+
   private intersectsAnyImage(bounds: PDFImageBounds, images: PDFImageItem[]): boolean {
     return images.some((image) =>
       bounds.maxX > image.bounds.minX &&
@@ -781,21 +851,17 @@ export class CanvasRenderer {
     fontWeight?: 'normal' | 'bold',
     fontStyle?: 'normal' | 'italic'
   ): string {
-    // Use precise font size (CSS supports decimal values) for accurate rendering
     const clampedSize = Math.max(1, fontSize);
     const size = `${clampedSize.toFixed(2)}px`;
     const weight = fontWeight === 'bold' ? 'bold' : '';
     const style = fontStyle === 'italic' ? 'italic' : '';
     const stylePrefix = [style, weight].filter(Boolean).join(' ');
-
-    // Extract just the font family from fallback (remove size prefix like "12px ")
-    const fallbackFamily = fallback.replace(/^\d+px\s*/, '');
+    const fallbackFamily = resolveCanvasFontFallback(fontName, fallback);
 
     if (!fontName) {
       const fontSpec = `${size} ${fallbackFamily}`;
       return stylePrefix ? `${stylePrefix} ${fontSpec}` : fontSpec;
     }
-    // CSS font format: [style] [weight] size family1, family2, ...
     const fontSpec = `${size} '${fontName}', ${fallbackFamily}`;
     return stylePrefix ? `${stylePrefix} ${fontSpec}` : fontSpec;
   }

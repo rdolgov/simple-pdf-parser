@@ -12,6 +12,11 @@ function loadPlatonicSpacesDocument(): PDFDocument {
   return PDFDocument.from(readFileSync(fixtureUrl));
 }
 
+function loadAttentionPaperDocument(): PDFDocument {
+  const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
 function baselineDelta(item: PDFTextItem): { dx: number; dy: number } {
   return {
     dx: (item.baselineEnd?.x ?? 0) - (item.baselineStart?.x ?? 0),
@@ -84,6 +89,100 @@ describe('PDF layout integration', () => {
     );
     expect(pageText).not.toContain('tried to nd out');
     expect(pageText).not.toContain('They gured');
+  });
+
+  it('decodes radical symbols in the scaled dot-product attention equation', () => {
+    const document = loadAttentionPaperDocument();
+    const page = document.getPage(4);
+
+    expect(page).toBeDefined();
+
+    const equationItems = page!.textItems
+      .filter((item) => item.bounds.maxY >= 360 && item.bounds.minY <= 392)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX);
+
+    expect(equationItems.some((item) => item.text === '√')).toBe(true);
+    expect(equationItems.some((item) => item.text === 'p')).toBe(false);
+  });
+
+  it('assigns deeper bounds to TeX radical glyphs before rendering', () => {
+    const document = loadAttentionPaperDocument();
+    const page = document.getPage(4);
+
+    expect(page).toBeDefined();
+
+    const radical = page!.textItems.find((item) => item.text === '√' && item.bounds.minX > 300);
+
+    expect(radical).toBeDefined();
+    expect(radical!.baselineStart).toBeDefined();
+    expect(radical!.fontSize).toBeDefined();
+    expect(radical!.bounds.minY).toBeLessThan(
+      radical!.baselineStart!.y - radical!.fontSize! * 0.9
+    );
+  });
+
+  it('does not merge the TeX radical with neighboring math glyphs that use a different font', () => {
+    const document = loadAttentionPaperDocument();
+    const page = document.getPage(4);
+
+    expect(page).toBeDefined();
+
+    const equationItems = page!.textItems
+      .filter((item) => item.bounds.maxY >= 360 && item.bounds.minY <= 392)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX);
+
+    expect(equationItems.some((item) => item.text === '√')).toBe(true);
+    expect(equationItems.some((item) => item.text === 'd')).toBe(true);
+    expect(equationItems.some((item) => item.text === '√d')).toBe(false);
+  });
+
+  it('assigns deeper bounds to TeX large-operator glyphs before rendering', () => {
+    const document = loadAttentionPaperDocument();
+    const page = document.getPage(4);
+
+    expect(page).toBeDefined();
+
+    const sigma = page!.textItems.find((item) => item.text === '∑');
+
+    expect(sigma).toBeDefined();
+    expect(sigma!.baselineStart).toBeDefined();
+    expect(sigma!.fontSize).toBeDefined();
+    expect(sigma!.bounds.minY).toBeLessThan(
+      sigma!.baselineStart!.y - sigma!.fontSize! * 0.45
+    );
+  });
+
+  it('applies a vertical fit adjustment when rendering the attention equation radical glyph', () => {
+    const document = loadAttentionPaperDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 4);
+
+    const radicalDraw = context.textDraws.find((draw) => draw.text === '√' && draw.translateX > 300);
+
+    expect(radicalDraw).toBeDefined();
+    expect(radicalDraw!.y).toBeGreaterThan(2);
+  });
+
+  it('uses a math-aware browser fallback stack for Computer Modern symbols', () => {
+    const document = loadAttentionPaperDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 4);
+
+    const radicalDraw = context.textDraws.find((draw) => draw.text === '√' && draw.translateX > 300);
+    const sigmaDraw = context.textDraws.find((draw) => draw.text === '∑');
+
+    expect(radicalDraw).toBeDefined();
+    expect(sigmaDraw).toBeDefined();
+    expect(radicalDraw!.font).toContain("'CMSY10'");
+    expect(radicalDraw!.font).toContain('math');
+    expect(sigmaDraw!.font).toContain("'CMEX9'");
+    expect(sigmaDraw!.font).toContain('math');
   });
 
   it('renders the margin stamp rotated while keeping the main title horizontal', () => {

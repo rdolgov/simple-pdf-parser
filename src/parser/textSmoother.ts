@@ -118,6 +118,10 @@ function mergeDecision(
     return { merge: false, insertSpace: false };
   }
 
+  if (!hasCompatibleTextStyle(prev, next)) {
+    return { merge: false, insertSpace: false };
+  }
+
   const prevY = baselineY(prev);
   const nextY = baselineY(next);
   const deltaY = Math.abs(prevY - nextY);
@@ -184,6 +188,22 @@ function mergeDecision(
   }
 
   return { merge: true, insertSpace: requiresSpace };
+}
+
+function hasCompatibleTextStyle(prev: PDFTextItem, next: PDFTextItem): boolean {
+  if (prev.font && next.font && prev.font !== next.font) {
+    return false;
+  }
+
+  if (prev.fontWeight && next.fontWeight && prev.fontWeight !== next.fontWeight) {
+    return false;
+  }
+
+  if (prev.fontStyle && next.fontStyle && prev.fontStyle !== next.fontStyle) {
+    return false;
+  }
+
+  return true;
 }
 
 function segmentWidth(item: PDFTextItem): number {

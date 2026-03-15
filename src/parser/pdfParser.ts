@@ -1804,14 +1804,11 @@ export class PDFParser {
       metrics.text = '\u00A0'.repeat(rawText.length); // non-breaking space placeholder
     }
 
-    // Use typical font metrics for bounds calculation:
-    // - Ascender height is typically ~80% of em-size (fontSize)
-    // - Descender depth is typically ~20% of em-size
-    // This prevents text bounds from extending too far above the baseline
-    const ascenderRatio = 0.8;
-    const descenderRatio = 0.2;
-    const ascenderHeight = metrics.fontSize * ascenderRatio;
-    const descenderDepth = metrics.fontSize * descenderRatio;
+    const { ascenderHeight, descenderDepth } = this.resolveTextVerticalExtents(
+      fontResource,
+      metrics.text,
+      metrics.fontSize
+    );
 
     const textStart = transformPoint(startMatrix, 0, state.textRise);
     const textEnd = transformPoint(startMatrix, metrics.advance, state.textRise);
@@ -1854,6 +1851,36 @@ export class PDFParser {
     }
 
     items.push(item);
+  }
+
+  private resolveTextVerticalExtents(
+    fontResource: FontResource | undefined,
+    text: string,
+    fontSize: number
+  ): { ascenderHeight: number; descenderDepth: number } {
+    const baseFontName = fontResource?.baseFontName ?? '';
+
+    // TeX radical glyphs in CMSY/CMEX fonts descend much further below the baseline
+    // than normal text. Using standard text ratios makes the glyph render too high
+    // across multiple PDFs, so give radicals deeper parsed bounds up front.
+    if (text === '√' && /(CMSY|CMEX)/i.test(baseFontName)) {
+      return {
+        ascenderHeight: fontSize * 0.05,
+        descenderDepth: fontSize * 0.95
+      };
+    }
+
+    if (/[∑∏∫⋃⋂⋁⋀]/.test(text) && /(CMEX|CMSY)/i.test(baseFontName)) {
+      return {
+        ascenderHeight: fontSize * 0.1,
+        descenderDepth: fontSize * 0.9
+      };
+    }
+
+    return {
+      ascenderHeight: fontSize * 0.8,
+      descenderDepth: fontSize * 0.2
+    };
   }
 
   /**

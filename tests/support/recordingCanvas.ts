@@ -94,7 +94,16 @@ export class RecordingContext {
   measureText(text: string): TextMetrics {
     const fontSize = readFontSize(this.font);
     const width = Math.max(text.length * fontSize * 0.52, 1);
-    return { width } as TextMetrics;
+    const isMathSymbol = /[√∑∈∞∗]/.test(text);
+    const actualBoundingBoxAscent = fontSize * (isMathSymbol ? 0.92 : 0.8);
+    const actualBoundingBoxDescent = fontSize * (isMathSymbol ? 0.08 : 0.2);
+    return {
+      width,
+      actualBoundingBoxAscent,
+      actualBoundingBoxDescent,
+      fontBoundingBoxAscent: actualBoundingBoxAscent,
+      fontBoundingBoxDescent: actualBoundingBoxDescent
+    } as TextMetrics;
   }
 
   fillText(text: string, x: number, y: number): void {
