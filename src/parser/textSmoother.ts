@@ -26,6 +26,10 @@ const COMMON_SHORT_WORDS = new Set([
   'or', 'our', 'out', 'so', 'the', 'to', 'up', 'us', 'we'
 ]);
 
+const COMBINED_SHORT_WORDS = new Set([
+  'into'
+]);
+
 const COMMON_PREFIX_FRAGMENTS = new Set([
   'ab', 'ad', 'anti', 'auto', 'bi', 'co', 'com', 'con', 'counter', 'de', 'di',
   'dis', 'em', 'en', 'ex', 'extra', 'fore', 'hetero', 'homo', 'hyper', 'il',
@@ -328,14 +332,19 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
     return false;
   }
 
+  const titleCaseSplit = /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
   const shortContinuation = isLikelyShortWordContinuation(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+  const combinedShortWord = COMBINED_SHORT_WORDS.has(`${prevWord}${nextWord}`);
 
-  if (COMMON_SHORT_WORDS.has(prevWord) || (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation)) {
+  if (combinedShortWord) {
+    return gap <= Math.max(avgCharWidth * 0.22, 1);
+  }
+
+  if (COMMON_SHORT_WORDS.has(prevWord) || (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation && !titleCaseSplit)) {
     return false;
   }
 
   const suffixSplit = COMMON_SUFFIX_FRAGMENTS.has(nextWord);
-  const titleCaseSplit = /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
   const prefixSplit =
     /^[a-z]/.test(nextFragment) &&
     (COMMON_PREFIX_FRAGMENTS.has(prevWord) || prevWord.length <= 2 || (prevWord.length === 3 && nextWord.length >= 4));
@@ -343,8 +352,14 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
     /^[a-z]/.test(nextFragment) &&
     gap <= Math.max(avgCharWidth * 0.18, 1) &&
     prevWord.length + nextWord.length <= 10;
+  const tightCompoundSplit =
+    /^[a-z]/.test(nextFragment) &&
+    prevWord.length >= 3 &&
+    nextWord.length >= 4 &&
+    prevWord.length + nextWord.length <= 16 &&
+    gap <= Math.max(avgCharWidth * 0.12, 0.75);
 
-  const gapLimit = suffixSplit || titleCaseSplit || prefixSplit || compactSplit
+  const gapLimit = suffixSplit || titleCaseSplit || prefixSplit || compactSplit || tightCompoundSplit
     ? Math.max(avgCharWidth * 1.6, 8)
     : Math.max(avgCharWidth * 0.85, 4);
   const overlapTolerance = Math.max(avgCharWidth * 0.18, 0.75);
@@ -353,7 +368,7 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
     return false;
   }
 
-  return shortContinuation || suffixSplit || titleCaseSplit || prefixSplit || compactSplit;
+  return shortContinuation || suffixSplit || titleCaseSplit || prefixSplit || compactSplit || tightCompoundSplit;
 }
 
 function prependSpaceIfNeeded(previousText: string, currentText: string): string {
@@ -402,7 +417,9 @@ function hasLikelyWordBoundary(prevText: string, nextText: string, gap: number, 
   const nextFragment = getLeadingWordFragment(nextText);
   const prevWord = normalizeWordFragment(prevFragment);
   const nextWord = normalizeWordFragment(nextFragment);
+  const titleCaseSplit = /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
   const shortContinuation = isLikelyShortWordContinuation(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+  const combinedShortWord = COMBINED_SHORT_WORDS.has(`${prevWord}${nextWord}`);
 
   if (prevWord.length === 0 || nextWord.length === 0) {
     return false;
@@ -417,7 +434,11 @@ function hasLikelyWordBoundary(prevText: string, nextText: string, gap: number, 
     return true;
   }
 
-  if (COMMON_SHORT_WORDS.has(prevWord) || (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation)) {
+  if (combinedShortWord && gap <= Math.max(avgCharWidth * 0.22, 1)) {
+    return false;
+  }
+
+  if (COMMON_SHORT_WORDS.has(prevWord) || (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation && !titleCaseSplit)) {
     return true;
   }
 
@@ -447,7 +468,7 @@ function isLikelyShortWordContinuation(
     return false;
   }
 
-  if (prevWord.length + nextWord.length < 5) {
+  if (prevWord.length + nextWord.length < 4) {
     return false;
   }
 

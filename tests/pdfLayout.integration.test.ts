@@ -253,6 +253,25 @@ describe('PDF layout integration', () => {
     expect(context.textDraws.some((draw) => draw.text === '( )')).toBe(false);
   });
 
+  it('renders MacKay page-14 Poisson symbols with lambda, set-membership, radicals, and pi', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 14);
+    const drawTexts = context.textDraws.map((draw) => draw.text);
+
+    expect(drawTexts.some((text) => text.includes('λ'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('∈'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('{'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('}'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('√'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('π'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('≈ π'))).toBe(false);
+    expect(drawTexts.some((text) => text.includes('Appr oximating'))).toBe(false);
+  });
+
   it('renders Type3 OCR overlays on scanned pages', () => {
     const document = loadAdobeScannedDocument();
     const context = new RecordingContext();

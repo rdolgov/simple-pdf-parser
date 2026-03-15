@@ -98,7 +98,7 @@ export const BASIC_GLYPH_MAP: Record<string, string> = {
   Lslash: 'Ł',
   lslash: 'ł',
   Idotaccent: 'İ',
-  mu: 'µ',
+  mu: '\u03bc',
   Agrave: 'À',
   Aacute: 'Á',
   Acircumflex: 'Â',
@@ -177,7 +177,46 @@ export const BASIC_GLYPH_MAP: Record<string, string> = {
   questiondown: '¿',
   guilsinglleft: '‹',
   guilsinglright: '›',
-  fraction: '⁄'
+  fraction: '⁄',
+  alpha: '\u03b1',
+  beta: '\u03b2',
+  gamma: '\u03b3',
+  delta: '\u03b4',
+  epsilon: '\u03b5',
+  varepsilon: '\u03b5',
+  zeta: '\u03b6',
+  eta: '\u03b7',
+  theta: '\u03b8',
+  vartheta: '\u03d1',
+  iota: '\u03b9',
+  kappa: '\u03ba',
+  lambda: '\u03bb',
+  nu: '\u03bd',
+  xi: '\u03be',
+  pi: '\u03c0',
+  varpi: '\u03d6',
+  rho: '\u03c1',
+  varrho: '\u03f1',
+  sigma: '\u03c3',
+  varsigma: '\u03c2',
+  tau: '\u03c4',
+  upsilon: '\u03c5',
+  phi: '\u03c6',
+  varphi: '\u03d5',
+  chi: '\u03c7',
+  psi: '\u03c8',
+  omega: '\u03c9',
+  Gamma: '\u0393',
+  Delta: '\u0394',
+  Theta: '\u0398',
+  Lambda: '\u039b',
+  Xi: '\u039e',
+  Pi: '\u03a0',
+  Sigma: '\u03a3',
+  Upsilon: '\u03a5',
+  Phi: '\u03a6',
+  Psi: '\u03a8',
+  Omega: '\u03a9'
 };
 
 /** Math font control character overrides */
@@ -186,6 +225,11 @@ export const CONTROL_CHAR_MATH_OVERRIDES: Record<number, string> = {
   1: '·',
   2: '×',
   17: '≡'
+};
+
+export const CONTROL_CHAR_CMMI_OVERRIDES: Record<number, string> = {
+  21: '\u03bb',
+  25: '\u03c0'
 };
 
 export const CONTROL_CHAR_CMEX_OVERRIDES: Record<number, string> = {
@@ -197,7 +241,11 @@ export const CONTROL_CHAR_CMEX_OVERRIDES: Record<number, string> = {
 
 export const PRINTABLE_CMSY_OVERRIDES: Record<string, string> = {
   "'": '≈',
-  j: '|'
+  '2': '\u2208',
+  f: '{',
+  g: '}',
+  j: '|',
+  p: '\u221a'
 };
 
 export const PRINTABLE_CMMI_OVERRIDES: Record<string, string> = {

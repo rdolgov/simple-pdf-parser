@@ -309,6 +309,39 @@ ET
     expect(equationText).not.toContain(':');
   });
 
+  it('decodes MacKay page-14 Poisson symbols, radicals, and split words in the surrounding text', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(14);
+
+    expect(page).toBeDefined();
+
+    const pageText = page!.textItems.map((item) => item.text).join(' ');
+    const formulaItems = page!.textItems
+      .filter((item) => item.bounds.minY >= 650 && item.bounds.maxY <= 675 && item.bounds.minX >= 150 && item.bounds.maxX <= 310)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX);
+    const formulaText = formulaItems.map((item) => item.text).join(' ');
+    const gaussianItems = page!.textItems
+      .filter((item) => item.bounds.minY >= 590 && item.bounds.maxY <= 616 && item.bounds.minX >= 170 && item.bounds.maxX <= 290)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX);
+    const gaussianText = gaussianItems.map((item) => item.text).join(' ');
+
+    expect(pageText).toContain('Approximating');
+    expect(pageText).toContain("Let's derive Stirling's approximation by an unconventional route.");
+    expect(pageText).toContain('For large λ');
+    expect(pageText).toContain('into this formula');
+    expect(formulaText).toContain('λ');
+    expect(formulaText).toContain('∈');
+    expect(formulaText).toContain('{');
+    expect(formulaText).toContain('}');
+    expect(gaussianText).toContain('√');
+    expect(gaussianText).toContain('π');
+    expect(gaussianText).not.toContain('≈ π');
+    expect(formulaText).not.toContain('2 f');
+    expect(formulaText).not.toContain('... g');
+  });
+
   it('does not merge across table columns in Table 3 (NIPS Transformer paper)', () => {
     const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);

@@ -4,6 +4,7 @@
 
 import type { FontResource, FontMap } from './parserTypes.js';
 import {
+  CONTROL_CHAR_CMMI_OVERRIDES,
   CONTROL_CHAR_CMEX_OVERRIDES,
   CONTROL_CHAR_FALLBACK,
   CONTROL_CHAR_MATH_OVERRIDES,
@@ -23,6 +24,9 @@ export function controlCharOverrides(font?: FontResource): Record<number, string
   }
   if (/CMEX/i.test(font.baseFontName)) {
     return CONTROL_CHAR_CMEX_OVERRIDES;
+  }
+  if (/CMMI/i.test(font.baseFontName)) {
+    return CONTROL_CHAR_CMMI_OVERRIDES;
   }
   if (/CMSY/i.test(font.baseFontName)) {
     return CONTROL_CHAR_MATH_OVERRIDES;
