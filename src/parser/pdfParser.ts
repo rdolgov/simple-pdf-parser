@@ -608,13 +608,14 @@ export class PDFParser {
         images: new Map()
       };
       const extracted = this.parseTextStream(rawContent, fallbackContext, objects, rawContent);
+      const finalizedTextItems = this.finalizeTextItems(extracted.textItems);
       if (extracted.textItems.length === 0 && extracted.imageItems.length === 0) {
         return [];
       }
 
       pages.push({
         number: 1,
-        textItems: extracted.textItems,
+        textItems: finalizedTextItems,
         imageItems: extracted.imageItems,
         lineItems: extracted.lineItems,
         rectItems: extracted.rectItems,
@@ -655,7 +656,7 @@ export class PDFParser {
 
       pages.push({
         number: pageNumber,
-        textItems,
+        textItems: this.finalizeTextItems(textItems),
         imageItems,
         lineItems,
         rectItems,
@@ -1240,10 +1241,7 @@ export class PDFParser {
       stack.length = 0;
       index = nextIndex + 1;
     }
-
-    const mergedTextItems = this.shouldSmoothText() ? mergeTextRuns(textItems) : textItems;
-    const refinedTextItems = this.refineTextBounds(mergedTextItems);
-    return { textItems: refinedTextItems, imageItems, lineItems, rectItems };
+    return { textItems, imageItems, lineItems, rectItems };
   }
 
   private findTextBlockEnd(source: string, startIndex: number): number {
@@ -1796,12 +1794,16 @@ export class PDFParser {
 
 
     if (!metrics.text || metrics.text.trim().length === 0) {
-      // For Type3 fonts, decoded text may be empty/null but glyphs are still valid.
-      // Use a placeholder so the item isn't dropped.
       if (!isType3) {
-        return;
+        if (metrics.text.length === 0) {
+          return;
+        }
+        metrics.text = normalizeWhitespaceSegment(metrics.text);
+      } else {
+        // For Type3 fonts, decoded text may be empty/null but glyphs are still valid.
+        // Use a placeholder so the item isn't dropped.
+        metrics.text = '\u00A0'.repeat(rawText.length);
       }
-      metrics.text = '\u00A0'.repeat(rawText.length); // non-breaking space placeholder
     }
 
     const { ascenderHeight, descenderDepth } = this.resolveTextVerticalExtents(
@@ -1874,6 +1876,13 @@ export class PDFParser {
       return {
         ascenderHeight: fontSize * 0.1,
         descenderDepth: fontSize * 0.9
+      };
+    }
+
+    if (/^[()[\]{}|]$/.test(text) && /CMEX/i.test(baseFontName)) {
+      return {
+        ascenderHeight: fontSize * 0.12,
+        descenderDepth: fontSize * 2.25
       };
     }
 
@@ -2146,13 +2155,13 @@ export class PDFParser {
     visitedFormKeys: Set<string>,
     visitedImageKeys: Set<string>
   ): void {
-    const fontSection = dictionarySource.match(/\/Font\s*<<([\s\S]*?)>>/);
+    const fontSection = this.resolveResourceSection(dictionarySource, 'Font', objects);
 
     if (fontSection) {
       const entryRegex = /\/([^\s\/]+)\s+(\d+)\s+(\d+)\s+R/g;
       let match: RegExpExecArray | null;
 
-      while ((match = entryRegex.exec(fontSection[1])) !== null) {
+      while ((match = entryRegex.exec(fontSection)) !== null) {
         const resourceName = match[1];
         const id = Number(match[2]);
         const generation = Number(match[3]);
@@ -2175,12 +2184,12 @@ export class PDFParser {
       }
     }
 
-    const xobjectSection = dictionarySource.match(/\/XObject\s*<<([\s\S]*?)>>/);
+    const xobjectSection = this.resolveResourceSection(dictionarySource, 'XObject', objects);
     if (xobjectSection) {
       const entryRegex = /\/([^\s\/]+)\s+(\d+)\s+(\d+)\s+R/g;
       let match: RegExpExecArray | null;
 
-      while ((match = entryRegex.exec(xobjectSection[1])) !== null) {
+      while ((match = entryRegex.exec(xobjectSection)) !== null) {
         const resourceName = match[1];
         const id = Number(match[2]);
         const generation = Number(match[3]);
@@ -2219,6 +2228,26 @@ export class PDFParser {
       visitedResourceKeys,
       visitedInlineResources
     );
+  }
+
+  private resolveResourceSection(
+    dictionarySource: string,
+    name: string,
+    objects: Map<string, PDFRawObject>
+  ): string | undefined {
+    const inlineMatch = dictionarySource.match(new RegExp(`/${name}\\s*<<([\\s\\S]*?)>>`));
+    if (inlineMatch) {
+      return inlineMatch[1];
+    }
+
+    const referenceMatch = dictionarySource.match(new RegExp(`/${name}\\s+(\\d+)\\s+(\\d+)\\s+R`));
+    if (!referenceMatch) {
+      return undefined;
+    }
+
+    const resourceKey = objectKey(Number(referenceMatch[1]), Number(referenceMatch[2]));
+    const resourceObject = objects.get(resourceKey);
+    return resourceObject?.dictionarySource;
   }
 
   private enqueueResourceDictionaries(
@@ -3325,6 +3354,14 @@ export class PDFParser {
     return items;
   }
 
+  private finalizeTextItems(items: PDFTextItem[]): PDFTextItem[] {
+    const refinedItems = this.refineTextBounds(items);
+    if (!this.shouldSmoothText()) {
+      return refinedItems;
+    }
+    return this.refineTextBounds(mergeTextRuns(refinedItems));
+  }
+
   private shouldSmoothText(): boolean {
     if (typeof this.options.smoothText === 'boolean') {
       return this.options.smoothText;
@@ -3438,11 +3475,11 @@ export class PDFParser {
     if (!dictionarySource) {
       return undefined;
     }
-    const baseMatch = dictionarySource.match(/\/BaseFont\s+\/([^\s\/]+)/);
+    const baseMatch = dictionarySource.match(/\/BaseFont\s*\/([^\s\/]+)/);
     if (baseMatch) {
       return this.normalizeFontName(baseMatch[1]);
     }
-    const nameMatch = dictionarySource.match(/\/FontName\s+\/([^\s\/]+)/);
+    const nameMatch = dictionarySource.match(/\/FontName\s*\/([^\s\/]+)/);
     if (nameMatch) {
       return this.normalizeFontName(nameMatch[1]);
     }
@@ -3844,4 +3881,8 @@ export class PDFParser {
     }
     return undefined;
   }
+}
+
+function normalizeWhitespaceSegment(text: string): string {
+  return text.replace(/\s/g, ' ');
 }

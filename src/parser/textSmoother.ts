@@ -15,10 +15,33 @@ const DEFAULT_OPTIONS: Required<TextSmootherOptions> = {
   gapTolerance: 80,
   overlapTolerance: 64,
   fontTolerance: 0.5,
-  spaceThresholdMultiplier: 0.2,
+  spaceThresholdMultiplier: 0.16,
   mergeGapMultiplier: 0.35,
   columnGapMultiplier: 1.15
 };
+
+const COMMON_SHORT_WORDS = new Set([
+  'a', 'all', 'an', 'and', 'any', 'are', 'as', 'at', 'be', 'but', 'by', 'can',
+  'do', 'for', 'he', 'if', 'in', 'is', 'it', 'my', 'not', 'of', 'on', 'one',
+  'or', 'our', 'out', 'so', 'the', 'to', 'up', 'us', 'we'
+]);
+
+const COMMON_PREFIX_FRAGMENTS = new Set([
+  'ab', 'ad', 'anti', 'auto', 'bi', 'co', 'com', 'con', 'counter', 'de', 'di',
+  'dis', 'em', 'en', 'ex', 'extra', 'fore', 'hetero', 'homo', 'hyper', 'il',
+  'im', 'in', 'inter', 'ir', 'macro', 'micro', 'mid', 'mis', 'mono', 'multi',
+  'non', 'over', 'poly', 'post', 'pre', 'pro', 're', 'semi', 'sub', 'super',
+  'tele', 'trans', 'tri', 'un', 'under'
+]);
+
+const COMMON_SUFFIX_FRAGMENTS = new Set([
+  'able', 'ably', 'age', 'al', 'ally', 'ance', 'ant', 'ary', 'ation', 'ations',
+  'ative', 'atively', 'd', 'dom', 'ed', 'en', 'ence', 'ent', 'er', 'ers', 'es',
+  'est', 'ful', 'h', 'hood', 'ial', 'ian', 'ible', 'ic', 'ics', 'ies', 'ing',
+  'ion', 'ions', 'ious', 'ish', 'ism', 'ist', 'ity', 'ive', 'ization', 'ize',
+  'ized', 'less', 'ly', 'ment', 'ments', 'ness', 'or', 'ory', 'ous', 'r', 'ry',
+  's', 'ship', 'tion', 'tions', 'ty', 'ure', 'ward', 'wards', 'y'
+]);
 
 export function mergeTextRuns(
   items: PDFTextItem[],
@@ -40,10 +63,11 @@ export function mergeTextRuns(
   }
 
   const config = { ...DEFAULT_OPTIONS, ...options };
+  const orderedItems = sortForSmoothing(items, config);
   const result: PDFTextItem[] = [];
   let lastEndX: number | undefined;
 
-  for (const current of items) {
+  for (const current of orderedItems) {
     const last = result[result.length - 1];
     if (!last) {
       const cloned = cloneItem(current);
@@ -122,6 +146,10 @@ function mergeDecision(
     return { merge: false, insertSpace: false };
   }
 
+  if (shouldKeepSeparateMathDelimiters(prev, next)) {
+    return { merge: false, insertSpace: false };
+  }
+
   const prevY = baselineY(prev);
   const nextY = baselineY(next);
   const deltaY = Math.abs(prevY - nextY);
@@ -181,6 +209,9 @@ function mergeDecision(
   const requiresSpace = shouldInsertSpace(prev, next, gap, Math.max(prevSize, nextSize), options);
 
   if (!requiresSpace) {
+    if (gap > 0 && !isLikelySplitWord(prev.text, next.text, gap, avgCharWidth) && canLeaveAsSeparateFragments(prev.text, next.text)) {
+      return { merge: false, insertSpace: false };
+    }
     const mergeGapLimit = -options.overlapTolerance * options.mergeGapMultiplier;
     if (gap < mergeGapLimit) {
       return { merge: false, insertSpace: false };
@@ -206,6 +237,18 @@ function hasCompatibleTextStyle(prev: PDFTextItem, next: PDFTextItem): boolean {
   return true;
 }
 
+function shouldKeepSeparateMathDelimiters(prev: PDFTextItem, next: PDFTextItem): boolean {
+  return isStretchyMathDelimiterItem(prev) && isStretchyMathDelimiterItem(next);
+}
+
+function isStretchyMathDelimiterItem(item: PDFTextItem): boolean {
+  return /cmex/i.test(item.font ?? '') && isStretchyMathDelimiterText(item.text);
+}
+
+function isStretchyMathDelimiterText(text: string): boolean {
+  return /^[()[\]{}|]$/.test(text.trim());
+}
+
 function segmentWidth(item: PDFTextItem): number {
   const bounds = item.bounds;
   if (bounds) {
@@ -226,10 +269,6 @@ function shouldInsertSpace(
   referenceSize: number,
   options: Required<TextSmootherOptions>
 ): boolean {
-  if (gap <= 0) {
-    return false;
-  }
-
   if (prev.text.trimEnd().endsWith('-')) {
     return false;
   }
@@ -242,20 +281,79 @@ function shouldInsertSpace(
     return false;
   }
 
-  const threshold = Math.max(referenceSize * options.spaceThresholdMultiplier, 0.5);
-  if (gap >= threshold) {
-    return true;
-  }
-
+  const advanceOverflow = Math.max(
+    (prev.baselineEnd?.x ?? prev.bounds.maxX) - prev.bounds.maxX,
+    0
+  );
   const prevWidth = segmentWidth(prev);
   const nextWidth = segmentWidth(next);
   const prevChars = Math.max(prev.text.trim().length, 1);
   const nextChars = Math.max(next.text.trim().length, 1);
   const avgCharWidth = Math.max(prevWidth / prevChars, nextWidth / nextChars);
+  const slightOverlapTolerance = Math.max(avgCharWidth * 0.12, 0.6);
 
-  const fineThreshold = Math.max(avgCharWidth * options.spaceThresholdMultiplier, 0.5);
+  if (gap < -slightOverlapTolerance) {
+    return false;
+  }
+
+  if (isLikelySplitWord(prev.text, next.text, gap, avgCharWidth)) {
+    return false;
+  }
+
+  if (hasLikelyWordBoundary(prev.text, next.text, gap, avgCharWidth)) {
+    return true;
+  }
+
+  const threshold = Math.max(referenceSize * options.spaceThresholdMultiplier, 0.5);
+  const overflowThreshold = Math.max(referenceSize * 0.12, 1);
+  if (advanceOverflow >= overflowThreshold) {
+    return true;
+  }
+
+  if (gap >= threshold) {
+    return true;
+  }
+
+  const fineThreshold = Math.max(avgCharWidth * 0.28, 0.5);
 
   return gap >= fineThreshold;
+}
+
+function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgCharWidth: number): boolean {
+  const prevFragment = getTrailingWordFragment(prevText);
+  const nextFragment = getLeadingWordFragment(nextText);
+  const prevWord = normalizeWordFragment(prevFragment);
+  const nextWord = normalizeWordFragment(nextFragment);
+  if (prevWord.length === 0 || nextWord.length === 0) {
+    return false;
+  }
+
+  const shortContinuation = isLikelyShortWordContinuation(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+
+  if (COMMON_SHORT_WORDS.has(prevWord) || (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation)) {
+    return false;
+  }
+
+  const suffixSplit = COMMON_SUFFIX_FRAGMENTS.has(nextWord);
+  const titleCaseSplit = /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
+  const prefixSplit =
+    /^[a-z]/.test(nextFragment) &&
+    (COMMON_PREFIX_FRAGMENTS.has(prevWord) || prevWord.length <= 2 || (prevWord.length === 3 && nextWord.length >= 4));
+  const compactSplit =
+    /^[a-z]/.test(nextFragment) &&
+    gap <= Math.max(avgCharWidth * 0.18, 1) &&
+    prevWord.length + nextWord.length <= 10;
+
+  const gapLimit = suffixSplit || titleCaseSplit || prefixSplit || compactSplit
+    ? Math.max(avgCharWidth * 1.6, 8)
+    : Math.max(avgCharWidth * 0.85, 4);
+  const overlapTolerance = Math.max(avgCharWidth * 0.18, 0.75);
+
+  if (gap >= gapLimit || gap < -overlapTolerance) {
+    return false;
+  }
+
+  return shortContinuation || suffixSplit || titleCaseSplit || prefixSplit || compactSplit;
 }
 
 function prependSpaceIfNeeded(previousText: string, currentText: string): string {
@@ -286,4 +384,112 @@ function baselineY(item: PDFTextItem): number {
 
 function clonePoint(point: PDFTextItem['baselineStart']): PDFTextItem['baselineStart'] {
   return point ? { ...point } : undefined;
+}
+
+function normalizeWordFragment(text: string): string {
+  const normalized = text.replace(/['’]/g, '').toLowerCase();
+  return /^[a-z]+$/.test(normalized) ? normalized : '';
+}
+
+function canLeaveAsSeparateFragments(prevText: string, nextText: string): boolean {
+  const prevWord = normalizeWordFragment(getTrailingWordFragment(prevText));
+  const nextWord = normalizeWordFragment(getLeadingWordFragment(nextText));
+  return prevWord.length > 0 && nextWord.length > 0 && !isLikelyShortWordFragment(prevWord, nextWord);
+}
+
+function hasLikelyWordBoundary(prevText: string, nextText: string, gap: number, avgCharWidth: number): boolean {
+  const prevFragment = getTrailingWordFragment(prevText);
+  const nextFragment = getLeadingWordFragment(nextText);
+  const prevWord = normalizeWordFragment(prevFragment);
+  const nextWord = normalizeWordFragment(nextFragment);
+  const shortContinuation = isLikelyShortWordContinuation(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+
+  if (prevWord.length === 0 || nextWord.length === 0) {
+    return false;
+  }
+
+  const slightOverlapTolerance = Math.max(avgCharWidth * 0.12, 0.6);
+  if (gap < -slightOverlapTolerance) {
+    return false;
+  }
+
+  if (/[.,;:!?)]$/.test(prevText.trimEnd())) {
+    return true;
+  }
+
+  if (COMMON_SHORT_WORDS.has(prevWord) || (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation)) {
+    return true;
+  }
+
+  if (/^[A-Z]/.test(nextFragment)) {
+    return true;
+  }
+
+  return prevWord.length >= 3 && nextWord.length >= 3;
+}
+
+function isLikelyShortWordContinuation(
+  prevWord: string,
+  nextWord: string,
+  nextFragment: string,
+  gap: number,
+  avgCharWidth: number
+): boolean {
+  if (!COMMON_SHORT_WORDS.has(nextWord)) {
+    return false;
+  }
+
+  if (!/^[a-z]/.test(nextFragment)) {
+    return false;
+  }
+
+  if (!COMMON_PREFIX_FRAGMENTS.has(prevWord) || prevWord.length > 2) {
+    return false;
+  }
+
+  if (prevWord.length + nextWord.length < 5) {
+    return false;
+  }
+
+  return gap <= Math.max(avgCharWidth * 0.22, 1);
+}
+
+function getLeadingWordFragment(text: string): string {
+  const match = text.match(/^[^A-Za-z]*([A-Za-z]+(?:['’][A-Za-z]+)*)/);
+  return match?.[1] ?? '';
+}
+
+function getTrailingWordFragment(text: string): string {
+  const match = text.match(/([A-Za-z]+(?:['’][A-Za-z]+)*)[^A-Za-z]*$/);
+  return match?.[1] ?? '';
+}
+
+function isLikelyShortWordFragment(prevWord: string, nextWord: string): boolean {
+  if (COMMON_SHORT_WORDS.has(prevWord) || COMMON_SHORT_WORDS.has(nextWord)) {
+    return false;
+  }
+
+  return COMMON_SUFFIX_FRAGMENTS.has(nextWord) || COMMON_PREFIX_FRAGMENTS.has(prevWord) || prevWord.length <= 3;
+}
+
+function sortForSmoothing(items: PDFTextItem[], options: Required<TextSmootherOptions>): PDFTextItem[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftY = baselineY(left.item);
+      const rightY = baselineY(right.item);
+      const deltaY = Math.abs(leftY - rightY);
+
+      if (deltaY > options.lineTolerance) {
+        return rightY - leftY;
+      }
+
+      const deltaX = left.item.bounds.minX - right.item.bounds.minX;
+      if (Math.abs(deltaX) > 0.001) {
+        return deltaX;
+      }
+
+      return left.index - right.index;
+    })
+    .map(({ item }) => item);
 }

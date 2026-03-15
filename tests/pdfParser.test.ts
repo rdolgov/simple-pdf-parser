@@ -245,6 +245,70 @@ ET
     expect(mergedLine).toBeDefined();
   });
 
+  it('merges split legend words on the MacKay exercise-summary page', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(11);
+
+    expect(page).toBeDefined();
+    expect(page!.textItems.some((item) => item.text === 'Summary of codes for exercises')).toBe(true);
+    expect(page!.textItems.some((item) => item.text === 'Especially recommended')).toBe(true);
+    expect(page!.textItems.some((item) => item.text.includes('Medium (quarter hour)'))).toBe(true);
+    expect(page!.textItems.some((item) => item.text === 'Parts require a computer')).toBe(true);
+    expect(page!.textItems.some((item) => item.text === 'About the exercises')).toBe(true);
+    expect(page!.textItems.some((item) => item.text === 'About this edition')).toBe(true);
+    expect(
+      page!.textItems.some(
+        (item) => item.text === 'In addition, exercises that are especially recommended are marked by a'
+      )
+    ).toBe(true);
+  });
+
+  it('decodes Computer Modern math glyphs on the MacKay chapter-1 review page', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(13);
+
+    expect(page).toBeDefined();
+
+    const formulaItems = page!.textItems.filter((item) => item.bounds.maxY >= 389 && item.bounds.minY <= 600);
+    const formulaText = formulaItems.map((item) => item.text).join(' ');
+
+    expect(formulaText).toContain('≈');
+    expect(formulaText).toContain('−');
+    expect(formulaItems.some((item) => item.text === '∑')).toBe(true);
+    expect(formulaItems.some((item) => item.text === '|')).toBe(true);
+    expect(formulaText).not.toMatch(/[\u0000-\u001f]/);
+  });
+
+  it('keeps MacKay binomial-coefficient delimiters separate and decodes its punctuation', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(13);
+
+    expect(page).toBeDefined();
+
+    const equationItems = page!.textItems
+      .filter((item) => item.bounds.minY >= 438 && item.bounds.maxY <= 476 && item.bounds.minX >= 150 && item.bounds.maxX <= 305)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX);
+    const equationText = equationItems.map((item) => item.text).join(' ');
+    const leftDelimiter = equationItems.find((item) => item.text === '(' && item.font === 'CMEX10');
+    const rightDelimiter = equationItems.find((item) => item.text === ')' && item.font === 'CMEX10');
+
+    expect(leftDelimiter).toBeDefined();
+    expect(rightDelimiter).toBeDefined();
+    expect(equationItems.some((item) => item.text === '( )')).toBe(false);
+    expect(leftDelimiter!.bounds.minY).toBeLessThan(leftDelimiter!.baselineStart!.y - leftDelimiter!.fontSize! * 2);
+    expect(equationText).toContain('|');
+    expect(equationText).toContain('f, N');
+    expect(equationText).not.toContain('f; N');
+    expect(equationText).toContain('.');
+    expect(equationText).not.toContain(':');
+  });
+
   it('does not merge across table columns in Table 3 (NIPS Transformer paper)', () => {
     const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);

@@ -30,6 +30,11 @@ function loadAdobeScannedDocument(): PDFDocument {
   return PDFDocument.from(readFileSync(fixtureUrl));
 }
 
+function loadMacKayDocument(): PDFDocument {
+  const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
 function baselineDelta(item: PDFTextItem): { dx: number; dy: number } {
   return {
     dx: (item.baselineEnd?.x ?? 0) - (item.baselineStart?.x ?? 0),
@@ -210,6 +215,42 @@ describe('PDF layout integration', () => {
     expect(radicalDraw!.font).toContain('math');
     expect(sigmaDraw!.font).toContain("'CMEX9'");
     expect(sigmaDraw!.font).toContain('math');
+  });
+
+  it('keeps MacKay binomial delimiters separate and assigns them tall bounds', () => {
+    const document = loadMacKayDocument();
+    const page = document.getPage(13);
+
+    expect(page).toBeDefined();
+
+    const equationItems = page!.textItems.filter(
+      (item) => item.bounds.minY >= 438 && item.bounds.maxY <= 476 && item.bounds.minX >= 150 && item.bounds.maxX <= 305
+    );
+    const leftDelimiter = equationItems.find((item) => item.text === '(' && item.font === 'CMEX10');
+    const rightDelimiter = equationItems.find((item) => item.text === ')' && item.font === 'CMEX10');
+
+    expect(equationItems.some((item) => item.text === '( )')).toBe(false);
+    expect(leftDelimiter).toBeDefined();
+    expect(rightDelimiter).toBeDefined();
+    expect(leftDelimiter!.bounds.minY).toBeLessThan(leftDelimiter!.baselineStart!.y - leftDelimiter!.fontSize! * 2);
+    expect(rightDelimiter!.bounds.minY).toBeLessThan(rightDelimiter!.baselineStart!.y - rightDelimiter!.fontSize! * 2);
+  });
+
+  it('applies a tall vertical fit when rendering MacKay binomial delimiters', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 13);
+
+    const delimiterDraws = context.textDraws.filter(
+      (draw) => (draw.text === '(' || draw.text === ')') && draw.font.includes("'CMEX10'")
+    );
+
+    expect(delimiterDraws.length).toBeGreaterThanOrEqual(4);
+    expect(delimiterDraws.some((draw) => draw.scaleY > 2)).toBe(true);
+    expect(context.textDraws.some((draw) => draw.text === '( )')).toBe(false);
   });
 
   it('renders Type3 OCR overlays on scanned pages', () => {

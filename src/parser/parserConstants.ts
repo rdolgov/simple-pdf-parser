@@ -182,8 +182,33 @@ export const BASIC_GLYPH_MAP: Record<string, string> = {
 
 /** Math font control character overrides */
 export const CONTROL_CHAR_MATH_OVERRIDES: Record<number, string> = {
+  0: '−',
   1: '·',
-  2: '×'
+  2: '×',
+  17: '≡'
+};
+
+export const CONTROL_CHAR_CMEX_OVERRIDES: Record<number, string> = {
+  0: '(',
+  1: ')',
+  18: '(',
+  19: ')'
+};
+
+export const PRINTABLE_CMSY_OVERRIDES: Record<string, string> = {
+  "'": '≈',
+  j: '|'
+};
+
+export const PRINTABLE_CMMI_OVERRIDES: Record<string, string> = {
+  ';': ',',
+  ':': '.'
+};
+
+export const PRINTABLE_CMEX_OVERRIDES: Record<string, string> = {
+  X: '∑',
+  h: '(',
+  i: ')'
 };
 
 /** Default control character fallbacks for ligatures */

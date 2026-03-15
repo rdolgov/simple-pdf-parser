@@ -802,12 +802,8 @@ export class CanvasRenderer {
       return { scaleY: 1, localYOffset: 0 };
     }
 
-    const fontName = item.font ?? '';
-    if (!/(cmsy|cmex)/i.test(fontName)) {
-      return { scaleY: 1, localYOffset: 0 };
-    }
-
-    if (!/[√∑∈∞∗]/.test(item.text)) {
+    const isStretchyDelimiter = this.isStretchyMathDelimiter(item);
+    if (!isStretchyDelimiter && !this.isStretchyMathOperator(item)) {
       return { scaleY: 1, localYOffset: 0 };
     }
 
@@ -836,13 +832,22 @@ export class CanvasRenderer {
     }
 
     const unclampedScaleY = desiredHeight / measuredHeight;
-    const scaleY = Math.min(Math.max(unclampedScaleY, 0.85), 1.15);
+    const maxScaleY = isStretchyDelimiter ? 3.5 : 1.15;
+    const scaleY = Math.min(Math.max(unclampedScaleY, 0.85), maxScaleY);
     const yOffset = scaleY * actualAscent - desiredAscent;
 
     return {
       scaleY,
       localYOffset: scaleY !== 0 ? yOffset / scaleY : 0
     };
+  }
+
+  private isStretchyMathOperator(item: PDFTextItem): boolean {
+    return /(cmsy|cmex)/i.test(item.font ?? '') && /[√∑∈∞∗∏∫⋃⋂⋁⋀]/.test(item.text);
+  }
+
+  private isStretchyMathDelimiter(item: PDFTextItem): boolean {
+    return /cmex/i.test(item.font ?? '') && /^[()[\]{}|]$/.test(item.text.trim());
   }
 
   private readPositiveMetric(value: number | undefined): number | undefined {

@@ -3,7 +3,14 @@
  */
 
 import type { FontResource, FontMap } from './parserTypes.js';
-import { CONTROL_CHAR_MATH_OVERRIDES, CONTROL_CHAR_FALLBACK } from './parserConstants.js';
+import {
+  CONTROL_CHAR_CMEX_OVERRIDES,
+  CONTROL_CHAR_FALLBACK,
+  CONTROL_CHAR_MATH_OVERRIDES,
+  PRINTABLE_CMMI_OVERRIDES,
+  PRINTABLE_CMEX_OVERRIDES,
+  PRINTABLE_CMSY_OVERRIDES
+} from './parserConstants.js';
 import { bytesToKey } from './parserUtils.js';
 import { latin1ToUint8 } from '../utils/buffer.js';
 
@@ -14,8 +21,27 @@ export function controlCharOverrides(font?: FontResource): Record<number, string
   if (!font?.baseFontName) {
     return undefined;
   }
+  if (/CMEX/i.test(font.baseFontName)) {
+    return CONTROL_CHAR_CMEX_OVERRIDES;
+  }
   if (/CMSY/i.test(font.baseFontName)) {
     return CONTROL_CHAR_MATH_OVERRIDES;
+  }
+  return undefined;
+}
+
+function printableMathOverrides(font?: FontResource): Record<string, string> | undefined {
+  if (!font?.baseFontName) {
+    return undefined;
+  }
+  if (/CMEX/i.test(font.baseFontName)) {
+    return PRINTABLE_CMEX_OVERRIDES;
+  }
+  if (/CMMI/i.test(font.baseFontName)) {
+    return PRINTABLE_CMMI_OVERRIDES;
+  }
+  if (/CMSY/i.test(font.baseFontName)) {
+    return PRINTABLE_CMSY_OVERRIDES;
   }
   return undefined;
 }
@@ -29,6 +55,7 @@ export function applyControlCharFallback(value: string, font?: FontResource): st
   }
 
   const overrides = controlCharOverrides(font);
+  const printableOverrides = printableMathOverrides(font);
 
   let output = '';
   for (let index = 0; index < value.length; index += 1) {
@@ -41,7 +68,7 @@ export function applyControlCharFallback(value: string, font?: FontResource): st
       }
       continue;
     }
-    output += char;
+    output += printableOverrides?.[char] ?? char;
   }
 
   return output;
