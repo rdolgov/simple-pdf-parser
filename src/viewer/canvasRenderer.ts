@@ -671,9 +671,8 @@ export class CanvasRenderer {
       ? (boundsWidth * options.scale) / glyphs.length
       : 0;
 
-    // Position at the vertical center of the bounds in page space.
-    const centerY = (item.bounds.minY + item.bounds.maxY) / 2;
-    const originLeft = projectPoint(item.bounds.minX, centerY);
+    const originY = item.baselineStart?.y ?? ((item.bounds.minY + item.bounds.maxY) / 2);
+    const originLeft = projectPoint(item.bounds.minX, originY);
 
     context.save();
     context.translate(originLeft.x, originLeft.y);
@@ -710,8 +709,6 @@ export class CanvasRenderer {
       // so we shift the glyph so its visual center sits at the center of the advance width.
       const glyphVisualWidth = gxMax - gxMin;
       const glyphCenterX = (gxMin + gxMax) / 2;
-      const glyphCenterY = (gyMin + gyMax) / 2;
-
       // The advance slot in canvas pixels for this glyph
       const slotCenterX = advancePerGlyph / 2;
 
@@ -720,8 +717,9 @@ export class CanvasRenderer {
       context.translate(cursorX + slotCenterX, 0);
       // Scale: X stays as-is, Y is negated to flip from PDF coords to canvas coords.
       context.scale(glyphScale, -glyphScale);
-      // Shift glyph so its visual center is at the origin (which is the slot center)
-      context.translate(-glyphCenterX, -glyphCenterY);
+      // Use the parsed text baseline for vertical placement; centering each glyph
+      // independently causes OCR headers to wobble up and down.
+      context.translate(-glyphCenterX, 0);
 
       this.drawGlyphPaths(context, glyph);
 

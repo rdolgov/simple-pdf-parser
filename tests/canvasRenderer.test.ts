@@ -234,4 +234,49 @@ describe('CanvasRenderer', () => {
     expect(operations.some((entry) => entry.startsWith('moveTo:'))).toBe(false);
     expect(operations.some((entry) => entry.startsWith('fill:'))).toBe(false);
   });
+
+  it('uses the parsed baseline to vertically place Type3 glyphs', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: 'A',
+              bounds: { minX: 100, minY: 50, maxX: 104, maxY: 60 },
+              baselineStart: { x: 100, y: 52 },
+              baselineEnd: { x: 108, y: 52 },
+              type3Glyphs: [
+                {
+                  glyphName: 'A',
+                  width: 1,
+                  pathCommands: [
+                    { op: 'M', x: 0.1, y: 0 },
+                    { op: 'L', x: 0.4, y: 0.7 },
+                    { op: 'L', x: 0.7, y: 0 },
+                    { op: 'Z' },
+                    { op: 'f' }
+                  ]
+                }
+              ]
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 200, height: 200 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+    renderer.render(canvas, document, 1);
+
+    expect(contextImpl.operations).toContain('translate:108,156');
+    expect(contextImpl.operations).not.toContain('translate:108,153');
+  });
 });
