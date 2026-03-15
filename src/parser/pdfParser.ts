@@ -2354,8 +2354,11 @@ export class PDFParser {
     const heightValue = heightMatch ? Number(heightMatch[1]) : undefined;
 
     const bitsMatch = imageObject.dictionarySource.match(/\/BitsPerComponent\s+(\d+)/);
-    const colorMatch = imageObject.dictionarySource.match(/\/ColorSpace\s+\/([A-Za-z0-9]+)/);
-    const indexedColorSpace = this.parseIndexedColorSpace(imageObject.dictionarySource, objects, rawContent);
+    const { colorSpace, indexedColorSpace } = this.resolveImageColorSpace(
+      imageObject.dictionarySource,
+      objects,
+      rawContent
+    );
     const imageMask = /\/ImageMask\s+true\b/.test(imageObject.dictionarySource);
     let decodeParms: Record<string, number | boolean> | undefined;
     const decodeMatch = imageObject.dictionarySource.match(/\/DecodeParms\s*<<([\s\S]*?)>>/);
@@ -2406,7 +2409,7 @@ export class PDFParser {
       width: Number.isFinite(widthValue) ? widthValue : undefined,
       height: Number.isFinite(heightValue) ? heightValue : undefined,
       bitsPerComponent: bitsMatch ? Number(bitsMatch[1]) : undefined,
-      colorSpace: indexedColorSpace ? 'Indexed' : colorMatch ? colorMatch[1] : undefined,
+      colorSpace,
       indexedColorSpace,
       filters: this.extractFilters(imageObject.dictionarySource),
       imageMask,
@@ -2416,13 +2419,68 @@ export class PDFParser {
     };
   }
 
+  private resolveImageColorSpace(
+    dictionarySource: string,
+    objects: Map<string, PDFRawObject>,
+    rawContent: string
+  ): Pick<ImageResource, 'colorSpace' | 'indexedColorSpace'> {
+    const directColorSpace = this.parseImageColorSpaceSource(dictionarySource, objects, rawContent);
+    if (directColorSpace.colorSpace || directColorSpace.indexedColorSpace) {
+      return directColorSpace;
+    }
+
+    const refMatch = dictionarySource.match(/\/ColorSpace\s+(\d+)\s+(\d+)\s+R\b/);
+    if (!refMatch) {
+      return {};
+    }
+
+    const key = objectKey(Number(refMatch[1]), Number(refMatch[2]));
+    const colorSpaceObject = objects.get(key);
+    if (!colorSpaceObject) {
+      return {};
+    }
+
+    return this.parseImageColorSpaceSource(colorSpaceObject.dictionarySource, objects, rawContent);
+  }
+
+  private parseImageColorSpaceSource(
+    source: string,
+    objects: Map<string, PDFRawObject>,
+    rawContent: string
+  ): Pick<ImageResource, 'colorSpace' | 'indexedColorSpace'> {
+    const trimmed = source.trim();
+    const indexedColorSpace = this.parseIndexedColorSpace(
+      trimmed.includes('/ColorSpace') ? trimmed : `/ColorSpace ${trimmed}`,
+      objects,
+      rawContent
+    );
+    if (indexedColorSpace) {
+      return {
+        colorSpace: 'Indexed',
+        indexedColorSpace
+      };
+    }
+
+    const inlineMatch = trimmed.match(/\/ColorSpace\s+\/([A-Za-z0-9]+)/);
+    if (inlineMatch) {
+      return { colorSpace: inlineMatch[1] };
+    }
+
+    const directNameMatch = trimmed.match(/^\/([A-Za-z0-9]+)/);
+    if (directNameMatch) {
+      return { colorSpace: directNameMatch[1] };
+    }
+
+    return {};
+  }
+
   private parseIndexedColorSpace(
     dictionarySource: string,
     objects: Map<string, PDFRawObject>,
     rawContent: string
   ): ImageResource['indexedColorSpace'] | undefined {
     const match = dictionarySource.match(
-      /\/ColorSpace\s*\[\s*\/Indexed\s+\/([A-Za-z0-9]+)\s+(\d+)\s+((?:\d+\s+\d+\s+R)|(?:<[^>]*>))\s*\]/
+      /\/ColorSpace\s*\[\s*\/Indexed\s*\/([A-Za-z0-9]+)\s+(\d+)\s+((?:\d+\s+\d+\s+R)|(?:<[^>]*>))\s*\]/
     );
     if (!match) {
       return undefined;

@@ -168,6 +168,26 @@ ET
     }
   });
 
+  it('resolves indirect indexed color spaces for scanned page images', () => {
+    const fixtureUrl = new URL(
+      '../pdfs/Leadership, Trust, And AI_ Dan Durn\u2019s Journey As Adobe\u2019s CFO.pdf',
+      import.meta.url
+    );
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(5);
+
+    expect(page).toBeDefined();
+    expect(page!.imageItems.length).toBeGreaterThan(0);
+
+    const image = page!.imageItems[0];
+    expect(image.sourceWidth).toBe(2317);
+    expect(image.sourceHeight).toBe(3067);
+    expect(image.pixels).toBeDefined();
+    expect(readPixel(image.pixels!, 100, 100)).toEqual([255, 255, 255, 255]);
+    expect(readPixel(image.pixels!, 500, 300)).toEqual([51, 51, 51, 255]);
+  });
+
   it('decodes indexed-color images without duplicating narrow RGB bands', () => {
     const fixtureUrl = new URL('../pdfs/platonicspaces.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);
