@@ -182,7 +182,8 @@ export const BASIC_GLYPH_MAP: Record<string, string> = {
 
 /** Math font control character overrides */
 export const CONTROL_CHAR_MATH_OVERRIDES: Record<number, string> = {
-  1: '·'
+  1: '·',
+  2: '×'
 };
 
 /** Default control character fallbacks for ligatures */

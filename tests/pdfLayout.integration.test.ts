@@ -17,6 +17,11 @@ function loadAttentionPaperDocument(): PDFDocument {
   return PDFDocument.from(readFileSync(fixtureUrl));
 }
 
+function loadWordEmbeddingsDocument(): PDFDocument {
+  const fixtureUrl = new URL('../pdfs/1301.3781v3.pdf', import.meta.url);
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
 function baselineDelta(item: PDFTextItem): { dx: number; dy: number } {
   return {
     dx: (item.baselineEnd?.x ?? 0) - (item.baselineStart?.x ?? 0),
@@ -103,6 +108,20 @@ describe('PDF layout integration', () => {
 
     expect(equationItems.some((item) => item.text === '√')).toBe(true);
     expect(equationItems.some((item) => item.text === 'p')).toBe(false);
+  });
+
+  it('decodes CMSY multiplication symbols instead of ligature fallbacks in the training complexity equation', () => {
+    const document = loadWordEmbeddingsDocument();
+    const page = document.getPage(3);
+
+    expect(page).toBeDefined();
+
+    const equationItems = page!.textItems
+      .filter((item) => item.bounds.maxY >= 676 && item.bounds.minY <= 689)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX);
+
+    expect(equationItems.some((item) => item.text === '×')).toBe(true);
+    expect(equationItems.some((item) => item.text === 'fi')).toBe(false);
   });
 
   it('assigns deeper bounds to TeX radical glyphs before rendering', () => {
