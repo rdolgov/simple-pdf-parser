@@ -602,7 +602,6 @@ export class CanvasRenderer {
 
     context.restore();
   }
-
   private resolveTextPlacement(
     item: PDFTextItem,
     projectPoint: (x: number, y: number) => { x: number; y: number },
@@ -654,6 +653,10 @@ export class CanvasRenderer {
 
     const boundsWidth = item.bounds.maxX - item.bounds.minX;
     const boundsHeight = item.bounds.maxY - item.bounds.minY;
+    if (this.shouldSkipSuspiciousType3Whitespace(item, boundsWidth, boundsHeight)) {
+      return;
+    }
+
     if (boundsHeight <= 0) {
       return;
     }
@@ -727,6 +730,22 @@ export class CanvasRenderer {
     }
 
     context.restore();
+  }
+
+  private shouldSkipSuspiciousType3Whitespace(
+    item: PDFTextItem,
+    boundsWidth: number,
+    boundsHeight: number
+  ): boolean {
+    if (!(boundsHeight > 0) || item.type3Glyphs?.length !== 1) {
+      return false;
+    }
+
+    if (item.text.trim().length > 0) {
+      return false;
+    }
+
+    return boundsWidth > boundsHeight * 12;
   }
 
   private drawGlyphPaths(context: CanvasRenderingContext2D, glyph: Type3Glyph): void {

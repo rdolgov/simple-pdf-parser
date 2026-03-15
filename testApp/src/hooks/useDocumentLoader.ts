@@ -44,6 +44,7 @@ export interface UseDocumentLoaderResult {
   extractAssetMap: Record<string, string> | null;
   cachedFiles: CachedFileSummary[];
   openFile: (file: File) => Promise<void>;
+  triggerExtract: () => Promise<void>;
   handleFileChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   handleOpenCachedFile: (fileHash: string) => Promise<void>;
   handleDeleteCachedFile: (fileHash: string) => Promise<void>;
@@ -52,15 +53,17 @@ export interface UseDocumentLoaderResult {
 
 export interface UseDocumentLoaderOptions {
   onDocumentLoad?: (document: PDFDocument) => void;
+  autoExtract?: boolean;
 }
 
 export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDocumentLoaderResult {
-  const { onDocumentLoad } = options;
+  const { onDocumentLoad, autoExtract = false } = options;
 
   const [state, setState] = useState<LoadState>({ status: 'idle' });
   const [isOpeningFile, setIsOpeningFile] = useState(false);
   const [loadedFileName, setLoadedFileName] = useState<string>('');
   const [loadedFileHash, setLoadedFileHash] = useState<string>('');
+  const [loadedFile, setLoadedFile] = useState<File | null>(null);
   const [loadedPdfData, setLoadedPdfData] = useState<ArrayBuffer | null>(null);
   const [extractState, setExtractState] = useState<ExtractState>({ status: 'idle' });
   const [extractedTables, setExtractedTables] = useState<ExtractedTable[]>([]);
@@ -82,115 +85,141 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     void refreshCachedFiles();
   }, [refreshCachedFiles]);
 
+  const resetExtractResults = useCallback(() => {
+    setExtractState({ status: 'idle' });
+    setExtractedTables([]);
+    setExtractDocument(null);
+    setExtractParsedTables(undefined);
+    setExtractAssetMap(null);
+  }, []);
+
+  const handleExtractResponse = useCallback((response: {
+    document: any;
+    parsedTables?: Array<{ name?: string; rows: any[] }>;
+    assetMap?: Record<string, string> | null;
+  }) => {
+    setExtractDocument(response.document);
+    setExtractParsedTables(response.parsedTables);
+    setExtractAssetMap(response.assetMap ?? null);
+    const tables: ExtractedTable[] = [];
+    const parsedTables = response.parsedTables ?? [];
+    const parsedTableMap = new Map<string, typeof parsedTables[number]>();
+    const normalizeTableName = (name: string) => name.toLowerCase().replace(/^\.?\//, '');
+    for (const parsed of parsedTables) {
+      if (!parsed?.name) {
+        continue;
+      }
+      parsedTableMap.set(normalizeTableName(parsed.name), parsed);
+    }
+
+    const tablePattern = /^\/\/Document\/Table(?:\[\d+\])?$/;
+    const seenTables = new Set<string>();
+
+    (response.document.elements ?? []).forEach((element: any) => {
+      const path = element.Path ?? '';
+      if (typeof path !== 'string' || !tablePattern.test(path)) {
+        return;
+      }
+      const boundsTuple = element.attributes?.BBox ?? element.Bounds;
+      const normalizedBounds = normalizeExtractTableBounds(boundsTuple);
+      if (!normalizedBounds) {
+        return;
+      }
+      const pageNumberZeroBased = typeof element.Page === 'number' ? element.Page : 0;
+      const pageNumber = pageNumberZeroBased + 1;
+      const tableFilePath = Array.isArray(element.filePaths)
+        ? element.filePaths.find(
+            (filePath: string) => typeof filePath === 'string' && filePath.toLowerCase().endsWith('.xlsx')
+          )
+        : undefined;
+      const parsedForTable = tableFilePath ? parsedTableMap.get(normalizeTableName(tableFilePath)) : undefined;
+      if (tableFilePath && parsedTableMap.has(normalizeTableName(tableFilePath))) {
+        parsedTableMap.delete(normalizeTableName(tableFilePath));
+      }
+
+      const id = `${path}-${pageNumber}`;
+      if (seenTables.has(id)) {
+        return;
+      }
+      seenTables.add(id);
+      const baseTable: ExtractedTable = {
+        id,
+        page: pageNumber,
+        bounds: normalizedBounds,
+        cells: []
+      };
+
+      if (parsedForTable && Array.isArray(parsedForTable.rows)) {
+        const cells: ExtractedTable['cells'] = [];
+        const headers = parsedForTable.rows[0]?.map((value: any) => String(value ?? '')) ?? [];
+        for (let rowIndex = 0; rowIndex < parsedForTable.rows.length; rowIndex += 1) {
+          const row = parsedForTable.rows[rowIndex];
+          for (let colIndex = 0; colIndex < row.length; colIndex += 1) {
+            cells.push({
+              row: rowIndex + 1,
+              col: colIndex + 1,
+              text: String(row[colIndex] ?? ''),
+              kind: rowIndex === 0 ? 'th' : 'td'
+            });
+          }
+        }
+        tables.push({ ...baseTable, cells, headers });
+      } else {
+        tables.push(baseTable);
+      }
+    });
+
+    setExtractedTables(tables);
+    console.debug('Extracted tables from structuredData', {
+      count: tables.length,
+      matchedParsedTables: parsedTables.length - parsedTableMap.size,
+      source: 'extract'
+    });
+    setExtractState({ status: 'ready' });
+  }, []);
+
+  const loadCachedExtractForFile = useCallback(
+    async (fileHash: string): Promise<boolean> => {
+      const provider = getStructuredExtractProvider();
+      const model = getStructuredExtractModel(provider);
+      const cachedExtract = await loadCachedExtractPayload(fileHash);
+      const isCacheVersionValid = cachedExtract?.schemaVersion === EXTRACT_CACHE_SCHEMA_VERSION;
+      const isCacheProviderMatch = (cachedExtract?.provider ?? 'gemini') === provider;
+      const isCacheModelMatch = (cachedExtract?.model ?? null) === (model ?? null);
+      if (!cachedExtract?.document || !isCacheVersionValid || !isCacheProviderMatch || !isCacheModelMatch) {
+        return false;
+      }
+
+      console.debug('Loaded extract data from cache');
+      handleExtractResponse({
+        document: cachedExtract.document,
+        parsedTables: cachedExtract.parsedTables,
+        assetMap: cachedExtract.assetMap ?? null
+      });
+      return true;
+    },
+    [handleExtractResponse]
+  );
+
   const runExtract = useCallback(
-    async (file: File) => {
+    async (file: File, fileHashOverride?: string) => {
       setExtractState({ status: 'loading' });
       setExtractedTables([]);
+      setExtractDocument(null);
+      setExtractParsedTables(undefined);
+      setExtractAssetMap(null);
+
       try {
-        const fileHash = await computeFileHash(file);
+        const fileHash = fileHashOverride ?? await computeFileHash(file);
         setLoadedFileHash(fileHash);
-        const handleExtractResponse = (response: {
-          document: any;
-          parsedTables?: Array<{ name?: string; rows: any[] }>;
-          assetMap?: Record<string, string> | null;
-        }) => {
-          setExtractDocument(response.document);
-          setExtractParsedTables(response.parsedTables);
-          setExtractAssetMap(response.assetMap ?? null);
-          const tables: ExtractedTable[] = [];
-          const parsedTables = response.parsedTables ?? [];
-          const parsedTableMap = new Map<string, typeof parsedTables[number]>();
-          const normalizeTableName = (name: string) => name.toLowerCase().replace(/^\.?\//, '');
-          for (const parsed of parsedTables) {
-            if (!parsed?.name) {
-              continue;
-            }
-            parsedTableMap.set(normalizeTableName(parsed.name), parsed);
-          }
 
-          const tablePattern = /^\/\/Document\/Table(?:\[\d+\])?$/;
-          const seenTables = new Set<string>();
-
-          (response.document.elements ?? []).forEach((element: any, index: number) => {
-            const path = element.Path ?? '';
-            if (typeof path !== 'string' || !tablePattern.test(path)) {
-              return;
-            }
-            const boundsTuple = element.attributes?.BBox ?? element.Bounds;
-            const normalizedBounds = normalizeExtractTableBounds(boundsTuple);
-            if (!normalizedBounds) {
-              return;
-            }
-            const pageNumberZeroBased = typeof element.Page === 'number' ? element.Page : 0;
-            const pageNumber = pageNumberZeroBased + 1; // PDF pages are 1-based in renderer
-            const tableFilePath = Array.isArray(element.filePaths)
-              ? element.filePaths.find(
-                  (filePath: string) => typeof filePath === 'string' && filePath.toLowerCase().endsWith('.xlsx')
-                )
-              : undefined;
-            const parsedForTable = tableFilePath ? parsedTableMap.get(normalizeTableName(tableFilePath)) : undefined;
-            if (tableFilePath && parsedTableMap.has(normalizeTableName(tableFilePath))) {
-              parsedTableMap.delete(normalizeTableName(tableFilePath));
-            }
-
-            const id = `${path}-${pageNumber}`;
-            if (seenTables.has(id)) {
-              return;
-            }
-            seenTables.add(id);
-            const baseTable: ExtractedTable = {
-              id,
-              page: pageNumber,
-              bounds: normalizedBounds,
-              cells: []
-            };
-
-            if (parsedForTable && Array.isArray(parsedForTable.rows)) {
-              const cells: ExtractedTable['cells'] = [];
-              const headers = parsedForTable.rows[0]?.map((value: any) => String(value ?? '')) ?? [];
-              for (let rowIndex = 0; rowIndex < parsedForTable.rows.length; rowIndex += 1) {
-                const row = parsedForTable.rows[rowIndex];
-                for (let colIndex = 0; colIndex < row.length; colIndex += 1) {
-                  cells.push({
-                    row: rowIndex + 1,
-                    col: colIndex + 1,
-                    text: String(row[colIndex] ?? ''),
-                    kind: rowIndex === 0 ? 'th' : 'td'
-                  });
-                }
-              }
-              tables.push({ ...baseTable, cells, headers });
-            } else {
-              tables.push(baseTable);
-            }
-          });
-
-          setExtractedTables(tables);
-          console.debug('Extracted tables from structuredData', {
-            count: tables.length,
-            matchedParsedTables: parsedTables.length - parsedTableMap.size,
-            source: 'extract'
-          });
-          setExtractState({ status: 'ready' });
-        };
-
-        const provider = getStructuredExtractProvider();
-        const model = getStructuredExtractModel(provider);
-
-        const cachedExtract = await loadCachedExtractPayload(fileHash);
-        const isCacheVersionValid = cachedExtract?.schemaVersion === EXTRACT_CACHE_SCHEMA_VERSION;
-        const isCacheProviderMatch = (cachedExtract?.provider ?? 'gemini') === provider;
-        const isCacheModelMatch = (cachedExtract?.model ?? null) === (model ?? null);
-        if (cachedExtract?.document && isCacheVersionValid && isCacheProviderMatch && isCacheModelMatch) {
-          console.debug('Loaded extract data from cache');
-          handleExtractResponse({
-            document: cachedExtract.document,
-            parsedTables: cachedExtract.parsedTables,
-            assetMap: cachedExtract.assetMap ?? null
-          });
+        const loadedFromCache = await loadCachedExtractForFile(fileHash);
+        if (loadedFromCache) {
           return;
         }
 
+        const provider = getStructuredExtractProvider();
+        const model = getStructuredExtractModel(provider);
         const apiKey = resolveApiKeyForExtract(provider);
         if (!apiKey) {
           throw new Error(
@@ -200,7 +229,12 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
 
         const client = new StructuredExtractAPI({ provider, apiKey, model: model ?? undefined });
         const response = await client.extractStructuredData(file, { fileName: file.name });
-        handleExtractResponse({ document: response.document, parsedTables: response.parsedTables, assetMap: response.assetMap });
+        handleExtractResponse({
+          document: response.document,
+          parsedTables: response.parsedTables,
+          assetMap: response.assetMap
+        });
+
         const extractPayload = {
           schemaVersion: EXTRACT_CACHE_SCHEMA_VERSION,
           provider,
@@ -227,7 +261,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         });
       }
     },
-    [refreshCachedFiles]
+    [handleExtractResponse, loadCachedExtractForFile, refreshCachedFiles]
   );
 
   const openFile = useCallback(
@@ -239,13 +273,20 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
 
       setIsOpeningFile(true);
       try {
-        const bytes = await file.arrayBuffer();
+        const [bytes, fileHash] = await Promise.all([file.arrayBuffer(), computeFileHash(file)]);
         const document = PDFDocument.from(bytes);
         setState({ status: 'ready', document });
+        setLoadedFile(file);
         setLoadedFileName(file.name);
+        setLoadedFileHash(fileHash);
         setLoadedPdfData(bytes);
+        resetExtractResults();
         onDocumentLoad?.(document);
-        runExtract(file);
+
+        const loadedFromCache = await loadCachedExtractForFile(fileHash);
+        if (autoExtract && !loadedFromCache) {
+          void runExtract(file, fileHash);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unable to parse PDF.';
         setState({ status: 'error', message });
@@ -253,8 +294,16 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         setIsOpeningFile(false);
       }
     },
-    [onDocumentLoad, runExtract]
+    [autoExtract, loadCachedExtractForFile, onDocumentLoad, resetExtractResults, runExtract]
   );
+
+  const triggerExtract = useCallback(async () => {
+    if (!loadedFile) {
+      setExtractState({ status: 'error', message: 'No document loaded.' });
+      return;
+    }
+    await runExtract(loadedFile, loadedFileHash || undefined);
+  }, [loadedFile, loadedFileHash, runExtract]);
 
   const handleFileChange = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -302,6 +351,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     extractAssetMap,
     cachedFiles,
     openFile,
+    triggerExtract,
     handleFileChange,
     handleOpenCachedFile,
     handleDeleteCachedFile,

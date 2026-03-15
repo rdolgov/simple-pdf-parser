@@ -168,6 +168,25 @@ ET
     }
   });
 
+  it('applies Type3 CharProc cm transforms to OCR header glyph paths', () => {
+    const fixtureUrl = new URL(
+      '../pdfs/Leadership, Trust, And AI_ Dan Durn\u2019s Journey As Adobe\u2019s CFO.pdf',
+      import.meta.url
+    );
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(5);
+
+    expect(page).toBeDefined();
+    const headerItem = page!.textItems.find((item) => item.bounds.maxY > 760 && item.type3Glyphs?.length === 1);
+    expect(headerItem).toBeDefined();
+
+    const moveTo = headerItem!.type3Glyphs![0].pathCommands.find((command) => command.op === 'M');
+    expect(moveTo).toBeDefined();
+    expect(moveTo!.x).toBeCloseTo(0.50342, 4);
+    expect(moveTo!.y).toBeCloseTo(0.084473, 4);
+  });
+
   it('resolves indirect indexed color spaces for scanned page images', () => {
     const fixtureUrl = new URL(
       '../pdfs/Leadership, Trust, And AI_ Dan Durn\u2019s Journey As Adobe\u2019s CFO.pdf',

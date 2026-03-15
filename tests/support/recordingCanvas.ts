@@ -20,6 +20,16 @@ export type RecordedTextDraw = {
   translateY: number;
 };
 
+export type RecordedPathPaint = {
+  kind: 'fill' | 'stroke';
+  fillRule?: CanvasFillRule;
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
+  translateX: number;
+  translateY: number;
+};
+
 const DEFAULT_STATE: TransformState = {
   translateX: 0,
   translateY: 0,
@@ -37,6 +47,7 @@ export class RecordingContext {
   imageSmoothingEnabled = true;
   textRendering?: string;
   readonly textDraws: RecordedTextDraw[] = [];
+  readonly pathPaints: RecordedPathPaint[] = [];
 
   private state: TransformState = { ...DEFAULT_STATE };
   private readonly stack: TransformState[] = [];
@@ -81,9 +92,28 @@ export class RecordingContext {
 
   closePath(): void {}
 
-  stroke(): void {}
+  stroke(): void {
+    this.pathPaints.push({
+      kind: 'stroke',
+      rotation: this.state.rotation,
+      scaleX: this.state.scaleX,
+      scaleY: this.state.scaleY,
+      translateX: this.state.translateX,
+      translateY: this.state.translateY
+    });
+  }
 
-  fill(): void {}
+  fill(fillRule?: CanvasFillRule): void {
+    this.pathPaints.push({
+      kind: 'fill',
+      fillRule,
+      rotation: this.state.rotation,
+      scaleX: this.state.scaleX,
+      scaleY: this.state.scaleY,
+      translateX: this.state.translateX,
+      translateY: this.state.translateY
+    });
+  }
 
   drawImage(): void {}
 

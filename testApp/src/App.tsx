@@ -44,8 +44,19 @@ import { useSemanticSearch } from './search';
 import { SemanticSearchBar } from './components/SemanticSearchBar';
 import { useZoom, useViewMode, useRecordings, useDocumentLoader, useGeminiExtraction } from './hooks';
 import { useGlobalFetchActivity } from './hooks/useGlobalFetchActivity';
+import {
+  describeAiDetectionMode,
+  parseAiDetectionMode,
+  shouldAutoRunLayoutDetection,
+  shouldAutoRunStructuredExtract
+} from './utils/aiDetectionActivation';
 
 export default function App(): JSX.Element {
+  const aiDetectionMode = useMemo(
+    () => parseAiDetectionMode(typeof window === 'undefined' ? '' : window.location.search),
+    []
+  );
+  const aiDetectionModeDescription = useMemo(() => describeAiDetectionMode(aiDetectionMode), [aiDetectionMode]);
   const { viewMode, setViewMode, showFocusView } = useViewMode('canvas');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [includeImageData, setIncludeImageData] = useState(false);
@@ -119,10 +130,14 @@ export default function App(): JSX.Element {
     extractAssetMap,
     cachedFiles,
     openFile,
+    triggerExtract: triggerStructuredExtract,
     handleFileChange,
     handleOpenCachedFile,
     handleDeleteCachedFile
-  } = useDocumentLoader({ onDocumentLoad: handleDocumentLoad });
+  } = useDocumentLoader({
+    onDocumentLoad: handleDocumentLoad,
+    autoExtract: shouldAutoRunStructuredExtract(aiDetectionMode)
+  });
 
   const { lastError, dismissLastError } = useGlobalFetchActivity();
   const handleInlineImageGenerationActivityChange = useCallback((delta: number) => {
@@ -142,8 +157,13 @@ export default function App(): JSX.Element {
   } = useGeminiExtraction({
     documentHash: loadedFileHash || null,
     pdfData: loadedPdfData,
-    autoExtract: false
+    autoExtract: shouldAutoRunLayoutDetection(aiDetectionMode)
   });
+
+  const handleRunAiDetection = useCallback(async () => {
+    await triggerStructuredExtract();
+    await triggerGeminiExtraction();
+  }, [triggerGeminiExtraction, triggerStructuredExtract]);
 
   const readyDocument = state.status === 'ready' ? state.document : null;
   const structuredTables = useMemo<TableModel[]>(() => {
@@ -269,7 +289,7 @@ export default function App(): JSX.Element {
       return {
         visible: true,
         title: 'Opening PDF',
-        message: 'Reading and parsing the PDF before extraction starts.',
+        message: 'Reading and parsing the PDF without calling any AI APIs.',
         progress: null as number | null,
         detail: loadedFileName ? `File: ${loadedFileName}` : null
       };
@@ -278,10 +298,10 @@ export default function App(): JSX.Element {
     if (extractState.status === 'loading') {
       return {
         visible: true,
-        title: 'Preparing Document',
-        message: 'Detecting document structure (tables, images, and metadata) before interactive features are available.',
+        title: 'Running Structured Extract',
+        message: 'Calling the configured AI provider for table, image, and metadata extraction.',
         progress: null as number | null,
-        detail: loadedFileName ? `Processing ${loadedFileName}` : 'Initial structured extraction is running.'
+        detail: loadedFileName ? `Processing ${loadedFileName}` : 'Structured extraction is running.'
       };
     }
 
@@ -291,7 +311,7 @@ export default function App(): JSX.Element {
         title: 'Analyzing PDF Layout',
         message: 'Extracting references, formulas, and page elements for citation/formula interactions.',
         progress: null as number | null,
-        detail: 'This runs on top of the PDF and may take a few seconds.'
+        detail: 'This is only triggered manually or via the aiDetection URL parameter.'
       };
     }
 
@@ -917,6 +937,9 @@ export default function App(): JSX.Element {
           state={state}
           readyDocument={readyDocument}
           documentId={loadedFileName || 'document'}
+          extractState={extractState}
+          geminiExtractionState={geminiExtractionState}
+          aiDetectionModeDescription={aiDetectionModeDescription}
           getCanvasRef={getCanvasRef}
           layoutJson={layoutJson}
           htmlFriendlyJson={htmlFriendlyJson}
@@ -943,7 +966,7 @@ export default function App(): JSX.Element {
           semanticSearchResults={sortedSemanticResults}
           activeSemanticResultIndex={activeSemanticResultIndex}
           geminiExtraction={geminiExtractionState.extraction}
-          onTriggerGeminiExtraction={triggerGeminiExtraction}
+          onRunAiDetection={handleRunAiDetection}
           enableFormulaHighlight={enableFormulaHighlight}
           enableTableHighlight={enableTableHighlight}
           enableWebSearch={enableWebSearch}
@@ -991,8 +1014,10 @@ export default function App(): JSX.Element {
           setViewMode={setViewMode}
           showFocusView={showFocusView}
           canUseZoom={canUseZoom}
+          extractState={extractState}
           geminiExtractionState={geminiExtractionState}
-          onTriggerGeminiExtraction={triggerGeminiExtraction}
+          aiDetectionModeDescription={aiDetectionModeDescription}
+          onRunAiDetection={handleRunAiDetection}
           enableFormulaHighlight={enableFormulaHighlight}
           setEnableFormulaHighlight={setEnableFormulaHighlight}
           enableTableHighlight={enableTableHighlight}

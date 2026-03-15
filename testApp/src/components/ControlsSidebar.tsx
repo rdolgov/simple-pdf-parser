@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { RelevanceServiceConfig, StructuredExtractProvider } from 'pdf-layout-parser';
 import type { LoadState, ViewMode, FocusProvider, FocusRenderState, FocusRecording } from '../types';
-import type { GeminiExtractionState } from '../hooks';
+import type { ExtractState, GeminiExtractionState } from '../hooks';
 import { TabBar } from './TabBar';
 import {
   loadStructuredExtractStoredSettings,
@@ -60,8 +60,10 @@ interface ControlsSidebarProps {
   setViewMode: (mode: ViewMode) => void;
   showFocusView: (mode: 'focus-render' | 'focus-pdf') => void;
   canUseZoom: boolean;
+  extractState: ExtractState;
   geminiExtractionState: GeminiExtractionState;
-  onTriggerGeminiExtraction: () => Promise<void>;
+  aiDetectionModeDescription: string;
+  onRunAiDetection: () => Promise<void>;
   enableFormulaHighlight: boolean;
   setEnableFormulaHighlight: (value: boolean) => void;
   enableTableHighlight: boolean;
@@ -100,8 +102,10 @@ export function ControlsSidebar({
   setViewMode,
   showFocusView,
   canUseZoom,
+  extractState,
   geminiExtractionState,
-  onTriggerGeminiExtraction,
+  aiDetectionModeDescription,
+  onRunAiDetection,
   enableFormulaHighlight,
   setEnableFormulaHighlight,
   enableTableHighlight,
@@ -172,6 +176,8 @@ export function ControlsSidebar({
     : semanticSearchGeminiModel;
   const currentRewriteApiKey = rewriteProvider === 'openai' ? rewriteOpenAiApiKey : rewriteGeminiApiKey;
   const currentRewriteModel = rewriteProvider === 'openai' ? rewriteOpenAiModel : rewriteGeminiModel;
+  const isAiDetectionRunning = extractState.status === 'loading' || geminiExtractionState.status === 'loading';
+  const isAiDetectionReady = extractState.status === 'ready' && geminiExtractionState.status === 'ready';
 
   const handleExtractProviderChange = (provider: StructuredExtractProvider) => {
     setExtractProviderState(provider);
@@ -512,18 +518,26 @@ export function ControlsSidebar({
               Used for PDF table/image structured extraction. Cache is per file checksum and provider/model.
             </span>
           </div>
+          <span className="structured-extract-settings-note">{aiDetectionModeDescription}</span>
           <button
             type="button"
-            onClick={onTriggerGeminiExtraction}
-            disabled={state.status !== 'ready' || geminiExtractionState.status === 'loading'}
+            onClick={onRunAiDetection}
+            disabled={state.status !== 'ready' || isAiDetectionRunning}
           >
-            {geminiExtractionState.status === 'loading' ? 'Extracting...' :
-             geminiExtractionState.status === 'ready'
-               ? `Re-extract with ${rewriteProvider === 'openai' ? 'OpenAI' : 'Gemini'}`
-               : `Extract with ${rewriteProvider === 'openai' ? 'OpenAI' : 'Gemini'}`}
+            {isAiDetectionRunning
+              ? 'Running AI Detection...'
+              : isAiDetectionReady
+                ? 'Re-run AI Detection'
+                : 'Run AI Detection'}
           </button>
+          {extractState.status === 'ready' && (
+            <span className="extraction-status">✓ Structured extract ready</span>
+          )}
           {geminiExtractionState.status === 'ready' && (
-            <span className="extraction-status">✓ Extraction cached</span>
+            <span className="extraction-status">✓ Layout detection ready</span>
+          )}
+          {extractState.status === 'error' && (
+            <span className="focus-error">{extractState.message}</span>
           )}
           {geminiExtractionState.status === 'error' && (
             <span className="focus-error">{geminiExtractionState.error}</span>

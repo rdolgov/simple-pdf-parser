@@ -22,6 +22,14 @@ function loadWordEmbeddingsDocument(): PDFDocument {
   return PDFDocument.from(readFileSync(fixtureUrl));
 }
 
+function loadAdobeScannedDocument(): PDFDocument {
+  const fixtureUrl = new URL(
+    '../pdfs/Leadership, Trust, And AI_ Dan Durn\u2019s Journey As Adobe\u2019s CFO.pdf',
+    import.meta.url
+  );
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
 function baselineDelta(item: PDFTextItem): { dx: number; dy: number } {
   return {
     dx: (item.baselineEnd?.x ?? 0) - (item.baselineStart?.x ?? 0),
@@ -202,6 +210,17 @@ describe('PDF layout integration', () => {
     expect(radicalDraw!.font).toContain('math');
     expect(sigmaDraw!.font).toContain("'CMEX9'");
     expect(sigmaDraw!.font).toContain('math');
+  });
+
+  it('renders Type3 OCR overlays on scanned pages', () => {
+    const document = loadAdobeScannedDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 5);
+
+    expect(context.pathPaints.length).toBeGreaterThan(0);
   });
 
   it('renders the margin stamp rotated while keeping the main title horizontal', () => {

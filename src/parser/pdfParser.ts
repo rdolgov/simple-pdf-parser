@@ -1934,6 +1934,7 @@ export class PDFParser {
 
     const glyphCodes = extractGlyphCodes(rawText, font);
     const glyphCount = glyphCodes.length > 0 ? glyphCodes.length : decoded.length;
+    const isType3 = font?.subtype === 'Type3';
 
     if (glyphCount === 0 && decoded.length === 0) {
       return undefined;
@@ -1941,7 +1942,9 @@ export class PDFParser {
 
     let glyphUnits = 0;
     for (const code of glyphCodes) {
-      glyphUnits += lookupGlyphWidth(font, code);
+      glyphUnits += isType3
+        ? this.resolveType3AdvanceWidth(font, code)
+        : lookupGlyphWidth(font, code);
     }
 
     if (glyphCodes.length === 0 && decoded.length > 0) {
@@ -1952,7 +1955,6 @@ export class PDFParser {
     // Type3 font widths are in the font's own coordinate system (not thousandths of em).
     // For standard fonts, widths are in thousandths, so we divide by 1000.
     // For Type3, the width is multiplied by FontMatrix to get text-space units.
-    const isType3 = font?.subtype === 'Type3';
     const glyphAdvance = isType3
       ? glyphUnits * fontSize * (font?.fontMatrix?.[0] ?? 1)
       : (glyphUnits * fontSize) / 1000;
@@ -1966,6 +1968,20 @@ export class PDFParser {
       advance,
       fontSize: normalizedFontSize
     };
+  }
+
+  private resolveType3AdvanceWidth(font: FontResource | undefined, code: number): number {
+    if (!font) {
+      return 0;
+    }
+
+    const glyphName = font.glyphNameMap?.get(code) ?? String(code);
+    const charProcWidth = font.charProcs?.get(glyphName)?.width;
+    if (typeof charProcWidth === 'number' && Number.isFinite(charProcWidth) && charProcWidth > 0) {
+      return charProcWidth;
+    }
+
+    return lookupGlyphWidth(font, code);
   }
 
   private translateMatrix(matrix: Matrix, tx: number, ty: number): Matrix {
@@ -2747,9 +2763,15 @@ export class PDFParser {
     const commands: Type3PathCommand[] = [];
     const nums: number[] = [];
     let glyphWidth = 0;
+    let currentMatrix = identityMatrix();
+    const matrixStack: Matrix[] = [];
+    let currentPoint: Vector2D | undefined;
+    let subpathStart: Vector2D | undefined;
 
     // Tokenize the stream
     const tokens = stream.trim().split(/\s+/);
+
+    const transformGlyphPoint = (x: number, y: number): Vector2D => transformPoint(currentMatrix, x, y);
 
     for (const token of tokens) {
       const num = Number(token);
@@ -2775,62 +2797,109 @@ export class PDFParser {
           break;
         case 'm':
           if (nums.length >= 2) {
-            commands.push({ op: 'M', x: nums[nums.length - 2], y: nums[nums.length - 1] });
+            const x = nums[nums.length - 2];
+            const y = nums[nums.length - 1];
+            const point = transformGlyphPoint(x, y);
+            commands.push({ op: 'M', x: point.x, y: point.y });
+            currentPoint = { x, y };
+            subpathStart = { x, y };
           }
           nums.length = 0;
           break;
         case 'l':
           if (nums.length >= 2) {
-            commands.push({ op: 'L', x: nums[nums.length - 2], y: nums[nums.length - 1] });
+            const x = nums[nums.length - 2];
+            const y = nums[nums.length - 1];
+            const point = transformGlyphPoint(x, y);
+            commands.push({ op: 'L', x: point.x, y: point.y });
+            currentPoint = { x, y };
           }
           nums.length = 0;
           break;
         case 'c':
           if (nums.length >= 6) {
+            const x1 = nums[nums.length - 6];
+            const y1 = nums[nums.length - 5];
+            const x2 = nums[nums.length - 4];
+            const y2 = nums[nums.length - 3];
+            const x3 = nums[nums.length - 2];
+            const y3 = nums[nums.length - 1];
+            const p1 = transformGlyphPoint(x1, y1);
+            const p2 = transformGlyphPoint(x2, y2);
+            const p3 = transformGlyphPoint(x3, y3);
             commands.push({
               op: 'C',
-              x1: nums[nums.length - 6], y1: nums[nums.length - 5],
-              x2: nums[nums.length - 4], y2: nums[nums.length - 3],
-              x3: nums[nums.length - 2], y3: nums[nums.length - 1]
+              x1: p1.x, y1: p1.y,
+              x2: p2.x, y2: p2.y,
+              x3: p3.x, y3: p3.y
             });
+            currentPoint = { x: x3, y: y3 };
           }
           nums.length = 0;
           break;
         case 'v':
           // v x2 y2 x3 y3 — current point is first control point
-          if (nums.length >= 4) {
+          if (nums.length >= 4 && currentPoint) {
+            const x2 = nums[nums.length - 4];
+            const y2 = nums[nums.length - 3];
+            const x3 = nums[nums.length - 2];
+            const y3 = nums[nums.length - 1];
+            const p1 = transformGlyphPoint(currentPoint.x, currentPoint.y);
+            const p2 = transformGlyphPoint(x2, y2);
+            const p3 = transformGlyphPoint(x3, y3);
             commands.push({
               op: 'C',
-              x1: 0, y1: 0, // placeholder — renderer should use current point
-              x2: nums[nums.length - 4], y2: nums[nums.length - 3],
-              x3: nums[nums.length - 2], y3: nums[nums.length - 1]
+              x1: p1.x, y1: p1.y,
+              x2: p2.x, y2: p2.y,
+              x3: p3.x, y3: p3.y
             });
+            currentPoint = { x: x3, y: y3 };
           }
           nums.length = 0;
           break;
         case 'y':
           // y x1 y1 x3 y3 — endpoint is second control point
           if (nums.length >= 4) {
+            const x1 = nums[nums.length - 4];
+            const y1 = nums[nums.length - 3];
+            const x3 = nums[nums.length - 2];
+            const y3 = nums[nums.length - 1];
+            const p1 = transformGlyphPoint(x1, y1);
+            const p3 = transformGlyphPoint(x3, y3);
             commands.push({
               op: 'C',
-              x1: nums[nums.length - 4], y1: nums[nums.length - 3],
-              x2: nums[nums.length - 2], y2: nums[nums.length - 1],
-              x3: nums[nums.length - 2], y3: nums[nums.length - 1]
+              x1: p1.x, y1: p1.y,
+              x2: p3.x, y2: p3.y,
+              x3: p3.x, y3: p3.y
             });
+            currentPoint = { x: x3, y: y3 };
           }
           nums.length = 0;
           break;
         case 'h':
           commands.push({ op: 'Z' });
+          if (subpathStart) {
+            currentPoint = { ...subpathStart };
+          }
           nums.length = 0;
           break;
         case 're':
           if (nums.length >= 4) {
-            commands.push({
-              op: 're',
-              x: nums[nums.length - 4], y: nums[nums.length - 3],
-              w: nums[nums.length - 2], h: nums[nums.length - 1]
-            });
+            const x = nums[nums.length - 4];
+            const y = nums[nums.length - 3];
+            const w = nums[nums.length - 2];
+            const h = nums[nums.length - 1];
+            const p0 = transformGlyphPoint(x, y);
+            const p1 = transformGlyphPoint(x + w, y);
+            const p2 = transformGlyphPoint(x + w, y + h);
+            const p3 = transformGlyphPoint(x, y + h);
+            commands.push({ op: 'M', x: p0.x, y: p0.y });
+            commands.push({ op: 'L', x: p1.x, y: p1.y });
+            commands.push({ op: 'L', x: p2.x, y: p2.y });
+            commands.push({ op: 'L', x: p3.x, y: p3.y });
+            commands.push({ op: 'Z' });
+            currentPoint = { x, y };
+            subpathStart = { x, y };
           }
           nums.length = 0;
           break;
@@ -2860,16 +2929,36 @@ export class PDFParser {
           break;
         case 'n':
           commands.push({ op: 'n' });
+          currentPoint = undefined;
+          subpathStart = undefined;
           nums.length = 0;
           break;
         case 'q':
+          matrixStack.push(cloneMatrix(currentMatrix));
+          nums.length = 0;
+          break;
         case 'Q':
+          currentMatrix = matrixStack.pop() ?? identityMatrix();
+          nums.length = 0;
+          break;
         case 'cm':
+          if (nums.length >= 6) {
+            const matrix: Matrix = [
+              nums[nums.length - 6],
+              nums[nums.length - 5],
+              nums[nums.length - 4],
+              nums[nums.length - 3],
+              nums[nums.length - 2],
+              nums[nums.length - 1]
+            ];
+            currentMatrix = multiplyMatrices(currentMatrix, matrix);
+          }
+          nums.length = 0;
+          break;
         case 'i':
         case 'W':
         case 'W*':
           // Graphics state operators — consume but don't produce path commands
-          // (cm is handled via the overall transform, q/Q are save/restore)
           nums.length = 0;
           break;
         case 'rg':

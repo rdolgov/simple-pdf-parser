@@ -70,6 +70,22 @@ class MockContext {
   stroke() {
     this.operations.push('stroke');
   }
+
+  fill(fillRule?: CanvasFillRule) {
+    this.operations.push(`fill:${fillRule ?? 'nonzero'}`);
+  }
+
+  rect(x: number, y: number, width: number, height: number) {
+    this.operations.push(`rect:${x},${y},${width},${height}`);
+  }
+
+  bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) {
+    this.operations.push(`bezierCurveTo:${x1},${y1},${x2},${y2},${x3},${y3}`);
+  }
+
+  closePath() {
+    this.operations.push('closePath');
+  }
 }
 
 class MockCanvas implements CanvasLike {
@@ -173,5 +189,49 @@ describe('CanvasRenderer', () => {
     const operations = contextImpl.operations;
     expect(operations.some((entry) => entry.startsWith('rotate:-1.571'))).toBe(true);
     expect(operations.some((entry) => entry.startsWith('fillText:arXiv:1610.04457v1'))).toBe(true);
+  });
+
+  it('skips suspiciously wide whitespace Type3 OCR artifacts', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: '\u00a0',
+              bounds: { minX: 100, minY: 720, maxX: 260, maxY: 728 },
+              type3Glyphs: [
+                {
+                  glyphName: 'bogusSpace',
+                  width: 1,
+                  pathCommands: [
+                    { op: 'M', x: 0, y: 0 },
+                    { op: 'L', x: 0.5, y: 0 },
+                    { op: 'L', x: 0.5, y: 0.7 },
+                    { op: 'Z' },
+                    { op: 'f' }
+                  ]
+                }
+              ]
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 612, height: 792 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+    renderer.render(canvas, document, 1);
+
+    const operations = contextImpl.operations;
+    expect(operations.some((entry) => entry.startsWith('moveTo:'))).toBe(false);
+    expect(operations.some((entry) => entry.startsWith('fill:'))).toBe(false);
   });
 });
