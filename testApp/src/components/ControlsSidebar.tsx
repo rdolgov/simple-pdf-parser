@@ -29,6 +29,7 @@ import {
   type RewriteProvider
 } from '../utils/rewriteProviderSettings';
 import { resetLocalAppData } from '../utils/resetLocalAppData';
+import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 
 interface ControlsSidebarProps {
   state: LoadState;
@@ -62,8 +63,8 @@ interface ControlsSidebarProps {
   canUseZoom: boolean;
   extractState: ExtractState;
   geminiExtractionState: GeminiExtractionState;
+  aiDetectionSupport: AiDetectionSupport;
   aiDetectionModeDescription: string;
-  onRunAiDetection: () => Promise<void>;
   enableFormulaHighlight: boolean;
   setEnableFormulaHighlight: (value: boolean) => void;
   enableTableHighlight: boolean;
@@ -104,8 +105,8 @@ export function ControlsSidebar({
   canUseZoom,
   extractState,
   geminiExtractionState,
+  aiDetectionSupport,
   aiDetectionModeDescription,
-  onRunAiDetection,
   enableFormulaHighlight,
   setEnableFormulaHighlight,
   enableTableHighlight,
@@ -519,22 +520,19 @@ export function ControlsSidebar({
             </span>
           </div>
           <span className="structured-extract-settings-note">{aiDetectionModeDescription}</span>
-          <button
-            type="button"
-            onClick={onRunAiDetection}
-            disabled={state.status !== 'ready' || isAiDetectionRunning}
-          >
-            {isAiDetectionRunning
-              ? 'Running AI Detection...'
-              : isAiDetectionReady
-                ? 'Re-run AI Detection'
-                : 'Run AI Detection'}
-          </button>
+          {!aiDetectionSupport.supported && (
+            <span className="focus-error">{aiDetectionSupport.message}</span>
+          )}
           {extractState.status === 'ready' && (
             <span className="extraction-status">✓ Structured extract ready</span>
           )}
           {geminiExtractionState.status === 'ready' && (
             <span className="extraction-status">✓ Layout detection ready</span>
+          )}
+          {state.status === 'ready' && aiDetectionSupport.supported && !isAiDetectionRunning && !isAiDetectionReady && (
+            <span className="structured-extract-settings-note">
+              Use the semantic search bar to run AI detection manually.
+            </span>
           )}
           {extractState.status === 'error' && (
             <span className="focus-error">{extractState.message}</span>

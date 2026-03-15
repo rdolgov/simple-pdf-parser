@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { KeyboardEvent, FocusEvent } from 'react';
 import type { IndexingProgress, SemanticSearchResult } from '../search';
+import type { ExtractState, GeminiExtractionState } from '../hooks';
+import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 import {
   type SearchHistoryEntry,
   addSearchToHistory,
@@ -21,6 +23,11 @@ interface SemanticSearchBarProps {
   activeResultIndex: number;
   onNavigateResult: (index: number) => void;
   documentId?: string;
+  extractState: ExtractState;
+  geminiExtractionState: GeminiExtractionState;
+  aiDetectionSupport: AiDetectionSupport;
+  aiDetectionModeDescription: string;
+  onRunAiDetection: () => Promise<void>;
 }
 
 export function SemanticSearchBar({
@@ -35,7 +42,12 @@ export function SemanticSearchBar({
   disabled = false,
   activeResultIndex,
   onNavigateResult,
-  documentId
+  documentId,
+  extractState,
+  geminiExtractionState,
+  aiDetectionSupport,
+  aiDetectionModeDescription,
+  onRunAiDetection
 }: SemanticSearchBarProps): JSX.Element {
   const [query, setQuery] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
@@ -48,6 +60,18 @@ export function SemanticSearchBar({
 
   const hasResults = searchResults.length > 0;
   const queryChanged = query.trim() !== lastSearchedQuery;
+  const isAiDetectionRunning = extractState.status === 'loading' || geminiExtractionState.status === 'loading';
+  const isAiDetectionReady = extractState.status === 'ready' && geminiExtractionState.status === 'ready';
+  const aiDetectionButtonLabel = !aiDetectionSupport.supported
+    ? 'AI Unsupported'
+    : isAiDetectionRunning
+      ? 'Detecting...'
+      : isAiDetectionReady
+        ? 'Re-run AI'
+        : 'Run AI';
+  const aiDetectionButtonTitle = aiDetectionSupport.supported
+    ? aiDetectionModeDescription
+    : aiDetectionSupport.message ?? 'AI detection is not supported for this PDF.';
 
   // Load search history on mount and when expanded
   useEffect(() => {
@@ -363,6 +387,19 @@ export function SemanticSearchBar({
             <span>Indexed</span>
           </div>
         )}
+
+        <button
+          type="button"
+          className={`semantic-search-ai-btn${aiDetectionSupport.supported ? '' : ' semantic-search-ai-btn--unsupported'}`}
+          onClick={() => {
+            void onRunAiDetection();
+          }}
+          disabled={disabled || isAiDetectionRunning || !aiDetectionSupport.supported}
+          title={aiDetectionButtonTitle}
+        >
+          <SparkIcon />
+          <span>{aiDetectionButtonLabel}</span>
+        </button>
       </div>
     </div>
   );
@@ -420,6 +457,17 @@ function IndexIcon(): JSX.Element {
     <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true">
       <rect x="2" y="2" width="14" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
       <path d="M5 6h8M5 9h8M5 12h5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SparkIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 18 18" width="14" height="14" aria-hidden="true">
+      <path
+        d="M9 2.5l1.4 3.1 3.1 1.4-3.1 1.4L9 11.5 7.6 8.4 4.5 7l3.1-1.4L9 2.5zM13.5 10.5l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8.8-1.7z"
+        fill="currentColor"
+      />
     </svg>
   );
 }

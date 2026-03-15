@@ -13,7 +13,6 @@ import type {
 import type { TableModel } from '../viewer/htmlStructuredDataRenderer';
 import type { SemanticSearchResult } from '../search';
 import type { GeminiDocumentExtraction } from '../storage/geminiExtractionStorage';
-import type { ExtractState, GeminiExtractionState } from '../hooks';
 import { CanvasPageWithOverlay } from './CanvasPageWithOverlay';
 import { StructuredChartOverlay } from './StructuredChartOverlay';
 import { StructuredExtractPlayground } from './StructuredExtractPlayground';
@@ -27,9 +26,6 @@ interface ViewerColumnProps {
   state: LoadState;
   readyDocument: PDFDocument | null;
   documentId: string;
-  extractState: ExtractState;
-  geminiExtractionState: GeminiExtractionState;
-  aiDetectionModeDescription: string;
   getCanvasRef: (pageNumber: number) => (element: HTMLCanvasElement | null) => void;
   layoutJson: string;
   htmlFriendlyJson: string;
@@ -56,7 +52,6 @@ interface ViewerColumnProps {
   semanticSearchResults: SemanticSearchResult[];
   activeSemanticResultIndex: number;
   geminiExtraction: GeminiDocumentExtraction | null;
-  onRunAiDetection: () => Promise<void>;
   enableFormulaHighlight: boolean;
   enableTableHighlight: boolean;
   enableWebSearch: boolean;
@@ -70,9 +65,6 @@ export function ViewerColumn({
   state,
   readyDocument,
   documentId,
-  extractState,
-  geminiExtractionState,
-  aiDetectionModeDescription,
   getCanvasRef,
   layoutJson,
   htmlFriendlyJson,
@@ -99,7 +91,6 @@ export function ViewerColumn({
   semanticSearchResults,
   activeSemanticResultIndex,
   geminiExtraction,
-  onRunAiDetection,
   enableFormulaHighlight,
   enableTableHighlight,
   enableWebSearch,
@@ -107,43 +98,9 @@ export function ViewerColumn({
   onInteractiveWidgetGenerationActivityChange,
   onInlineSuggestionAnalysisActivityChange
 }: ViewerColumnProps): JSX.Element {
-  const isAiDetectionRunning = extractState.status === 'loading' || geminiExtractionState.status === 'loading';
-  const isAiDetectionReady = extractState.status === 'ready' && geminiExtractionState.status === 'ready';
-
   return (
     <div className="viewer-column">
       <div className="viewer-inner">
-        {readyDocument && (
-          <div className="ai-detection-banner">
-            <div className="ai-detection-banner__copy">
-              <div className="ai-detection-banner__title">
-                {isAiDetectionRunning
-                  ? 'AI detection is running'
-                  : isAiDetectionReady
-                    ? 'AI detection is ready'
-                    : 'AI detection is manual by default'}
-              </div>
-              <div className="ai-detection-banner__text">{aiDetectionModeDescription}</div>
-              <div className="ai-detection-banner__meta">
-                Structured extract: {extractState.status}. Layout detection: {geminiExtractionState.status}.
-              </div>
-            </div>
-            <button
-              type="button"
-              className="ai-detection-banner__button"
-              onClick={() => {
-                void onRunAiDetection();
-              }}
-              disabled={isAiDetectionRunning}
-            >
-              {isAiDetectionRunning
-                ? 'Running...'
-                : isAiDetectionReady
-                  ? 'Re-run AI Detection'
-                  : 'Run AI Detection'}
-            </button>
-          </div>
-        )}
         <section className="viewer-pane">
           {viewMode === 'canvas' || viewMode === 'focus-pdf' ? (
             <div className="canvas-wrapper">

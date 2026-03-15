@@ -8,6 +8,7 @@ import {
   parseGeminiExtractionResponse
 } from '../storage/geminiExtractionStorage';
 import { getRewriteApiKey, getRewriteModel, getRewriteProvider, setRewriteApiKey } from '../utils/rewriteProviderSettings';
+import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 
 const EXTRACTION_PROMPT = `Convert this PDF to JSON format with the following structure:
 {
@@ -44,6 +45,7 @@ export interface UseGeminiExtractionOptions {
   documentHash: string | null;
   pdfData: ArrayBuffer | null;
   autoExtract?: boolean;
+  aiDetectionSupport?: AiDetectionSupport;
 }
 
 export interface UseGeminiExtractionResult {
@@ -55,7 +57,8 @@ export interface UseGeminiExtractionResult {
 export function useGeminiExtraction({
   documentHash,
   pdfData,
-  autoExtract = false
+  autoExtract = false,
+  aiDetectionSupport = { supported: true }
 }: UseGeminiExtractionOptions): UseGeminiExtractionResult {
   const [state, setState] = useState<GeminiExtractionState>({
     status: 'idle',
@@ -65,6 +68,11 @@ export function useGeminiExtraction({
   // Load cached extraction when document hash changes
   useEffect(() => {
     if (!documentHash) {
+      setState({ status: 'idle', extraction: null });
+      return;
+    }
+
+    if (!aiDetectionSupport.supported) {
       setState({ status: 'idle', extraction: null });
       return;
     }
@@ -106,9 +114,18 @@ export function useGeminiExtraction({
     return () => {
       cancelled = true;
     };
-  }, [documentHash]);
+  }, [aiDetectionSupport.supported, autoExtract, documentHash, pdfData]);
 
   const triggerExtraction = useCallback(async () => {
+    if (!aiDetectionSupport.supported) {
+      setState({
+        status: 'error',
+        extraction: null,
+        error: aiDetectionSupport.message ?? 'AI detection is not supported for this PDF.'
+      });
+      return;
+    }
+
     if (!documentHash || !pdfData) {
       setState({ status: 'error', extraction: null, error: 'No document loaded' });
       return;
@@ -204,7 +221,7 @@ export function useGeminiExtraction({
       console.error('[GeminiExtraction] Error:', message);
       setState({ status: 'error', extraction: null, error: message });
     }
-  }, [documentHash, pdfData]);
+  }, [aiDetectionSupport, documentHash, pdfData]);
 
   const clearExtraction = useCallback(() => {
     setState({ status: 'idle', extraction: null });

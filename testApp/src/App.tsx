@@ -123,6 +123,7 @@ export default function App(): JSX.Element {
     loadedFileName,
     loadedFileHash,
     loadedPdfData,
+    aiDetectionSupport,
     extractState,
     extractedTables,
     extractDocument,
@@ -157,13 +158,17 @@ export default function App(): JSX.Element {
   } = useGeminiExtraction({
     documentHash: loadedFileHash || null,
     pdfData: loadedPdfData,
-    autoExtract: shouldAutoRunLayoutDetection(aiDetectionMode)
+    autoExtract: shouldAutoRunLayoutDetection(aiDetectionMode),
+    aiDetectionSupport
   });
 
   const handleRunAiDetection = useCallback(async () => {
+    if (!aiDetectionSupport.supported) {
+      return;
+    }
     await triggerStructuredExtract();
     await triggerGeminiExtraction();
-  }, [triggerGeminiExtraction, triggerStructuredExtract]);
+  }, [aiDetectionSupport.supported, triggerGeminiExtraction, triggerStructuredExtract]);
 
   const readyDocument = state.status === 'ready' ? state.document : null;
   const structuredTables = useMemo<TableModel[]>(() => {
@@ -922,6 +927,12 @@ export default function App(): JSX.Element {
           disabled={state.status !== 'ready'}
           activeResultIndex={activeSemanticResultIndex}
           onNavigateResult={handleNavigateSemanticResult}
+          documentId={loadedFileName || 'document'}
+          extractState={extractState}
+          geminiExtractionState={geminiExtractionState}
+          aiDetectionSupport={aiDetectionSupport}
+          aiDetectionModeDescription={aiDetectionModeDescription}
+          onRunAiDetection={handleRunAiDetection}
         />
       )}
       {state.status === 'idle' ? (
@@ -937,9 +948,6 @@ export default function App(): JSX.Element {
           state={state}
           readyDocument={readyDocument}
           documentId={loadedFileName || 'document'}
-          extractState={extractState}
-          geminiExtractionState={geminiExtractionState}
-          aiDetectionModeDescription={aiDetectionModeDescription}
           getCanvasRef={getCanvasRef}
           layoutJson={layoutJson}
           htmlFriendlyJson={htmlFriendlyJson}
@@ -1016,8 +1024,8 @@ export default function App(): JSX.Element {
           canUseZoom={canUseZoom}
           extractState={extractState}
           geminiExtractionState={geminiExtractionState}
+          aiDetectionSupport={aiDetectionSupport}
           aiDetectionModeDescription={aiDetectionModeDescription}
-          onRunAiDetection={handleRunAiDetection}
           enableFormulaHighlight={enableFormulaHighlight}
           setEnableFormulaHighlight={setEnableFormulaHighlight}
           enableTableHighlight={enableTableHighlight}

@@ -1468,6 +1468,38 @@ header p {
   border-radius: 6px;
 }
 
+.semantic-search-ai-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(14, 116, 144, 0.16);
+  border-radius: 9px;
+  background: rgba(14, 116, 144, 0.08);
+  color: #155e75;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.semantic-search-ai-btn:hover:not(:disabled) {
+  background: rgba(14, 116, 144, 0.14);
+}
+
+.semantic-search-ai-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.semantic-search-ai-btn--unsupported {
+  border-color: rgba(180, 83, 9, 0.18);
+  background: rgba(245, 158, 11, 0.12);
+  color: #92400e;
+}
+
 /* Search History Button */
 .semantic-search-history-btn {
   display: flex;

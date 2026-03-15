@@ -22,6 +22,7 @@ import {
   getStructuredExtractProvider,
   setStructuredExtractApiKey
 } from '../utils/structuredExtractSettings';
+import { analyzeAiDetectionSupport, type AiDetectionSupport } from '../utils/aiDetectionSupport';
 
 const EXTRACT_CACHE_SCHEMA_VERSION = 4;
 
@@ -37,6 +38,7 @@ export interface UseDocumentLoaderResult {
   loadedFileName: string;
   loadedFileHash: string;
   loadedPdfData: ArrayBuffer | null;
+  aiDetectionSupport: AiDetectionSupport;
   extractState: ExtractState;
   extractedTables: ExtractedTable[];
   extractDocument: StructuredDataDocument | null;
@@ -65,6 +67,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
   const [loadedFileHash, setLoadedFileHash] = useState<string>('');
   const [loadedFile, setLoadedFile] = useState<File | null>(null);
   const [loadedPdfData, setLoadedPdfData] = useState<ArrayBuffer | null>(null);
+  const [aiDetectionSupport, setAiDetectionSupport] = useState<AiDetectionSupport>({ supported: true });
   const [extractState, setExtractState] = useState<ExtractState>({ status: 'idle' });
   const [extractedTables, setExtractedTables] = useState<ExtractedTable[]>([]);
   const [extractDocument, setExtractDocument] = useState<StructuredDataDocument | null>(null);
@@ -203,6 +206,11 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
 
   const runExtract = useCallback(
     async (file: File, fileHashOverride?: string) => {
+      if (!aiDetectionSupport.supported) {
+        setExtractState({ status: 'idle' });
+        return;
+      }
+
       setExtractState({ status: 'loading' });
       setExtractedTables([]);
       setExtractDocument(null);
@@ -261,7 +269,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         });
       }
     },
-    [handleExtractResponse, loadCachedExtractForFile, refreshCachedFiles]
+    [aiDetectionSupport.supported, handleExtractResponse, loadCachedExtractForFile, refreshCachedFiles]
   );
 
   const openFile = useCallback(
@@ -275,13 +283,19 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
       try {
         const [bytes, fileHash] = await Promise.all([file.arrayBuffer(), computeFileHash(file)]);
         const document = PDFDocument.from(bytes);
+        const nextAiDetectionSupport = analyzeAiDetectionSupport(document);
         setState({ status: 'ready', document });
         setLoadedFile(file);
         setLoadedFileName(file.name);
         setLoadedFileHash(fileHash);
         setLoadedPdfData(bytes);
+        setAiDetectionSupport(nextAiDetectionSupport);
         resetExtractResults();
         onDocumentLoad?.(document);
+
+        if (!nextAiDetectionSupport.supported) {
+          return;
+        }
 
         const loadedFromCache = await loadCachedExtractForFile(fileHash);
         if (autoExtract && !loadedFromCache) {
@@ -289,6 +303,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unable to parse PDF.';
+        setAiDetectionSupport({ supported: true });
         setState({ status: 'error', message });
       } finally {
         setIsOpeningFile(false);
@@ -344,6 +359,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     loadedFileName,
     loadedFileHash,
     loadedPdfData,
+    aiDetectionSupport,
     extractState,
     extractedTables,
     extractDocument,
