@@ -66,6 +66,7 @@ import {
   parseInteractiveWidgetSpec
 } from '../utils/interactiveWidget';
 import { buildMathDetectionPrompt, parseMathDetectionResponse } from '../utils/mathDetection';
+import { parsePopupTextSegments } from '../utils/popupTextSegments';
 
 const HIGHLIGHT_PADDING = 12;
 const TABLE_HIT_TOLERANCE = 6;
@@ -2090,7 +2091,7 @@ function ConnectionIcon(): JSX.Element {
 }
 
 /**
- * Renders text with clickable citation references like [15], [1,2], [3-5]
+ * Renders paragraph popup text with clickable citations and URLs.
  */
 interface CitationTextProps {
   text: string;
@@ -2101,41 +2102,7 @@ interface CitationTextProps {
 }
 
 function CitationText({ text, onCitationClick, hasExtraction, paragraphText, bounds }: CitationTextProps): JSX.Element {
-  // Match citation patterns: [1], [15], [1,2,3], [1-5], [1, 2], etc.
-  const citationPattern = /\[(\d+(?:\s*[-,]\s*\d+)*)\]/g;
-  const parts: Array<{ type: 'text' | 'citation'; content: string; numbers?: string[] }> = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = citationPattern.exec(text)) !== null) {
-    // Add text before the citation
-    if (match.index > lastIndex) {
-      parts.push({ type: 'text', content: text.slice(lastIndex, match.index) });
-    }
-    // Parse numbers from citation (handle comma and range patterns)
-    const numbersStr = match[1];
-    const numbers = numbersStr.split(/\s*,\s*/).flatMap((part) => {
-      // Handle ranges like "3-5"
-      const rangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/);
-      if (rangeMatch) {
-        const start = parseInt(rangeMatch[1], 10);
-        const end = parseInt(rangeMatch[2], 10);
-        const range: string[] = [];
-        for (let i = start; i <= end; i++) {
-          range.push(String(i));
-        }
-        return range;
-      }
-      return [part.trim()];
-    });
-    parts.push({ type: 'citation', content: match[0], numbers });
-    lastIndex = match.index + match[0].length;
-  }
-
-  // Add remaining text
-  if (lastIndex < text.length) {
-    parts.push({ type: 'text', content: text.slice(lastIndex) });
-  }
+  const parts = parsePopupTextSegments(text);
 
   if (parts.length === 0) {
     return <>{text}</>;
@@ -2147,9 +2114,24 @@ function CitationText({ text, onCitationClick, hasExtraction, paragraphText, bou
         if (part.type === 'text') {
           return <span key={index}>{part.content}</span>;
         }
+        if (part.type === 'url') {
+          return (
+            <a
+              key={index}
+              className="popup-url-link"
+              href={part.href}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => event.stopPropagation()}
+              title={part.href}
+            >
+              {part.content}
+            </a>
+          );
+        }
         // For citations, make them clickable
         // If multiple numbers, clicking shows the first one for now
-        const firstNumber = part.numbers?.[0] ?? '';
+        const firstNumber = part.numbers[0] ?? '';
         return (
           <span
             key={index}

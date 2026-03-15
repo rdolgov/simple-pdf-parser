@@ -4302,7 +4302,8 @@ footer code {
 }
 
 /* Citation links in highlighted paragraphs */
-.citation-link {
+.citation-link,
+.popup-url-link {
   color: #2563eb;
   text-decoration: underline;
   text-decoration-style: dotted;
@@ -4314,7 +4315,12 @@ footer code {
   margin: 0 -2px;
 }
 
-.citation-link:hover {
+.popup-url-link {
+  word-break: break-all;
+}
+
+.citation-link:hover,
+.popup-url-link:hover {
   color: #1d4ed8;
   background-color: rgba(37, 99, 235, 0.1);
   text-decoration-style: solid;
