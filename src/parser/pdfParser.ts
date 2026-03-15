@@ -2190,7 +2190,7 @@ export class PDFParser {
           }
           visitedImageKeys.add(key);
           if (!images.has(resourceName)) {
-            images.set(resourceName, this.buildImageResource(resourceObject));
+            images.set(resourceName, this.buildImageResource(resourceObject, objects, rawContent));
           }
         }
       }
@@ -2343,7 +2343,11 @@ export class PDFParser {
     return /\/Subtype\s*\/Image\b/.test(dictionarySource);
   }
 
-  private buildImageResource(imageObject: PDFRawObject): ImageResource {
+  private buildImageResource(
+    imageObject: PDFRawObject,
+    objects: Map<string, PDFRawObject>,
+    rawContent: string
+  ): ImageResource {
     const widthMatch = imageObject.dictionarySource.match(/\/Width\s+([0-9]+(?:\.[0-9]+)?)/);
     const heightMatch = imageObject.dictionarySource.match(/\/Height\s+([0-9]+(?:\.[0-9]+)?)/);
     const widthValue = widthMatch ? Number(widthMatch[1]) : undefined;
@@ -2351,6 +2355,7 @@ export class PDFParser {
 
     const bitsMatch = imageObject.dictionarySource.match(/\/BitsPerComponent\s+(\d+)/);
     const colorMatch = imageObject.dictionarySource.match(/\/ColorSpace\s+\/([A-Za-z0-9]+)/);
+    const indexedColorSpace = this.parseIndexedColorSpace(imageObject.dictionarySource, objects, rawContent);
     const imageMask = /\/ImageMask\s+true\b/.test(imageObject.dictionarySource);
     let decodeParms: Record<string, number | boolean> | undefined;
     const decodeMatch = imageObject.dictionarySource.match(/\/DecodeParms\s*<<([\s\S]*?)>>/);
@@ -2401,13 +2406,60 @@ export class PDFParser {
       width: Number.isFinite(widthValue) ? widthValue : undefined,
       height: Number.isFinite(heightValue) ? heightValue : undefined,
       bitsPerComponent: bitsMatch ? Number(bitsMatch[1]) : undefined,
-      colorSpace: colorMatch ? colorMatch[1] : undefined,
+      colorSpace: indexedColorSpace ? 'Indexed' : colorMatch ? colorMatch[1] : undefined,
+      indexedColorSpace,
       filters: this.extractFilters(imageObject.dictionarySource),
       imageMask,
       decodeParms,
       decode,
       softMask
     };
+  }
+
+  private parseIndexedColorSpace(
+    dictionarySource: string,
+    objects: Map<string, PDFRawObject>,
+    rawContent: string
+  ): ImageResource['indexedColorSpace'] | undefined {
+    const match = dictionarySource.match(
+      /\/ColorSpace\s*\[\s*\/Indexed\s+\/([A-Za-z0-9]+)\s+(\d+)\s+((?:\d+\s+\d+\s+R)|(?:<[^>]*>))\s*\]/
+    );
+    if (!match) {
+      return undefined;
+    }
+
+    const base = match[1];
+    const highValue = Number(match[2]);
+    const lookupToken = match[3];
+
+    if (!Number.isFinite(highValue) || highValue < 0) {
+      return undefined;
+    }
+
+    let lookup: Uint8Array | undefined;
+
+    const refMatch = lookupToken.match(/^(\d+)\s+(\d+)\s+R$/);
+    if (refMatch) {
+      const key = objectKey(Number(refMatch[1]), Number(refMatch[2]));
+      const lookupObject = objects.get(key);
+      if (lookupObject) {
+        const resolved = this.resolveStreamContent(lookupObject, objects, rawContent);
+        if (resolved) {
+          lookup = latin1ToUint8(resolved);
+        }
+      }
+    } else {
+      const hexMatch = lookupToken.match(/^<([0-9A-Fa-f]*)>$/);
+      if (hexMatch) {
+        lookup = hexToBytes(hexMatch[1]);
+      }
+    }
+
+    if (!lookup || lookup.length === 0) {
+      return undefined;
+    }
+
+    return { base, highValue, lookup };
   }
 
   private buildFontResource(
@@ -3545,7 +3597,7 @@ export class PDFParser {
         const maskKey = objectKey(resource.softMask.id, resource.softMask.generation);
         const maskObject = objects.get(maskKey);
         if (maskObject) {
-          const maskResource = this.buildImageResource(maskObject);
+          const maskResource = this.buildImageResource(maskObject, objects, rawContent);
           if (maskResource) {
             const renderedMask = this.renderImageResource(maskResource, objects, rawContent, true);
             let maskPixels: { width: number; height: number; data: Uint8ClampedArray } | undefined =

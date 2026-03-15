@@ -51,6 +51,11 @@ export interface ImageResource {
   height?: number;
   bitsPerComponent?: number;
   colorSpace?: string;
+  indexedColorSpace?: {
+    base: string;
+    highValue: number;
+    lookup: Uint8Array;
+  };
   filters: string[];
   imageMask?: boolean;
   decodeParms?: Record<string, number | boolean>;

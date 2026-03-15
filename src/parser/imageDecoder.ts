@@ -127,7 +127,10 @@ export function decodeFlateImage(
   const width = resource.width ?? 0;
   const height = resource.height ?? 0;
   const bits = resource.bitsPerComponent ?? 8;
-  const components = resolveColorComponentCount(resource.colorSpace);
+  const indexedColorSpace = resource.indexedColorSpace;
+  const components = indexedColorSpace
+    ? 1
+    : resolveColorComponentCount(resource.colorSpace);
 
   if (!(width > 0) || !(height > 0) || bits !== 8 || !components) {
     return undefined;
@@ -157,6 +160,32 @@ export function decodeFlateImage(
   };
 
   const totalPixels = width * height;
+  if (indexedColorSpace) {
+    const baseComponents = resolveColorComponentCount(indexedColorSpace.base);
+    if (!baseComponents || indexedColorSpace.lookup.length < baseComponents) {
+      return undefined;
+    }
+
+    const maxIndex = Math.min(indexedColorSpace.highValue, Math.floor(indexedColorSpace.lookup.length / baseComponents) - 1);
+    for (let i = 0; i < totalPixels; i += 1) {
+      const paletteIndex = Math.max(0, Math.min(decoded[i], maxIndex));
+      const paletteOffset = paletteIndex * baseComponents;
+      const base = i * 4;
+      if (baseComponents === 1) {
+        const value = indexedColorSpace.lookup[paletteOffset] ?? 0;
+        rgba[base] = value;
+        rgba[base + 1] = value;
+        rgba[base + 2] = value;
+      } else {
+        rgba[base] = indexedColorSpace.lookup[paletteOffset] ?? 0;
+        rgba[base + 1] = indexedColorSpace.lookup[paletteOffset + 1] ?? rgba[base];
+        rgba[base + 2] = indexedColorSpace.lookup[paletteOffset + 2] ?? rgba[base + 1];
+      }
+      rgba[base + 3] = 255;
+    }
+    return { width, height, data: rgba };
+  }
+
   switch (components) {
     case 1: {
       for (let i = 0; i < totalPixels; i += 1) {

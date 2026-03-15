@@ -42,6 +42,19 @@ function parseNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseCropArg(value) {
+  if (!value) {
+    return undefined;
+  }
+
+  const [x, y, width, height] = value.split(',').map((part) => Number(part));
+  if (![x, y, width, height].every((entry) => Number.isFinite(entry))) {
+    throw new Error(`Invalid crop rectangle: ${value}`);
+  }
+
+  return { x, y, width, height };
+}
+
 async function runCommand(command, commandArgs, options = {}) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(command, commandArgs, {
@@ -299,8 +312,9 @@ async function main() {
   const pdfPathArg = requireArg(args, 'pdf');
   const pdfPath = isAbsolute(pdfPathArg) ? pdfPathArg : resolve(repoRoot, pdfPathArg);
   const pageNumber = Math.max(1, Math.floor(parseNumber(args.get('page'), 1)));
-  const matchPattern = requireArg(args, 'match');
+  const matchPattern = args.get('match');
   const matchIndex = Math.max(0, Math.floor(parseNumber(args.get('index'), 0)));
+  const explicitCrop = parseCropArg(args.get('crop'));
   const outputArg = args.get('output') ?? resolve(tmpdir(), 'formula-check.png');
   const outputPath = isAbsolute(outputArg) ? outputArg : resolve(repoRoot, outputArg);
   const contextX = Math.max(0, parseNumber(args.get('context-x'), 36));
@@ -314,14 +328,16 @@ async function main() {
   await runCommand('npm', ['run', 'build:lib']);
   await runCommand('npm', ['--prefix', 'testApp', 'run', 'build']);
 
-  const cropRect = await computeCropRect({
-    pdfPath,
-    pageNumber,
-    matchPattern,
-    matchIndex,
-    contextX,
-    contextY
-  });
+  const cropRect =
+    explicitCrop ??
+    (await computeCropRect({
+      pdfPath,
+      pageNumber,
+      matchPattern: requireArg(args, 'match'),
+      matchIndex,
+      contextX,
+      contextY
+    }));
 
   const { server, port: activePort } = await startFormulaCheckServer({ port });
 

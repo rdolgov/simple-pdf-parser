@@ -168,6 +168,31 @@ ET
     }
   });
 
+  it('decodes indexed-color images without duplicating narrow RGB bands', () => {
+    const fixtureUrl = new URL('../pdfs/platonicspaces.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(8);
+
+    expect(page).toBeDefined();
+    expect(page!.imageItems.length).toBeGreaterThan(0);
+
+    const image = page!.imageItems[0];
+    expect(image.sourceWidth).toBe(1024);
+    expect(image.sourceHeight).toBe(732);
+    expect(image.pixels).toBeDefined();
+    expect(image.pixels!.width).toBe(1024);
+    expect(image.pixels!.height).toBe(732);
+
+    const topLeft = readPixel(image.pixels!, 0, 0);
+    const darkPatch = readPixel(image.pixels!, 100, 100);
+    const centerPatch = readPixel(image.pixels!, 512, 366);
+
+    expect(topLeft).toEqual([192, 192, 192, 255]);
+    expect(darkPatch).toEqual([8, 8, 8, 255]);
+    expect(centerPatch).toEqual([160, 160, 160, 255]);
+  });
+
   it('merges adjacent glyph runs on the same baseline', () => {
     const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);
@@ -215,3 +240,17 @@ ET
     expect(merged).toBeUndefined();
   });
 });
+
+function readPixel(
+  pixels: NonNullable<PDFDocument['pages'][number]['imageItems'][number]['pixels']>,
+  x: number,
+  y: number
+): [number, number, number, number] {
+  const offset = (y * pixels.width + x) * 4;
+  return [
+    pixels.data[offset] ?? 0,
+    pixels.data[offset + 1] ?? 0,
+    pixels.data[offset + 2] ?? 0,
+    pixels.data[offset + 3] ?? 0
+  ];
+}
