@@ -265,6 +265,28 @@ ET
     ).toBe(true);
   });
 
+  it('exposes embedded Type1C font programs and glyph codes for MacKay Computer Modern text', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const fontResources = document.getFontResources();
+    const page = document.getPage(14);
+
+    expect(Object.keys(fontResources).length).toBeGreaterThan(0);
+    expect(Object.values(fontResources).some((resource) => resource.fontFileSubtype === 'Type1C')).toBe(true);
+
+    const heading = page?.textItems.find((item) => item.text.includes('Approximating'));
+
+    expect(heading).toBeDefined();
+    expect(heading?.fontResourceKey).toBeDefined();
+    expect(heading?.glyphSpans?.length).toBeGreaterThan(0);
+    expect(heading?.glyphSpans?.every((span) => typeof span.glyphCode === 'number')).toBe(true);
+
+    const headingFont = heading?.fontResourceKey ? fontResources[heading.fontResourceKey] : undefined;
+    expect(headingFont?.data.length ?? 0).toBeGreaterThan(1000);
+    expect(headingFont?.baseFontName).toMatch(/CM/);
+  });
+
   it('repairs split prose words and ligatures on sampled MacKay body pages', () => {
     const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);

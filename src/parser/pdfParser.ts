@@ -101,6 +101,10 @@ import {
   extractEncodingInfo,
   glyphNameToUnicode
 } from './fontEncoding.js';
+import {
+  extractFontDescriptorMetrics,
+  resolveEmbeddedFontProgramReference
+} from './embeddedFontExtractor.js';
 
 // Import image decoding functions
 import {
@@ -134,8 +138,11 @@ export class PDFParser {
     const content = this.ensureString(source);
     this.validateHeader(content);
     const objects = this.extractObjects(content);
-    const pages = this.buildPages(objects, content);
-    return { pages };
+    const { pages, fontResources } = this.buildPages(objects, content);
+    return {
+      pages,
+      fontResources
+    };
   }
 
   private ensureString(source: ParseSource): string {
@@ -606,8 +613,12 @@ export class PDFParser {
     return orderedPages;
   }
 
-  private buildPages(objects: Map<string, PDFRawObject>, rawContent: string): PDFPage[] {
+  private buildPages(
+    objects: Map<string, PDFRawObject>,
+    rawContent: string
+  ): { pages: PDFPage[]; fontResources?: PDFLayout['fontResources'] } {
     const pages: PDFPage[] = [];
+    const fontResources: NonNullable<PDFLayout['fontResources']> = {};
     const allPageObjects = Array.from(objects.values())
       .filter((object) => this.isPageObject(object.dictionarySource));
 
@@ -625,7 +636,7 @@ export class PDFParser {
       const extracted = this.parseTextStream(rawContent, fallbackContext, objects, rawContent);
       const finalizedTextItems = this.finalizeTextItems(extracted.textItems);
       if (extracted.textItems.length === 0 && extracted.imageItems.length === 0) {
-        return [];
+        return { pages: [] };
       }
 
       pages.push({
@@ -638,13 +649,14 @@ export class PDFParser {
         size: this.defaultPageSize()
       });
 
-      return pages;
+      return { pages };
     }
 
     let pageNumber = 1;
     for (const pageObject of pageObjects) {
       const contentRefs = this.extractContentRefs(pageObject.dictionarySource);
       const resourceContext = this.extractResourceContext(pageObject, objects, rawContent);
+      this.collectEmbeddedFontResources(fontResources, resourceContext.fonts);
       const textItems: PDFTextItem[] = [];
       const imageItems: PDFImageItem[] = [];
       const lineItems: PDFLineItem[] = [];
@@ -685,7 +697,10 @@ export class PDFParser {
       pageNumber += 1;
     }
 
-    return pages;
+    return {
+      pages,
+      fontResources: Object.keys(fontResources).length > 0 ? fontResources : undefined
+    };
   }
 
   private parseTextStream(
@@ -1970,6 +1985,7 @@ export class PDFParser {
       baselineStart: textStart,
       baselineEnd: textEnd,
       font: fontFamily,
+      fontResourceKey: state.font,
       fontSize: state.fontSize,
       fontWeight: this.extractFontWeight(baseFontName),
       fontStyle: this.extractFontStyle(baseFontName),
@@ -2115,6 +2131,7 @@ export class PDFParser {
     const normalizedFontSize = Number.isFinite(fontSize) ? Math.abs(fontSize) : DEFAULT_FONT_SIZE;
     const glyphSpans = this.buildGlyphSpans(
       glyphTexts,
+      glyphCodes.length === glyphTexts.length ? glyphCodes : undefined,
       glyphUnitAdvances,
       font,
       normalizedFontSize,
@@ -2131,12 +2148,17 @@ export class PDFParser {
 
   private buildGlyphSpans(
     glyphTexts: string[],
+    glyphCodes: number[] | undefined,
     glyphUnitAdvances: number[],
     font: FontResource | undefined,
     fontSize: number,
     state: TextState
   ): PDFGlyphSpan[] | undefined {
     if (glyphTexts.length === 0 || glyphTexts.length !== glyphUnitAdvances.length) {
+      return undefined;
+    }
+
+    if (glyphCodes && glyphTexts.length !== glyphCodes.length) {
       return undefined;
     }
 
@@ -2156,10 +2178,14 @@ export class PDFParser {
         state.charSpacing + (text === ' ' ? state.wordSpacing : 0);
       const advance = (glyphAdvance + spacingAdvance) * state.horizontalScale;
 
-      spans.push({
+      const span: PDFGlyphSpan = {
         text,
         advance: Number.isFinite(advance) ? advance : 0
-      });
+      };
+      if (glyphCodes) {
+        span.glyphCode = glyphCodes[index];
+      }
+      spans.push(span);
     }
 
     return spans.length > 0 ? spans : undefined;
@@ -2771,6 +2797,24 @@ export class PDFParser {
       }
     }
 
+    const embeddedFontReference = resolveEmbeddedFontProgramReference(fontObject, objects);
+    if (embeddedFontReference) {
+      const programStream = this.resolveStreamContent(embeddedFontReference.fontFileObject, objects, rawContent);
+      if (programStream) {
+        resource.embeddedFont = {
+          fontKey: objectKey(fontObject.id, fontObject.generation),
+          objectKey: objectKey(fontObject.id, fontObject.generation),
+          baseFontName,
+          subtype: fontObject.dictionarySource.match(/\/Subtype\s*\/([A-Za-z0-9]+)/)?.[1],
+          fontFileKey: embeddedFontReference.fontFileKey,
+          fontFileKind: embeddedFontReference.fontFileKind,
+          fontFileSubtype: embeddedFontReference.fontFileSubtype,
+          data: latin1ToUint8(programStream),
+          descriptor: extractFontDescriptorMetrics(embeddedFontReference.descriptor.dictionarySource)
+        };
+      }
+    }
+
     const toUnicodeMatch = fontObject.dictionarySource.match(/\/ToUnicode\s+(\d+)\s+(\d+)\s+R/);
     if (toUnicodeMatch) {
       const objectId = Number(toUnicodeMatch[1]);
@@ -2815,6 +2859,15 @@ export class PDFParser {
       }
       if (widthInfo.defaultWidth !== undefined) {
         resource.defaultWidth = widthInfo.defaultWidth;
+      }
+    }
+
+    if (resource.embeddedFont) {
+      if (resource.glyphWidths && resource.glyphWidths.size > 0) {
+        resource.embeddedFont.glyphWidths = Object.fromEntries(resource.glyphWidths.entries());
+      }
+      if (resource.defaultWidth !== undefined) {
+        resource.embeddedFont.defaultWidth = resource.defaultWidth;
       }
     }
 
@@ -3932,6 +3985,18 @@ export class PDFParser {
         glyphSpans: item.glyphSpans?.map((span) => ({ ...span }))
       };
     });
+  }
+
+  private collectEmbeddedFontResources(
+    target: NonNullable<PDFLayout['fontResources']>,
+    fonts: FontMap
+  ): void {
+    for (const [fontKey, resource] of fonts.entries()) {
+      if (!resource.embeddedFont || target[fontKey]) {
+        continue;
+      }
+      target[fontKey] = resource.embeddedFont;
+    }
   }
 
   private renderImageResource(

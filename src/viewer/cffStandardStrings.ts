@@ -1,0 +1,186 @@
+const CFF_STANDARD_STRING_VALUES = [
+  '.notdef', 'space', 'exclam', 'quotedbl', 'numbersign', 'dollar', 'percent',
+  'ampersand', 'quoteright', 'parenleft', 'parenright', 'asterisk', 'plus',
+  'comma', 'hyphen', 'period', 'slash', 'zero', 'one', 'two', 'three', 'four',
+  'five', 'six', 'seven', 'eight', 'nine', 'colon', 'semicolon', 'less',
+  'equal', 'greater', 'question', 'at', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+  'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W',
+  'X', 'Y', 'Z', 'bracketleft', 'backslash', 'bracketright', 'asciicircum',
+  'underscore', 'quoteleft', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+  'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y',
+  'z', 'braceleft', 'bar', 'braceright', 'asciitilde', 'exclamdown', 'cent',
+  'sterling', 'fraction', 'yen', 'florin', 'section', 'currency',
+  'quotesingle', 'quotedblleft', 'guillemotleft', 'guilsinglleft',
+  'guilsinglright', 'fi', 'fl', 'endash', 'dagger', 'daggerdbl',
+  'periodcentered', 'paragraph', 'bullet', 'quotesinglbase', 'quotedblbase',
+  'quotedblright', 'guillemotright', 'ellipsis', 'perthousand', 'questiondown',
+  'grave', 'acute', 'circumflex', 'tilde', 'macron', 'breve', 'dotaccent',
+  'dieresis', 'ring', 'cedilla', 'hungarumlaut', 'ogonek', 'caron', 'emdash',
+  'AE', 'ordfeminine', 'Lslash', 'Oslash', 'OE', 'ordmasculine', 'ae',
+  'dotlessi', 'lslash', 'oslash', 'oe', 'germandbls', 'onesuperior',
+  'logicalnot', 'mu', 'trademark', 'Eth', 'onehalf', 'plusminus', 'Thorn',
+  'onequarter', 'divide', 'brokenbar', 'degree', 'thorn', 'threequarters',
+  'twosuperior', 'registered', 'minus', 'eth', 'multiply', 'threesuperior',
+  'copyright', 'Aacute', 'Acircumflex', 'Adieresis', 'Agrave', 'Aring',
+  'Atilde', 'Ccedilla', 'Eacute', 'Ecircumflex', 'Edieresis', 'Egrave',
+  'Iacute', 'Icircumflex', 'Idieresis', 'Igrave', 'Ntilde', 'Oacute',
+  'Ocircumflex', 'Odieresis', 'Ograve', 'Otilde', 'Scaron', 'Uacute',
+  'Ucircumflex', 'Udieresis', 'Ugrave', 'Yacute', 'Ydieresis', 'Zcaron',
+  'aacute', 'acircumflex', 'adieresis', 'agrave', 'aring', 'atilde',
+  'ccedilla', 'eacute', 'ecircumflex', 'edieresis', 'egrave', 'iacute',
+  'icircumflex', 'idieresis', 'igrave', 'ntilde', 'oacute', 'ocircumflex',
+  'odieresis', 'ograve', 'otilde', 'scaron', 'uacute', 'ucircumflex',
+  'udieresis', 'ugrave', 'yacute', 'ydieresis', 'zcaron', 'exclamsmall',
+  'Hungarumlautsmall', 'dollaroldstyle', 'dollarsuperior', 'ampersandsmall',
+  'Acutesmall', 'parenleftsuperior', 'parenrightsuperior', 'twodotenleader',
+  'onedotenleader', 'zerooldstyle', 'oneoldstyle', 'twooldstyle',
+  'threeoldstyle', 'fouroldstyle', 'fiveoldstyle', 'sixoldstyle',
+  'sevenoldstyle', 'eightoldstyle', 'nineoldstyle', 'commasuperior',
+  'threequartersemdash', 'periodsuperior', 'questionsmall', 'asuperior',
+  'bsuperior', 'centsuperior', 'dsuperior', 'esuperior', 'isuperior',
+  'lsuperior', 'msuperior', 'nsuperior', 'osuperior', 'rsuperior', 'ssuperior',
+  'tsuperior', 'ff', 'ffi', 'ffl', 'parenleftinferior', 'parenrightinferior',
+  'Circumflexsmall', 'hyphensuperior', 'Gravesmall', 'Asmall', 'Bsmall',
+  'Csmall', 'Dsmall', 'Esmall', 'Fsmall', 'Gsmall', 'Hsmall', 'Ismall',
+  'Jsmall', 'Ksmall', 'Lsmall', 'Msmall', 'Nsmall', 'Osmall', 'Psmall',
+  'Qsmall', 'Rsmall', 'Ssmall', 'Tsmall', 'Usmall', 'Vsmall', 'Wsmall',
+  'Xsmall', 'Ysmall', 'Zsmall', 'colonmonetary', 'onefitted', 'rupiah',
+  'Tildesmall', 'exclamdownsmall', 'centoldstyle', 'Lslashsmall',
+  'Scaronsmall', 'Zcaronsmall', 'Dieresissmall', 'Brevesmall', 'Caronsmall',
+  'Dotaccentsmall', 'Macronsmall', 'figuredash', 'hypheninferior',
+  'Ogoneksmall', 'Ringsmall', 'Cedillasmall', 'questiondownsmall', 'oneeighth',
+  'threeeighths', 'fiveeighths', 'seveneighths', 'onethird', 'twothirds',
+  'zerosuperior', 'foursuperior', 'fivesuperior', 'sixsuperior',
+  'sevensuperior', 'eightsuperior', 'ninesuperior', 'zeroinferior',
+  'oneinferior', 'twoinferior', 'threeinferior', 'fourinferior',
+  'fiveinferior', 'sixinferior', 'seveninferior', 'eightinferior',
+  'nineinferior', 'centinferior', 'dollarinferior', 'periodinferior',
+  'commainferior', 'Agravesmall', 'Aacutesmall', 'Acircumflexsmall',
+  'Atildesmall', 'Adieresissmall', 'Aringsmall', 'AEsmall', 'Ccedillasmall',
+  'Egravesmall', 'Eacutesmall', 'Ecircumflexsmall', 'Edieresissmall',
+  'Igravesmall', 'Iacutesmall', 'Icircumflexsmall', 'Idieresissmall',
+  'Ethsmall', 'Ntildesmall', 'Ogravesmall', 'Oacutesmall', 'Ocircumflexsmall',
+  'Otildesmall', 'Odieresissmall', 'OEsmall', 'Oslashsmall', 'Ugravesmall',
+  'Uacutesmall', 'Ucircumflexsmall', 'Udieresissmall', 'Yacutesmall',
+  'Thornsmall', 'Ydieresissmall', '001.000', '001.001', '001.002', '001.003',
+  'Black', 'Bold', 'Book', 'Light', 'Medium', 'Regular', 'Roman', 'Semibold'
+] as const;
+
+export const CFF_STANDARD_STRINGS = [...CFF_STANDARD_STRING_VALUES];
+
+const STANDARD_ENCODING_PUNCTUATION: Record<number, string> = {
+  32: 'space',
+  33: 'exclam',
+  34: 'quotedbl',
+  35: 'numbersign',
+  36: 'dollar',
+  37: 'percent',
+  38: 'ampersand',
+  39: 'quoteright',
+  40: 'parenleft',
+  41: 'parenright',
+  42: 'asterisk',
+  43: 'plus',
+  44: 'comma',
+  45: 'hyphen',
+  46: 'period',
+  47: 'slash',
+  58: 'colon',
+  59: 'semicolon',
+  60: 'less',
+  61: 'equal',
+  62: 'greater',
+  63: 'question',
+  64: 'at',
+  91: 'bracketleft',
+  92: 'backslash',
+  93: 'bracketright',
+  94: 'asciicircum',
+  95: 'underscore',
+  96: 'quoteleft',
+  123: 'braceleft',
+  124: 'bar',
+  125: 'braceright',
+  126: 'asciitilde',
+  161: 'exclamdown',
+  162: 'cent',
+  163: 'sterling',
+  164: 'fraction',
+  165: 'yen',
+  166: 'florin',
+  167: 'section',
+  168: 'currency',
+  169: 'quotesingle',
+  170: 'quotedblleft',
+  171: 'guillemotleft',
+  172: 'guilsinglleft',
+  173: 'guilsinglright',
+  174: 'fi',
+  175: 'fl',
+  177: 'endash',
+  178: 'dagger',
+  179: 'daggerdbl',
+  180: 'periodcentered',
+  182: 'paragraph',
+  183: 'bullet',
+  184: 'quotesinglbase',
+  185: 'quotedblbase',
+  186: 'quotedblright',
+  187: 'guillemotright',
+  188: 'ellipsis',
+  189: 'perthousand',
+  191: 'questiondown',
+  193: 'grave',
+  194: 'acute',
+  195: 'circumflex',
+  196: 'tilde',
+  197: 'macron',
+  198: 'breve',
+  199: 'dotaccent',
+  200: 'dieresis',
+  202: 'ring',
+  203: 'cedilla',
+  205: 'hungarumlaut',
+  206: 'ogonek',
+  207: 'caron',
+  208: 'emdash',
+  225: 'AE',
+  227: 'ordfeminine',
+  232: 'Lslash',
+  233: 'Oslash',
+  234: 'OE',
+  235: 'ordmasculine',
+  241: 'ae',
+  245: 'dotlessi',
+  248: 'lslash',
+  249: 'oslash',
+  250: 'oe',
+  251: 'germandbls'
+};
+
+export function resolveStandardEncodingGlyphName(code: number): string | undefined {
+  const normalized = code & 0xff;
+  if (normalized >= 48 && normalized <= 57) {
+    return CFF_STANDARD_STRINGS[normalized - 31];
+  }
+  if (normalized >= 65 && normalized <= 90) {
+    return String.fromCharCode(normalized);
+  }
+  if (normalized >= 97 && normalized <= 122) {
+    return String.fromCharCode(normalized);
+  }
+  return STANDARD_ENCODING_PUNCTUATION[normalized];
+}
+
+export function resolveCffStandardString(sid: number, customStrings: string[]): string | undefined {
+  if (sid >= 0 && sid < CFF_STANDARD_STRINGS.length) {
+    return CFF_STANDARD_STRINGS[sid];
+  }
+
+  const customIndex = sid - CFF_STANDARD_STRINGS.length;
+  if (customIndex >= 0 && customIndex < customStrings.length) {
+    return customStrings[customIndex];
+  }
+
+  return undefined;
+}

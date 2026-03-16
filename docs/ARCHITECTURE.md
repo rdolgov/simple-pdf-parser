@@ -24,6 +24,7 @@ PDF bytes
   |  text items
   |  image items
   |  path items
+  |  embedded font programs
   v
 +-------------------+
 | PDFLayout         |
@@ -36,6 +37,11 @@ PDF bytes
 | CanvasRenderer    |   | Html/Query pipeline  |
 | src/viewer/*      |   | src/html, src/query  |
 +-------------------+   +----------------------+
+  |
+  +--> embedded font registry
+  |      |
+  |      v
+  |   browser FontFace / canvas text
   |
   v
 browser canvas
@@ -64,6 +70,9 @@ compare against pdftocairo/ghostscript reference
   - Flate image decode, indexed color expansion, 1-bit sample decode, CCITT mask conversion helpers
 - `src/parser/ccittDecoder.ts`
   - CCITT fax decode used by image masks and scanned images
+- `src/parser/embeddedFontExtractor.ts`
+  - resolves `/FontDescriptor` and `/FontFile*` references
+  - extracts embedded font bytes and descriptor metrics into document-level font resources
 - `src/parser/mathUtils.ts`
   - matrix math and bounds transforms used across text, images, and vector paths
 
@@ -86,6 +95,15 @@ compare against pdftocairo/ghostscript reference
 - `src/viewer/stretchyDelimiterRenderer.ts`
   - renders single-glyph `CMEX` delimiters like tall `(` `)` `[` `]` `|` as vector outlines from parsed bounds
   - avoids baseline/metric drift from substitute math fonts
+- `src/viewer/embeddedFontRegistry.ts`
+  - browser-only registration layer for exact embedded fonts
+  - caches registered families per `PDFDocument`
+  - supports direct `FontFace` loading for embedded TrueType/OpenType fonts
+  - supports synthetic OpenType wrapping for embedded Type1C fonts
+- `src/viewer/type1COpenTypeBuilder.ts`
+  - wraps raw PDF `Type1C` font programs into minimal OpenType/CFF containers
+  - assigns a private-use cmap keyed by original PDF glyph codes
+  - lets the renderer draw exact embedded outlines glyph-by-glyph with PDF advances
 
 ### Public API
 
@@ -106,8 +124,9 @@ compare against pdftocairo/ghostscript reference
    - vector path items from graphics operators
 6. Merge text geometrically
 7. Repair lexical boundaries
-8. Render layout to canvas
-9. Compare canvas output to a reference raster
+8. Prepare embedded fonts for the document when the browser path is active
+9. Render layout to canvas
+10. Compare canvas output to a reference raster
 ```
 
 ## Spec-Oriented Design Rules
@@ -121,6 +140,8 @@ The engine tries to stay close to PDF semantics instead of baking in document-sp
 - simple-font decode prefers `ToUnicode`, then `/Encoding`, then controlled font-specific fallbacks
 - when the browser cannot use the exact embedded font program, rendering should still respect PDF glyph advances
   - this is why `glyphSpans` are preserved and can bypass browser shaping for `CM*` runs
+- when an embedded font program is available, preserve original PDF glyph codes alongside decoded text
+  - the browser font path can then render exact subset glyphs without depending on a Unicode cmap supplied by the PDF
 - TeX math-extension construction fragments are treated as semantic ornaments when they are not printable text
 - style inference is separate from content decode
   - for example `CMMI`, `CMTI`, and `CMSL` should render as italic/slanted families
@@ -219,6 +240,33 @@ Recommended debugging order:
 6. rerun `tests/pdfLayout.integration.test.ts`
 7. rerun the compare script on the affected pages
 
+## Embedded Font Flow
+
+```text
+PDF font object
+  |
+  +--> parser font resource
+  |      |
+  |      +--> decode map / widths / glyph spans
+  |      |
+  |      +--> embedded font extractor
+  |              |
+  |              v
+  |        document.fontResources[fontKey]
+  |
+  v
+CanvasRenderer.prepareDocumentFonts(document)
+  |
+  +--> embeddedFontRegistry
+          |
+          +--> direct FontFace load for FontFile2 / OpenType
+          |
+          +--> Type1C synthetic OTF builder
+                    |
+                    +--> private-use cmap keyed by PDF glyph code
+                    +--> exact CFF outlines in browser canvas
+```
+
 ## Current Testing Strategy
 
 Use small, layered regressions instead of one giant golden test.
@@ -249,16 +297,25 @@ The current renderer differs from the older version in a few important ways:
 - added a dedicated CMEX composite-brace layer so TeX brace pieces render as stable vector overbraces/underbraces
 - added advance-positioned rendering for Computer Modern text runs so substitute browser fonts follow PDF glyph advances more closely
 - added vector rendering for single-glyph `CMEX` delimiters instead of stretching fallback browser glyphs
+- added document-level embedded font extraction from `/FontFile`, `/FontFile2`, and `/FontFile3`
+- added async document font preparation in the canvas viewer path
+- added synthetic OpenType/CFF wrapping for embedded Type1C fonts using private-use glyph-code mapping
 
 ## Current Limitation
 
-Some PDFs, including `InformationTheoryByMacKay.pdf`, embed real Type1C Computer Modern fonts. The parser currently resolves those fonts well enough for decoding and width extraction, but the browser renderer still does not load the embedded font programs themselves. The current mitigation stack is:
+The browser path now loads exact embedded font programs when feasible:
 
-- prefer KaTeX Computer Modern-like web fonts in the browser fallback stack
-- preserve PDF glyph advances and render many `CM*` runs glyph-by-glyph
-- render `CMEX` composite braces and tall delimiters as vector geometry where substitute font metrics drift too much
+- embedded TrueType / OpenType fonts are registered directly with `FontFace`
+- embedded Type1C fonts are wrapped into synthetic OpenType/CFF containers and rendered through private-use glyph codes plus PDF advances
 
-This improves fidelity, but it is still not the same as painting with the exact embedded font program. The long-term root fix is embedded font-program loading or outline extraction for browser/canvas text rendering.
+Remaining gaps:
+
+- bare `/FontFile` Type1 programs are still not loaded directly in the browser path
+- the synthetic Type1C path currently targets the simple-font cases used by the regression PDFs and does not yet attempt full expert-encoding coverage
+- when exact font registration is unavailable, the renderer still falls back to the older mitigation stack:
+  - prefer KaTeX Computer Modern-like web fonts
+  - preserve PDF glyph advances
+  - render unstable `CMEX` ornaments as vector geometry
 - added reference-raster comparison scripts based on `pdftocairo` and `magick`
 
 ## Known Limits

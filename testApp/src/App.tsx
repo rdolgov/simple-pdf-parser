@@ -185,19 +185,32 @@ export default function App(): JSX.Element {
     if (viewMode !== 'canvas' && viewMode !== 'focus-pdf') {
       return;
     }
-    try {
-      renderer.setScale(zoom);
-      for (const page of readyDocument.pages) {
-        const canvas = canvasRefs.current.get(page.number);
-        if (!canvas) {
-          continue;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await renderer.prepareDocumentFonts(readyDocument);
+        if (cancelled) {
+          return;
         }
-        renderer.render(canvas, readyDocument, page.number);
+        renderer.setScale(zoom);
+        for (const page of readyDocument.pages) {
+          const canvas = canvasRefs.current.get(page.number);
+          if (!canvas) {
+            continue;
+          }
+          renderer.render(canvas, readyDocument, page.number);
+        }
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : 'Failed to render page.';
+        setState({ status: 'error', message });
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to render page.';
-      setState({ status: 'error', message });
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [readyDocument, renderer, viewMode, zoom, canvasRevision]);
 
   const getCanvasRef = useCallback(

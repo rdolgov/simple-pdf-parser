@@ -5,19 +5,22 @@ export interface RenderableGlyphSpanRun {
   totalAdvance: number;
 }
 
-export function resolveRenderableGlyphSpanRun(item: PDFTextItem): RenderableGlyphSpanRun | undefined {
+export function resolveRenderableGlyphSpanRun(
+  item: PDFTextItem,
+  options: { force?: boolean } = {}
+): RenderableGlyphSpanRun | undefined {
   const isComputerModernText = /^(cm|lasy|line10)/i.test(item.font ?? '');
   const isCompactNumericRun = (item.fontSize ?? 0) <= 7 && /^[0-9 ]+$/.test(item.text);
-  if (!isComputerModernText && !isCompactNumericRun) {
+  if (!options.force && !isComputerModernText && !isCompactNumericRun) {
     return undefined;
   }
 
-  if (!item.glyphSpans || item.glyphSpans.length <= 1) {
+  if (!item.glyphSpans || item.glyphSpans.length === 0) {
     return undefined;
   }
 
   const spans = item.glyphSpans.filter((span) => span.text.length > 0 && Number.isFinite(span.advance) && span.advance > 0);
-  if (spans.length <= 1) {
+  if (spans.length === 0 || (!options.force && spans.length <= 1)) {
     return undefined;
   }
 

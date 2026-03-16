@@ -1,5 +1,13 @@
 import { PDFParser } from './parser/pdfParser.js';
-import type { ParseOptions, ParseSource, PDFImageItem, PDFLayout, PDFPage, PDFTextItem } from './types.js';
+import type {
+  ParseOptions,
+  ParseSource,
+  PDFEmbeddedFontResource,
+  PDFImageItem,
+  PDFLayout,
+  PDFPage,
+  PDFTextItem
+} from './types.js';
 
 export class PDFDocument {
   static from(source: ParseSource, options: ParseOptions = {}): PDFDocument {
@@ -12,6 +20,17 @@ export class PDFDocument {
 
   get pages(): PDFPage[] {
     return this.layout.pages;
+  }
+
+  getFontResources(): Record<string, PDFEmbeddedFontResource> {
+    return this.layout.fontResources ?? {};
+  }
+
+  getFontResource(fontKey: string | undefined): PDFEmbeddedFontResource | undefined {
+    if (!fontKey) {
+      return undefined;
+    }
+    return this.layout.fontResources?.[fontKey];
   }
 
   getText(): string {

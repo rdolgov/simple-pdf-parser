@@ -39,6 +39,8 @@ export interface FontResource {
   charProcs?: Map<string, import('../types.js').Type3Glyph>;
   /** For Type3 fonts: maps character code → raw glyph name from /Differences */
   glyphNameMap?: Map<number, string>;
+  /** Embedded font program data for exact browser registration when available */
+  embeddedFont?: import('../types.js').PDFEmbeddedFontResource;
 }
 
 /** Map of font name to FontResource */

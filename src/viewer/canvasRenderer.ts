@@ -10,6 +10,11 @@ import type {
 } from '../types.js';
 import type { PDFDocument } from '../pdfDocument.js';
 import { detectCmexComposites, type CmexComposite } from './cmexComposite.js';
+import {
+  prepareEmbeddedFontsForDocument,
+  resolveRegisteredEmbeddedFont,
+  type RegisteredEmbeddedFont
+} from './embeddedFontRegistry.js';
 import { resolveCanvasFontFallback } from './fontFallback.js';
 import { resolveRenderableGlyphSpanRun } from './glyphSpanRenderer.js';
 import {
@@ -110,6 +115,10 @@ export class CanvasRenderer {
     return this.currentScale;
   }
 
+  async prepareDocumentFonts(document: PDFDocument): Promise<void> {
+    await prepareEmbeddedFontsForDocument(document);
+  }
+
   render(canvas: CanvasLike, document: PDFDocument, pageNumber = 1): void {
     const renderOptions = {
       ...DEFAULT_OPTIONS,
@@ -161,9 +170,9 @@ export class CanvasRenderer {
       this.drawRects(context, page, metrics, renderOptions, deviceScale);
       this.drawLines(context, page, metrics, renderOptions, deviceScale);
     }
-    this.drawImages(context, page, metrics, renderOptions, deviceScale);
+    this.drawImages(context, document, page, metrics, renderOptions, deviceScale);
     this.drawImagePlaceholders(context, page, metrics, renderOptions);
-    this.drawTextItems(context, page, metrics, renderOptions, deviceScale);
+    this.drawTextItems(context, document, page, metrics, renderOptions, deviceScale);
 
     context.restore();
   }
@@ -352,6 +361,7 @@ export class CanvasRenderer {
 
   private drawImages(
     context: CanvasRenderingContext2D,
+    documentModel: PDFDocument,
     page: PDFPage,
     metrics: ReturnType<CanvasRenderer['computePageMetrics']>,
     options: Required<RenderOptions>,
@@ -457,7 +467,7 @@ export class CanvasRenderer {
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.scale(asyncScale, asyncScale);
       drawMaskLayers();
-      this.drawTextItems(context, page, metrics, options, asyncScale);
+      this.drawTextItems(context, documentModel, page, metrics, options, asyncScale);
       context.restore();
     };
 
@@ -604,6 +614,7 @@ export class CanvasRenderer {
 
   private drawTextItems(
     context: CanvasRenderingContext2D,
+    documentModel: PDFDocument,
     page: PDFPage,
     metrics: ReturnType<CanvasRenderer['computePageMetrics']>,
     options: Required<RenderOptions>,
@@ -659,14 +670,23 @@ export class CanvasRenderer {
 
       // Use the PDF's specified font size
       const fontSize = item.fontSize ?? 12;
-      context.font = this.composeFont(item.font, fontSize, options.fontFallback, item.fontWeight, item.fontStyle);
+      const embeddedFont = resolveRegisteredEmbeddedFont(documentModel, item);
+      context.font = this.composeFont(
+        embeddedFont?.family ?? item.font,
+        fontSize,
+        options.fontFallback,
+        item.fontWeight,
+        item.fontStyle
+      );
 
       const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
       const projectedWidth = textPlacement.projectedWidth;
       const textMetrics = context.measureText(item.text);
       const measuredWidth = textMetrics.width;
       const verticalFit = this.resolveVerticalTextFit(item, textMetrics, textPlacement.rotation, options.scale);
-      const glyphSpanRun = resolveRenderableGlyphSpanRun(item);
+      const glyphSpanRun = resolveRenderableGlyphSpanRun(item, {
+        force: embeddedFont?.renderMode === 'glyph-span'
+      });
 
       // Scale horizontally to fit width
       let scaleX = 1;
@@ -718,7 +738,7 @@ export class CanvasRenderer {
       }
 
       if (glyphSpanRun) {
-        this.drawGlyphSpanTextItem(context, textPlacement, glyphSpanRun, verticalFit);
+        this.drawGlyphSpanTextItem(context, textPlacement, glyphSpanRun, verticalFit, embeddedFont);
         continue;
       }
 
@@ -941,7 +961,8 @@ export class CanvasRenderer {
     context: CanvasRenderingContext2D,
     textPlacement: { baseline: { x: number; y: number }; projectedWidth: number; rotation: number },
     glyphSpanRun: ReturnType<typeof resolveRenderableGlyphSpanRun>,
-    verticalFit: VerticalTextFit
+    verticalFit: VerticalTextFit,
+    embeddedFont?: RegisteredEmbeddedFont
   ): void {
     if (!glyphSpanRun || !(glyphSpanRun.totalAdvance > 0) || !(textPlacement.projectedWidth > 0)) {
       return;
@@ -959,8 +980,20 @@ export class CanvasRenderer {
         continue;
       }
 
-      const measuredWidth = Math.max(context.measureText(span.text).width, 1);
-      const scaleX = spanProjectedWidth / measuredWidth;
+      const renderedText =
+        embeddedFont?.renderMode === 'glyph-span' && span.glyphCode !== undefined
+          ? embeddedFont.glyphCodeToText?.get(span.glyphCode) ?? span.text
+          : span.text;
+      if (!renderedText) {
+        continue;
+      }
+
+      const measuredWidth = Math.max(context.measureText(renderedText).width, 1);
+      const rawScaleX = spanProjectedWidth / measuredWidth;
+      const scaleX =
+        embeddedFont?.renderMode === 'glyph-span'
+          ? Math.min(Math.max(rawScaleX, 0.9), 1.1)
+          : rawScaleX;
 
       context.save();
       context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
@@ -969,7 +1002,7 @@ export class CanvasRenderer {
       }
       context.translate(offsetX, 0);
       context.scale(scaleX, scaleY);
-      context.fillText(span.text, 0, verticalFit.localYOffset);
+      context.fillText(renderedText, 0, verticalFit.localYOffset);
       context.restore();
     }
   }

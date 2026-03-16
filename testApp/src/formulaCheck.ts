@@ -69,6 +69,7 @@ async function renderFormulaCheck(): Promise<void> {
     pagePadding: padding,
     scale
   });
+  await renderer.prepareDocumentFonts(documentModel);
   renderer.render(offscreenCanvas, documentModel, pageNumber);
 
   const sourceX = Math.max(0, Math.floor(padding + crop.x * scale - cropPadding));

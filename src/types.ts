@@ -54,12 +54,38 @@ export interface Type3Glyph {
 export interface PDFGlyphSpan {
   text: string;
   advance: number;
+  glyphCode?: number;
+}
+
+export interface PDFEmbeddedFontDescriptor {
+  ascent?: number;
+  descent?: number;
+  capHeight?: number;
+  italicAngle?: number;
+  flags?: number;
+  stemV?: number;
+  bbox?: [number, number, number, number];
+}
+
+export interface PDFEmbeddedFontResource {
+  fontKey: string;
+  objectKey: string;
+  baseFontName?: string;
+  subtype?: string;
+  fontFileKey?: string;
+  fontFileKind?: 'FontFile' | 'FontFile2' | 'FontFile3';
+  fontFileSubtype?: string;
+  data: Uint8Array;
+  glyphWidths?: Record<number, number>;
+  defaultWidth?: number;
+  descriptor?: PDFEmbeddedFontDescriptor;
 }
 
 export interface PDFTextItem {
   text: string;
   bounds: PDFImageBounds;
   font?: string;
+  fontResourceKey?: string;
   fontSize?: number;
   fontWeight?: 'normal' | 'bold';
   fontStyle?: 'normal' | 'italic';
@@ -165,6 +191,7 @@ export interface PDFPage {
 
 export interface PDFLayout {
   pages: PDFPage[];
+  fontResources?: Record<string, PDFEmbeddedFontResource>;
 }
 
 export interface ParseOptions {
