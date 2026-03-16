@@ -1,479 +1,247 @@
-# PDF Layout Parser - Architecture Documentation
+# PDF Rendering Architecture
 
-## Overview
+## Goals
 
-PDF Layout Parser is a TypeScript library for extracting text, images, and layout metadata from PDF files without third-party parsing dependencies. It includes a React-based debugging application for visualization, AI-powered relevance detection, and semantic search.
+This project is a PDF parser and renderer first. Everything else in the repo only matters if the parser can preserve page structure closely enough that the browser render matches a reference PDF rasterizer.
 
----
+Current priorities:
 
-## Project Structure
+- follow PDF text, graphics, and image semantics closely
+- keep parser and renderer concerns separated
+- add regression tests at the parser layer and renderer layer
+- verify visually with an automated reference-render compare loop
 
-```
-simple-pdf-parser/
-├── src/                      # Main library (~9,100 lines)
-│   ├── index.ts              # Library exports
-│   ├── pdfDocument.ts        # Main API entry point
-│   ├── types.ts              # Core type definitions
-│   ├── parser/               # PDF parsing engine
-│   │   ├── pdfParser.ts      # Core parser (3,715 lines)
-│   │   ├── textTokenizer.ts  # Content stream tokenization
-│   │   ├── textSmoother.ts   # Text run merging
-│   │   ├── streamDecoder.ts  # FlateDecode decompression
-│   │   ├── ccittDecoder.ts   # CCITT Group 4 fax decoder
-│   │   └── mathUtils.ts      # Matrix transformations
-│   ├── html/                 # HTML conversion
-│   │   ├── htmlLayoutConverter.ts
-│   │   └── htmlRenderer.ts
-│   ├── query/                # AI relevance services
-│   │   ├── relevanceTypes.ts
-│   │   ├── relevanceAugmenter.ts
-│   │   ├── openaiRelevanceService.ts
-│   │   ├── mockRelevanceService.ts
-│   │   ├── geminiApi.ts
-│   │   ├── openAiApi.ts
-│   │   ├── structuredExtractApi.ts
-│   │   ├── openAiStructuredExtract.ts
-│   │   ├── lmStudioApi.ts
-│   │   └── xlsxTableParser.ts
-│   ├── visual/               # Relevance rendering
-│   │   ├── relevanceRenderer.ts
-│   │   └── relevanceTheme.ts
-│   ├── viewer/               # Canvas rendering
-│   │   └── canvasRenderer.ts
-│   └── utils/                # Encoding utilities
-│       └── buffer.ts
-├── testApp/                  # React debug application
-│   └── src/
-│       ├── App.tsx           # Main controller (1,166 lines)
-│       ├── components/       # UI components
-│       ├── search/           # Semantic search
-│       ├── viewer/           # Structured data rendering
-│       └── utils/            # App utilities
-├── tests/                    # Vitest test suite
-├── pdfs/                     # Test PDF files
-└── docs/                     # Documentation
+## System Map
+
+```text
+PDF bytes
+  |
+  v
++-------------------+
+| PDFParser         |
+| src/parser/*      |
++-------------------+
+  |  text items
+  |  image items
+  |  path items
+  v
++-------------------+
+| PDFLayout         |
+| src/types.ts      |
++-------------------+
+  |                    \
+  |                     \
+  v                      v
++-------------------+   +----------------------+
+| CanvasRenderer    |   | Html/Query pipeline  |
+| src/viewer/*      |   | src/html, src/query  |
++-------------------+   +----------------------+
+  |
+  v
+browser canvas
+  |
+  v
+compare against pdftocairo/ghostscript reference
 ```
 
----
+## Core Modules
 
-## Core Library Architecture
+### Parsing
 
-### Layer Diagram
+- `src/parser/pdfParser.ts`
+  - owns object extraction, resource resolution, stream walking, text operator execution, image extraction, and page assembly
+  - builds `PDFPage` objects with `textItems`, `imageItems`, `lineItems`, `rectItems`, and `pathItems`
+- `src/parser/textTokenizer.ts`
+  - low-level token and operator scanning for content streams
+- `src/parser/textSmoother.ts`
+  - geometric merging of adjacent text runs
+- `src/parser/textBoundaryModel.ts`
+  - document/font-aware lexical repair after geometry merge
+  - used for split words and hyphenated line joins
+- `src/parser/pathUtils.ts`
+  - path command construction, close-path handling, path transforms, and line-cap/join mapping
+- `src/parser/imageDecoder.ts`
+  - Flate image decode, indexed color expansion, 1-bit sample decode, CCITT mask conversion helpers
+- `src/parser/ccittDecoder.ts`
+  - CCITT fax decode used by image masks and scanned images
+- `src/parser/mathUtils.ts`
+  - matrix math and bounds transforms used across text, images, and vector paths
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         API Layer                                │
-│  PDFDocument.from() │ convertLayoutToHtml() │ CanvasRenderer    │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-┌─────────────────────────────────────────────────────────────────┐
-│                      Processing Layer                            │
-│  PDFParser │ TextSmoother │ HtmlLayoutConverter │ Relevance     │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-┌─────────────────────────────────────────────────────────────────┐
-│                       Utility Layer                              │
-│  TextTokenizer │ StreamDecoder │ CCITTDecoder │ MathUtils       │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-┌─────────────────────────────────────────────────────────────────┐
-│                      External Services                           │
-│  OpenAI │ Gemini │ Structured Extract (Gemini/OpenAI) │ LM Studio       │
-└─────────────────────────────────────────────────────────────────┘
-```
+### Rendering
 
----
+- `src/viewer/canvasRenderer.ts`
+  - draws page vector paths, raster/mask images, and text
+  - handles Type3 path glyphs and bitmap glyphs
+  - applies a small thin-stroke floor so canvas output matches PDF rasterizers more closely than raw subpixel stroke widths do
+- `src/viewer/fontFallback.ts`
+  - browser font-family fallback choices for decoded PDF fonts
 
-## Module Reference
+### Public API
 
-### Parser Module (`src/parser/`)
+- `src/pdfDocument.ts`
+  - stable API entry point
+  - wraps parser output and exposes `getPage`, `getText`, `getTextItems`, `getImageItems`
 
-| File | Lines | Responsibility |
-|------|-------|----------------|
-| `pdfParser.ts` | 3,715 | Core PDF parsing engine |
-| `textTokenizer.ts` | ~200 | Content stream tokenization |
-| `textSmoother.ts` | 243 | Text run merging |
-| `streamDecoder.ts` | ~50 | FlateDecode decompression |
-| `ccittDecoder.ts` | ~150 | CCITT Group 4 fax decoder |
-| `mathUtils.ts` | ~80 | Matrix transformations |
+## Rendering Pipeline
 
-### HTML Module (`src/html/`)
-
-| File | Lines | Responsibility |
-|------|-------|----------------|
-| `htmlLayoutConverter.ts` | ~500 | PDF to semantic HTML blocks |
-| `htmlRenderer.ts` | ~300 | HTML DOM rendering |
-
-### Query/Relevance Module (`src/query/`)
-
-| File | Lines | Responsibility |
-|------|-------|----------------|
-| `relevanceTypes.ts` | 99 | Type definitions |
-| `relevanceAugmenter.ts` | 94 | Annotation application |
-| `openaiRelevanceService.ts` | ~200 | OpenAI integration |
-| `mockRelevanceService.ts` | ~150 | Testing mock |
-| `geminiApi.ts` | ~170 | Google Gemini API |
-| `openAiApi.ts` | ~250 | OpenAI Responses API wrapper |
-| `structuredExtractApi.ts` | ~200 | Structured Extract provider router |
-| `openAiStructuredExtract.ts` | ~70 | OpenAI structured extract adapter |
-| `lmStudioApi.ts` | ~100 | Local LLM integration |
-
-### Visual Module (`src/visual/`)
-
-| File | Lines | Responsibility |
-|------|-------|----------------|
-| `relevanceRenderer.ts` | ~300 | Styled DOM with highlights |
-| `relevanceTheme.ts` | ~150 | Theme configuration |
-
-### Viewer Module (`src/viewer/`)
-
-| File | Lines | Responsibility |
-|------|-------|----------------|
-| `canvasRenderer.ts` | 519 | Canvas 2D rendering |
-
----
-
-## High-Level Flow
-
-1. **Input Normalization** – `PDFParser` accepts `string | Uint8Array | ArrayBuffer`. Binary sources pass through `bufferToLatin1`, which preserves raw bytes in Latin-1 form.
-
-2. **Header Validation** – Verify `%PDF-` to guard against non-PDF input.
-
-3. **Object Extraction** – `parseXRefTable` reads cross-reference table and caches every in-use object by byte offset.
-
-4. **Page Assembly** – `buildPages` resolves `/Contents`, decodes streams, and walks ancestor `/Resources` dictionaries.
-
-5. **Text & XObject Parsing** – Streams scanned for `BT … ET` blocks, tokenized, `Do` operators recurse into form XObjects.
-
-6. **Tokenization** – Produces numeric, string, name, array, and command tokens.
-
-7. **Operator Execution** – `parseTextBlock` handles text operators (`Tf`, `Td`, `TD`, `Tm`, `T*`, `Tj`, `'`, `TJ`).
-
-8. **Layout Assembly** – Text runs grouped under `PDFPage` with image metadata and page size.
-
----
-
-## Data Flow Diagrams
-
-### PDF Processing Pipeline
-
-```
-PDF Binary (Uint8Array)
-         │
-         ▼
-┌─────────────────┐
-│   PDFParser     │  Parse xref, resolve objects, decompress streams
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  TextSmoother   │  Merge adjacent text runs
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   PDFLayout     │  Raw text items + images + page sizes
-└────────┬────────┘
-         │
-    ┌────┴────┬─────────────┬──────────────┐
-    ▼         ▼             ▼              ▼
- Canvas    HTML          Focus
- Render   Convert       Query
+```text
+1. Parse xref/object graph
+2. Resolve page resources
+3. Decode streams
+4. Walk page/Form content streams
+5. Emit:
+   - text items from text operators
+   - image items from XObjects and BI...EI inline images
+   - vector path items from graphics operators
+6. Merge text geometrically
+7. Repair lexical boundaries
+8. Render layout to canvas
+9. Compare canvas output to a reference raster
 ```
 
-### Relevance/Focus Flow
+## Spec-Oriented Design Rules
 
-```
-HtmlDocumentLayout + Query
-         │
-         ▼
-┌─────────────────────┐
-│  RelevanceService   │  OpenAI/Gemini analyzes content
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│ RelevanceAugmenter  │  Maps annotations to blocks
-└─────────┬───────────┘
-          │
-          ▼
-┌─────────────────────┐
-│ RelevanceRenderer   │  Creates styled DOM with highlights
-└─────────────────────┘
-```
+The engine tries to stay close to PDF semantics instead of baking in document-specific hacks.
 
----
+### Text
 
-## Test App Architecture
+- text position comes from the text matrix and text line matrix
+- spacing uses `Tc`, `Tw`, `TJ`, `Tj`, `Td`, `TD`, `Tm`, `T*`
+- simple-font decode prefers `ToUnicode`, then `/Encoding`, then controlled font-specific fallbacks
+- style inference is separate from content decode
+  - for example `CMMI`, `CMTI`, and `CMSL` should render as italic/slanted families
 
-### Component Hierarchy
+### Vector graphics
 
-```
-App.tsx (1,166 lines - Main Controller)
-├── SemanticSearchBar
-├── EmptyView (when no document)
-├── ViewerColumn
-│   ├── TabBar
-│   ├── CanvasPageWithOverlay (per page)
-│   │   └── TableViewer
-│   ├── JSON views
-│   ├── HTML render view
-│   ├── Focus views
-│   └── Playground components
-└── ControlsSidebar (collapsible)
-```
+- page graphics are preserved as path commands, not flattened to line segments when avoidable
+- Bezier curves are kept through parse and render
+- fill and stroke colors remain distinct
+- line cap, line join, miter limit, fill rule, and stroke width travel with the path item
+- zero-width PDF strokes are rendered as one device pixel
+- very thin positive strokes use a small floor because raw canvas output under-renders them relative to PDF rasterizers
 
-### TestApp Components
+### Images
 
-| Component | Lines | Responsibility |
-|-----------|-------|----------------|
-| `App.tsx` | 1,166 | Main state orchestration |
-| `CanvasPageWithOverlay.tsx` | ~1,000 | Interactive canvas with overlays |
-| `ViewerColumn.tsx` | ~400 | Content area rendering |
-| `SemanticSearchBar.tsx` | ~250 | Search UI |
-| `ControlsSidebar.tsx` | ~200 | Settings panel |
-| `TableViewer.tsx` | ~450 | Table visualization |
-| `EmptyView.tsx` | ~60 | Welcome screen |
-| `GeminiPlayground.tsx` | ~300 | Gemini API testing |
+- image XObjects and inline `BI ... EI` images share the same decode path
+- supported decode paths currently include:
+  - Flate
+  - CCITT fax
+  - JPEG passthrough
+  - indexed color expansion
+  - 1-bit image masks
+- image masks stay as masks when possible so the renderer can paint them crisply
 
-### TestApp Utilities
+### Type3 fonts
 
-| File | Responsibility |
-|------|----------------|
-| `fileCache.ts` | IndexedDB caching |
-| `structured.ts` | Chapter/section detection |
-| `pdfDecoration.ts` | Focus mode decorations |
-| `recording.ts` | Focus session recording |
-| `semanticSearch.ts` | Embedding-based search |
+Type3 glyphs are now split into two categories:
 
----
+- path glyphs
+  - parsed from CharProc drawing operators into reusable path commands
+- bitmap glyphs
+  - parsed from CharProc inline images (`BI ... EI`) into glyph-local image layers
 
-## API Reference
+That matters for scanned/diagram-heavy PDFs because some symbol fonts and chapter markers are bitmap-backed Type3 glyphs rather than vector outlines.
 
-### Main Entry Point
+## Important Layout Types
 
-```typescript
-import { PDFDocument } from 'pdf-layout-parser';
+```text
+PDFPage
+  - textItems[]
+  - imageItems[]
+  - lineItems[]
+  - rectItems[]
+  - pathItems[]
+  - size
 
-const doc = await PDFDocument.from(pdfBytes);
-const text = doc.getText();
-const page = doc.getPage(1);
-const textItems = doc.getTextItems();
-const images = doc.getImageItems();
+PDFTextItem
+  - text
+  - bounds
+  - baselineStart / baselineEnd
+  - font, fontSize, fontWeight, fontStyle
+  - type3Glyphs[]
+
+Type3Glyph
+  - pathCommands[]
+  - imageLayers[]
+  - width
 ```
 
-### HTML Conversion
+## Compare and Verification Workflow
 
-```typescript
-import { convertLayoutToHtml, renderHtmlLayout } from 'pdf-layout-parser';
+The renderer should be checked against a reference rasterizer, not just by reading extracted text.
 
-const htmlLayout = convertLayoutToHtml(doc.layout);
-renderHtmlLayout(container, htmlLayout);
+Current workflow:
+
+```text
+PDF page
+  |
+  +--> our browser canvas render
+  |
+  +--> pdftocairo reference PNG
+          |
+          v
+     magick compare
+          |
+          v
+    actual / reference / diff artifacts
 ```
 
-### Canvas Rendering
+Key scripts:
 
-```typescript
-import { CanvasRenderer } from 'pdf-layout-parser';
+- `scripts/capture_formula_region.mjs`
+  - render a selected page or crop through the browser path
+- `scripts/compare_pdf_page_render.mjs`
+  - render selected pages through both paths
+  - compute RMSE
+  - emit `actual`, `reference`, and `diff` PNGs
 
-const renderer = new CanvasRenderer({ scale: 1.5 });
-renderer.render(canvas, doc, pageNumber);
-renderer.zoomIn();
-```
+Recommended debugging order:
 
-### Relevance Service
+1. identify worst pages by compare output
+2. classify the failure as text, vector, image, or font-glyph
+3. fix parser semantics first when the extracted layout is wrong
+4. fix renderer behavior when parser output is already correct
+5. add a regression test at the narrowest sensible layer
+6. rerun `tests/pdfLayout.integration.test.ts`
+7. rerun the compare script on the affected pages
 
-```typescript
-import { OpenAiRelevanceService, DefaultRelevanceAugmenter } from 'pdf-layout-parser';
+## Current Testing Strategy
 
-const service = new OpenAiRelevanceService(config);
-const response = await service.analyze({ layout: htmlLayout, query: "find revenue" });
-const augmented = new DefaultRelevanceAugmenter().augment(htmlLayout, response);
-```
+Use small, layered regressions instead of one giant golden test.
 
----
+- `tests/pdfParser.test.ts`
+  - parser correctness
+  - decode behavior
+  - page fixtures for known regressions
+- `tests/canvasRenderer.test.ts`
+  - renderer mechanics
+  - path drawing
+  - stroke behavior
+  - Type3 rendering rules
+- `tests/pdfLayout.integration.test.ts`
+  - required regression gate for parser/rendering changes
+  - checks end-to-end page render behavior on representative PDFs
 
-## Dependencies
+## Recent Architectural Changes
 
-### Runtime
-| Package | Purpose |
-|---------|---------|
-| `pako` | zlib decompression |
-| `@google/genai` | Gemini API |
-| `jszip` | ZIP extraction |
-| `xlsx` | Excel parsing |
+The current renderer differs from the older version in a few important ways:
 
-### Development
-| Package | Purpose |
-|---------|---------|
-| `typescript` | Type checking |
-| `vitest` | Testing |
-| `vite` | Build/dev server |
-| `react` | UI framework |
+- preserved page Bezier paths instead of flattening them to straight segments
+- unified XObject and inline-image decode path
+- added indexed-color image decode
+- added CCITT grayscale decode for scanned/bitmap figures
+- added Type3 bitmap glyph support for CharProc inline images
+- added lexical boundary repair after geometric text merge
+- added reference-raster comparison scripts based on `pdftocairo` and `magick`
 
----
+## Known Limits
 
-## Interactive Document Intelligence Flow
+These are the main areas still under active refinement:
 
-The system provides an intelligent document viewing experience by combining PDF rendering with AI-powered element extraction and interactive overlays.
+- canvas thin-stroke fidelity still differs from mature PDF rasterizers on some dense vector figures
+- some custom embedded symbol fonts still require better semantic mapping
+- Type3 glyph rendering is much better than before, but mixed path/image CharProcs can still need more precise paint-order handling
 
-### End-to-End Flow Diagram (Mermaid)
+## Practical Rule
 
-```mermaid
-flowchart TB
-    subgraph Input["📄 Document Input"]
-        PDF[PDF File]
-    end
-
-    subgraph Parsing["🔍 Dual Processing Pipeline"]
-        direction TB
-        PDF --> LocalParser["Local PDF Parser<br/>(PDFDocument.from)"]
-        PDF --> CloudAPI{"Cloud AI Service"}
-
-        CloudAPI --> StructuredExtract["Structured Extract (Gemini) API<br/>• Structured JSON<br/>• Table rows<br/>• Figure bounds"]
-        CloudAPI --> Gemini["Gemini API<br/>• Element classification<br/>• Formula detection<br/>• Reference linking"]
-    end
-
-    subgraph Extraction["📊 Element Extraction"]
-        direction TB
-        LocalParser --> TextItems["Text Items<br/>+ Bounds"]
-        LocalParser --> ImageItems["Image Items"]
-        LocalParser --> LineItems["Lines & Rects"]
-
-        StructuredExtract --> Tables["Tables<br/>(structured data)"]
-        StructuredExtract --> Paragraphs["Paragraphs<br/>(semantic blocks)"]
-        StructuredExtract --> Figures["Figures<br/>(image regions)"]
-
-        Gemini --> Formulas["Formulas<br/>(LaTeX extraction)"]
-        Gemini --> References["References<br/>(citation links)"]
-        Gemini --> Headings["Headings<br/>(hierarchy)"]
-    end
-
-    subgraph Rendering["🖼️ Canvas Rendering"]
-        TextItems --> Canvas["CanvasRenderer<br/>• Text with fonts<br/>• Images<br/>• Vector graphics"]
-        ImageItems --> Canvas
-        LineItems --> Canvas
-    end
-
-    subgraph Overlay["✨ Interactive Overlay Layer"]
-        direction TB
-        Canvas --> PageView["Rendered Page View"]
-
-        Tables --> TableOverlay["📋 Table Overlay<br/>• Click to expand<br/>• Sort/filter<br/>• Export to CSV"]
-
-        Paragraphs --> ParaOverlay["💬 Paragraph Overlay<br/>• In-place chat<br/>• Summarize<br/>• Explain"]
-
-        Formulas --> MathOverlay["📐 Math Overlay<br/>• LaTeX preview<br/>• Copy formula<br/>• Render with KaTeX"]
-
-        References --> RefOverlay["🔗 Reference Overlay<br/>• Jump to citation<br/>• Preview source<br/>• Web search"]
-
-        Figures --> ImgOverlay["🖼️ Image Overlay<br/>• AI explanation<br/>• Zoom/pan<br/>• Extract"]
-
-        TableOverlay --> PageView
-        ParaOverlay --> PageView
-        MathOverlay --> PageView
-        RefOverlay --> PageView
-        ImgOverlay --> PageView
-    end
-
-    subgraph Interaction["🎯 User Interactions"]
-        PageView --> HoverDetect["Hover Detection<br/>(element bounds)"]
-        HoverDetect --> Toolbar["Context Toolbar<br/>• Element-specific actions"]
-        Toolbar --> ChatPanel["Chat Panel<br/>• Query about selection<br/>• Ask questions"]
-        Toolbar --> TableViewer["Table Viewer<br/>• Full-screen table<br/>• Data operations"]
-        Toolbar --> MathPreview["Math Preview<br/>• Rendered formula<br/>• Copy LaTeX"]
-    end
-
-    subgraph Storage["💾 Caching & Storage"]
-        StructuredExtract -.-> Cache["IndexedDB Cache<br/>• Extraction results<br/>• API responses"]
-        Gemini -.-> Cache
-        ChatPanel -.-> AnnotationStore["Annotation Storage<br/>• Chat history<br/>• User notes"]
-    end
-
-    style Input fill:#e1f5fe
-    style Parsing fill:#fff3e0
-    style Extraction fill:#f3e5f5
-    style Rendering fill:#e8f5e9
-    style Overlay fill:#fce4ec
-    style Interaction fill:#e0f2f1
-    style Storage fill:#f5f5f5
-```
-
-### Component Interactions
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Canvas as CanvasPageWithOverlay
-    participant Detect as Element Detection
-    participant Toolbar as OverlayToolbar
-    participant API as AI Service
-    participant Panel as Interaction Panel
-
-    User->>Canvas: Load PDF page
-    Canvas->>Canvas: Render via CanvasRenderer
-
-    alt Has Gemini extraction
-        Canvas->>Detect: Load element bounds
-        Detect-->>Canvas: Overlay regions ready
-    end
-
-    User->>Canvas: Hover over element
-    Canvas->>Detect: Check bounds intersection
-    Detect-->>Canvas: Element type + bounds
-    Canvas->>Toolbar: Show context toolbar
-
-    alt Table Element
-        User->>Toolbar: Click "View Table"
-        Toolbar->>Panel: Open TableViewer
-        Panel-->>User: Interactive table view
-    end
-
-    alt Paragraph Element
-        User->>Toolbar: Click "Chat"
-        Toolbar->>Panel: Open MiniChatView
-        User->>Panel: Ask question
-        Panel->>API: Send context + query
-        API-->>Panel: AI response
-        Panel-->>User: Display answer
-    end
-
-    alt Formula Element
-        User->>Toolbar: Click "Math"
-        Toolbar->>Panel: Open MathViewPopup
-        Panel->>API: Extract LaTeX (if needed)
-        API-->>Panel: LaTeX string
-        Panel-->>User: Rendered formula + copy option
-    end
-```
-
-### Overlay Feature Matrix
-
-| Element Type | Detection Source | Overlay Features | Interactive Actions |
-|-------------|------------------|------------------|---------------------|
-| **Paragraph** | Structured Extract (Gemini) / Gemini | Highlight bounds | Chat, Summarize, Explain |
-| **Table** | Structured Extract (Gemini) | Cell grid overlay | Sort, Filter, Export, Full-screen |
-| **Formula** | Gemini Vision | Math region highlight | LaTeX preview, Copy, KaTeX render |
-| **Figure** | Structured Extract (Gemini) | Image bounds | AI explain, Zoom, Extract |
-| **Reference** | Gemini parsing | Citation highlight | Jump to source, Preview, Web search |
-| **Heading** | Gemini / Local | Section marker | Navigate, Collapse section |
-
-### Data Flow Summary
-
-1. **PDF Loading** → Local parser extracts text/images for canvas rendering
-2. **Cloud Extraction** → Gemini API identifies semantic elements with bounds
-3. **Bounds Alignment** → `elementBoundsAligner.ts` maps cloud coordinates to local page coordinates
-4. **Overlay Registration** → Element bounds stored in `GeminiDocumentExtraction`
-5. **Hover Detection** → Mouse position checked against registered bounds
-6. **Context Actions** → Element-specific toolbar appears with relevant actions
-7. **Interaction Panels** → TableViewer, MiniChatView, MathViewPopup provide rich interactions
-8. **Caching** → Results cached in IndexedDB for offline access and performance
-
----
-
-## Extensibility Notes
-
-- **Stream Filters** – `/FlateDecode` supported; add decoders for LZW, ASCII85, DCT, JPX.
-- **Graphics State** – Extend `TextState` with matrices, color, word-spacing.
-- **Cross-Reference** – Support incremental updates, object streams, compressed xrefs.
-- **Font Encodings** – Expand to full Adobe Glyph List for non-Latin scripts.
+If a fix only makes one PDF look better but weakens the parser's alignment with PDF operators or graphics state, it is probably the wrong fix.

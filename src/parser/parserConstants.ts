@@ -275,6 +275,8 @@ export const PRINTABLE_CMEX_OVERRIDES: Record<string, string> = {
 
 export const PRINTABLE_LINE_OVERRIDES: Record<string, string> = {
   '-': '\u2192',
+  '6': '\u2191',
+  '?': '\u2193',
   '@': '\u2572',
   R: '\u2198'
 };

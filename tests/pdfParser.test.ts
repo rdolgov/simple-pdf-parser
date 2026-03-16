@@ -498,6 +498,57 @@ ET
     expect(page19Figures.some((item) => item.sourceHeight === 600)).toBe(true);
   });
 
+  it('decodes solid inline image masks for MacKay page-17 diagrams and chapter rules', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(17);
+
+    expect(page).toBeDefined();
+
+    const masks = page!.imageItems.filter((item) => Boolean(item.mask));
+
+    expect(masks.length).toBeGreaterThanOrEqual(20);
+    expect(masks.some((item) => item.bounds.maxX - item.bounds.minX > 190 && item.bounds.maxY - item.bounds.minY < 2)).toBe(true);
+    expect(masks.some((item) => item.bounds.maxY - item.bounds.minY > 25 && item.bounds.maxX - item.bounds.minX < 2)).toBe(true);
+    expect(masks.every((item) => item.fillColor?.[0] === 0 && item.fillColor?.[1] === 0 && item.fillColor?.[2] === 0)).toBe(true);
+  });
+
+  it('preserves inline bitmap Type3 glyphs for MacKay section markers', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(15);
+
+    expect(page).toBeDefined();
+
+    const marker = page!.textItems.find((item) => item.font === 'A');
+
+    expect(marker).toBeDefined();
+    expect(marker!.type3Glyphs?.[0].imageLayers?.length).toBeGreaterThan(0);
+    expect(marker!.type3Glyphs?.[0].imageLayers?.[0].mask?.width).toBe(80);
+    expect(marker!.type3Glyphs?.[0].imageLayers?.[0].mask?.height).toBe(77);
+  });
+
+  it('decodes the MacKay page-17 LINE10 control arrows as vertical arrows', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(17);
+
+    expect(page).toBeDefined();
+
+    const figureItems = page!.textItems
+      .filter((item) => item.font === 'LINE10' && item.bounds.minY >= 615 && item.bounds.maxY <= 715)
+      .sort((left, right) => right.bounds.minY - left.bounds.minY || left.bounds.minX - right.bounds.minX);
+    const figureText = figureItems.map((item) => item.text).join(' ');
+
+    expect(figureText).toContain('↑');
+    expect(figureText).toContain('↓');
+    expect(figureText).not.toContain('6');
+    expect(figureText).not.toContain('?');
+  });
+
   it('does not merge across table columns in Table 3 (NIPS Transformer paper)', () => {
     const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);

@@ -106,6 +106,7 @@ import {
   paethPredictor,
   applyImagePredictor,
   resolveColorComponentCount,
+  decodeOneBitSamples,
   decodeFlateImage,
   ccittMaskToGrayPixels,
   ccittMaskToPixels,
@@ -850,14 +851,40 @@ export class PDFParser {
         const currentMatrix = graphicsStack[graphicsStack.length - 1];
         const inlineInfo = this.parseInlineImage(streamContent, index + 2);
         const bounds = computeImageBounds(currentMatrix);
-        imageItems.push({
-          name: `inline:${imageItems.length + 1}`,
+        const name = `inline:${imageItems.length + 1}`;
+        const rendered = inlineInfo.resource
+          ? this.renderImageResource(inlineInfo.resource, objects, rawContent)
+          : undefined;
+        const imageItem: PDFImageItem = {
+          name,
           bounds,
-          width: inlineInfo.width,
-          height: inlineInfo.height,
-          sourceWidth: inlineInfo.width,
-          sourceHeight: inlineInfo.height
-        });
+          width: bounds.maxX - bounds.minX,
+          height: bounds.maxY - bounds.minY,
+          sourceWidth: inlineInfo.resource?.width,
+          sourceHeight: inlineInfo.resource?.height,
+          fillColor: [...currentFillColor]
+        };
+        if (rendered?.mimeType) {
+          imageItem.mimeType = rendered.mimeType;
+        }
+        if (rendered?.dataUri) {
+          imageItem.dataUri = rendered.dataUri;
+        }
+        if (rendered?.mask) {
+          Object.defineProperty(imageItem, 'mask', {
+            value: rendered.mask,
+            enumerable: false,
+            configurable: false
+          });
+        }
+        if (rendered?.pixels) {
+          Object.defineProperty(imageItem, 'pixels', {
+            value: rendered.pixels,
+            enumerable: false,
+            configurable: false
+          });
+        }
+        imageItems.push(imageItem);
         index = inlineInfo.nextIndex;
         stack.length = 0;
         continue;
@@ -1441,7 +1468,7 @@ export class PDFParser {
   private parseInlineImage(
     streamContent: string,
     startIndex: number
-  ): { nextIndex: number; width?: number; height?: number } {
+  ): { nextIndex: number; resource?: ImageResource } {
     const length = streamContent.length;
     let index = skipWhitespace(streamContent, startIndex);
 
@@ -1461,10 +1488,7 @@ export class PDFParser {
     }
 
     const dictionarySource = streamContent.slice(index, dictionaryEnd);
-    const widthMatch = dictionarySource.match(/\/(?:Width|W)\s+(-?\d+(?:\.\d+)?)/);
-    const heightMatch = dictionarySource.match(/\/(?:Height|H)\s+(-?\d+(?:\.\d+)?)/);
-    const widthValue = widthMatch ? Number(widthMatch[1]) : undefined;
-    const heightValue = heightMatch ? Number(heightMatch[1]) : undefined;
+    const normalizedDictionarySource = this.normalizeInlineImageDictionary(dictionarySource);
 
     let dataStart = dictionaryEnd + 2;
     while (dataStart < length && isWhitespace(streamContent[dataStart])) {
@@ -1475,20 +1499,43 @@ export class PDFParser {
       if (streamContent[position] === 'E' && streamContent[position + 1] === 'I') {
         const after = streamContent[position + 2];
         if (position + 2 >= length || isWhitespace(after)) {
+          const stream = streamContent.slice(dataStart, position);
+          const resource = this.buildInlineImageResource(normalizedDictionarySource, stream);
           return {
             nextIndex: position + 2,
-            width: Number.isFinite(widthValue) ? widthValue : undefined,
-            height: Number.isFinite(heightValue) ? heightValue : undefined
+            resource
           };
         }
       }
     }
 
-    return {
-      nextIndex: length,
-      width: Number.isFinite(widthValue) ? widthValue : undefined,
-      height: Number.isFinite(heightValue) ? heightValue : undefined
+    return { nextIndex: length };
+  }
+
+  private normalizeInlineImageDictionary(dictionarySource: string): string {
+    return dictionarySource
+      .replace(/\/W\b/g, '/Width')
+      .replace(/\/H\b/g, '/Height')
+      .replace(/\/BPC\b/g, '/BitsPerComponent')
+      .replace(/\/CS\b/g, '/ColorSpace')
+      .replace(/\/F\b/g, '/Filter')
+      .replace(/\/IM\b/g, '/ImageMask')
+      .replace(/\/DP\b/g, '/DecodeParms')
+      .replace(/\/D\b/g, '/Decode');
+  }
+
+  private buildInlineImageResource(dictionarySource: string, stream: string): ImageResource {
+    const inlineObject: PDFRawObject = {
+      id: -1,
+      generation: 0,
+      dictionarySource,
+      stream,
+      streamLength: stream.length,
+      raw: dictionarySource,
+      offset: -1
     };
+
+    return this.buildImageResource(inlineObject, new Map(), '');
   }
 
   private resolveStreamContent(
@@ -2860,7 +2907,7 @@ export class PDFParser {
         continue;
       }
 
-      const glyph = this.parseCharProcStream(glyphName, stream);
+      const glyph = this.parseCharProcStream(glyphName, stream, objects, rawContent);
       if (glyph) {
         glyphs.set(glyphName, glyph);
       }
@@ -2873,8 +2920,14 @@ export class PDFParser {
    * Parse a single Type3 CharProc content stream into path commands.
    * CharProcs contain a d0/d1 operator followed by path construction/painting operators.
    */
-  private parseCharProcStream(glyphName: string, stream: string): Type3Glyph | undefined {
+  private parseCharProcStream(
+    glyphName: string,
+    stream: string,
+    objects: Map<string, PDFRawObject>,
+    rawContent: string
+  ): Type3Glyph | undefined {
     const commands: Type3PathCommand[] = [];
+    const imageLayers: Type3Glyph['imageLayers'] = [];
     const nums: number[] = [];
     let glyphWidth = 0;
     let currentMatrix = identityMatrix();
@@ -2882,12 +2935,80 @@ export class PDFParser {
     let currentPoint: Vector2D | undefined;
     let subpathStart: Vector2D | undefined;
 
-    // Tokenize the stream
-    const tokens = stream.trim().split(/\s+/);
-
     const transformGlyphPoint = (x: number, y: number): Vector2D => transformPoint(currentMatrix, x, y);
 
-    for (const token of tokens) {
+    for (let index = 0; index < stream.length; index += 1) {
+      const char = stream[index];
+
+      if (isWhitespace(char)) {
+        continue;
+      }
+
+      if (char === '%') {
+        index = consumeComment(stream, index);
+        continue;
+      }
+
+      if (this.isOperatorAt(stream, index, 'BI')) {
+        const inlineInfo = this.parseInlineImage(stream, index + 2);
+        if (inlineInfo.resource) {
+          const rendered = this.renderImageResource(
+            inlineInfo.resource,
+            objects,
+            rawContent,
+            Boolean(inlineInfo.resource.imageMask)
+          );
+          const imageWidth = rendered?.width ?? inlineInfo.resource.width ?? 0;
+          const imageHeight = rendered?.height ?? inlineInfo.resource.height ?? 0;
+          if (
+            rendered &&
+            imageWidth > 0 &&
+            imageHeight > 0 &&
+            (rendered.mask || rendered.pixels)
+          ) {
+            imageLayers.push({
+              bounds: computeImageBounds(currentMatrix),
+              fillColor: [0, 0, 0, 1],
+              mask: rendered.mask,
+              pixels: rendered.pixels
+            });
+          }
+        }
+        index = Math.max(index, inlineInfo.nextIndex - 1);
+        nums.length = 0;
+        continue;
+      }
+
+      if (char === '(') {
+        const { nextIndex } = readLiteralString(stream, index);
+        index = nextIndex;
+        continue;
+      }
+
+      if (char === '<') {
+        if (stream[index + 1] === '<') {
+          const { nextIndex } = readDictionary(stream, index);
+          index = nextIndex;
+        } else {
+          const { nextIndex } = readHexString(stream, index);
+          index = nextIndex;
+        }
+        continue;
+      }
+
+      if (char === '/') {
+        const { nextIndex } = readName(stream, index + 1);
+        index = nextIndex;
+        continue;
+      }
+
+      const { value: token, nextIndex } = readToken(stream, index);
+      if (token === '') {
+        index = nextIndex;
+        continue;
+      }
+
+      index = nextIndex;
       const num = Number(token);
       if (Number.isFinite(num)) {
         nums.push(num);
@@ -3094,7 +3215,12 @@ export class PDFParser {
       }
     }
 
-    return { glyphName, pathCommands: commands, width: glyphWidth };
+    return {
+      glyphName,
+      pathCommands: commands,
+      width: glyphWidth,
+      imageLayers: imageLayers.length > 0 ? imageLayers : undefined
+    };
   }
 
   private extractFontWidths(
@@ -3691,6 +3817,8 @@ export class PDFParser {
       // Computer Modern Math Italic fonts (CMMI, CMMIB)
       /cmmi\d/.test(normalized) ||
       /cmmib\d/.test(normalized) ||
+      /cmsl\d/.test(normalized) ||
+      /cmti\d/.test(normalized) ||
       // Nimbus Roman Italic
       normalized.includes('reguital')
     ) {
@@ -3796,6 +3924,7 @@ export class PDFParser {
           break;
         case 'ccittfaxdecode':
         case 'ccittfax':
+        case 'ccf':
           isCcitt = true;
           break;
         default:
@@ -3895,6 +4024,34 @@ export class PDFParser {
           offsetY: trimmed.offsetY,
           originalWidth: ccittImage.width,
           originalHeight: ccittImage.height
+        }
+      };
+    }
+
+    if (resource.imageMask && (resource.bitsPerComponent ?? 1) === 1) {
+      const width = resource.width ?? 0;
+      const height = resource.height ?? 0;
+      const samples = decodeOneBitSamples(bytes, width, height);
+      if (!samples) {
+        return undefined;
+      }
+
+      let blackIs1 = false;
+      if (Array.isArray(resource.decode) && resource.decode.length >= 2) {
+        const [decodeStart, decodeEnd] = resource.decode;
+        if (Number.isFinite(decodeStart) && Number.isFinite(decodeEnd) && decodeStart > decodeEnd) {
+          blackIs1 = true;
+        }
+      }
+
+      return {
+        width,
+        height,
+        mask: {
+          width,
+          height,
+          data: samples,
+          blackIs1
         }
       };
     }

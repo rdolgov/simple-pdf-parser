@@ -132,7 +132,40 @@ export function decodeFlateImage(
     ? 1
     : resolveColorComponentCount(resource.colorSpace);
 
-  if (!(width > 0) || !(height > 0) || bits !== 8 || !components) {
+  if (!(width > 0) || !(height > 0) || !components) {
+    return undefined;
+  }
+
+  if (bits === 1 && components === 1) {
+    const samples = decodeOneBitSamples(bytes, width, height);
+    if (!samples) {
+      return undefined;
+    }
+
+    const rgba = new Uint8ClampedArray(width * height * 4);
+    const decodeArr = Array.isArray(resource.decode) ? resource.decode : undefined;
+    const invertByDecode =
+      Array.isArray(decodeArr) &&
+      decodeArr.length >= 2 &&
+      Number.isFinite(decodeArr[0]) &&
+      Number.isFinite(decodeArr[1]) &&
+      decodeArr[0] > decodeArr[1];
+
+    for (let i = 0; i < width * height; i += 1) {
+      const sample = samples[i] ?? 0;
+      const normalized = invertByDecode ? (sample === 1 ? 0 : 1) : sample;
+      const value = normalized === 1 ? 255 : 0;
+      const offset = i * 4;
+      rgba[offset] = value;
+      rgba[offset + 1] = value;
+      rgba[offset + 2] = value;
+      rgba[offset + 3] = 255;
+    }
+
+    return { width, height, data: rgba };
+  }
+
+  if (bits !== 8) {
     return undefined;
   }
 
@@ -252,6 +285,37 @@ export function ccittMaskToPixels(mask: CcittMask): { width: number; height: num
     data[offset + 3] = value;
   }
   return { width: mask.width, height: mask.height, data };
+}
+
+/**
+ * Expand a 1-bit-per-component bitmap into per-pixel sample values.
+ */
+export function decodeOneBitSamples(
+  bytes: Uint8Array,
+  width: number,
+  height: number
+): Uint8Array | undefined {
+  if (!(width > 0) || !(height > 0)) {
+    return undefined;
+  }
+
+  const rowBytes = Math.ceil(width / 8);
+  const expectedLength = rowBytes * height;
+  if (bytes.length < expectedLength) {
+    return undefined;
+  }
+
+  const data = new Uint8Array(width * height);
+  for (let row = 0; row < height; row += 1) {
+    const rowOffset = row * width;
+    for (let col = 0; col < width; col += 1) {
+      const byte = bytes[row * rowBytes + (col >> 3)] ?? 0;
+      const bit = (byte >> (7 - (col & 7))) & 1;
+      data[rowOffset + col] = bit;
+    }
+  }
+
+  return data;
 }
 
 /**

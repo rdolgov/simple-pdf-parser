@@ -72,6 +72,7 @@ class MockContext {
 
   stroke() {
     this.operations.push('stroke');
+    this.operations.push(`strokeWidth:${this.lineWidth}`);
   }
 
   fill(fillRule?: CanvasFillRule) {
@@ -192,6 +193,84 @@ describe('CanvasRenderer', () => {
     expect(contextImpl.operations.some((entry) => entry.startsWith('bezierCurveTo:'))).toBe(true);
     expect(contextImpl.operations).toContain('fill:nonzero');
     expect(contextImpl.operations).toContain('stroke');
+  });
+
+  it('renders solid image masks with fillRect instead of raster blurring', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [],
+          imageItems: [
+            {
+              name: 'inline:1',
+              bounds: { minX: 10, minY: 80, maxX: 90, maxY: 81 },
+              fillColor: [0, 0, 0, 1] as [number, number, number, number],
+              mask: {
+                width: 1,
+                height: 1,
+                data: new Uint8Array([0]),
+                blackIs1: false
+              }
+            }
+          ],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    expect(contextImpl.operations.some((entry) => entry.startsWith('fillRect:18,27,80,1'))).toBe(true);
+  });
+
+  it('uses a small thin-stroke floor instead of forcing sub-point strokes to 0.5pt', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          pathItems: [
+            {
+              commands: [
+                { op: 'M' as const, x: 10, y: 10 },
+                { op: 'L' as const, x: 90, y: 10 }
+              ],
+              lineWidth: 0.1,
+              strokeColor: [0, 0, 0, 1] as [number, number, number, number],
+              fillColor: null,
+              fillRule: 'nonzero' as const,
+              lineCap: 'butt' as const,
+              lineJoin: 'miter' as const,
+              miterLimit: 10
+            }
+          ],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    expect(contextImpl.operations).toContain('strokeWidth:0.25');
+    expect(contextImpl.operations).not.toContain('strokeWidth:0.5');
   });
 
   it('throws when page does not exist', () => {

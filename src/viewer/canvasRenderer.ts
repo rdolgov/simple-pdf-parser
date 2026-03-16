@@ -5,7 +5,8 @@ import type {
   PDFPathCommand,
   PDFPathItem,
   PDFTextItem,
-  Type3Glyph
+  Type3Glyph,
+  Type3GlyphImageLayer
 } from '../types.js';
 import type { PDFDocument } from '../pdfDocument.js';
 import { resolveCanvasFontFallback } from './fontFallback.js';
@@ -145,14 +146,16 @@ export class CanvasRenderer {
     // Scale by both DPR and zoom for sharp rendering on high-DPI displays
     context.scale(this.currentScale * dpr, this.currentScale * dpr);
 
+    const deviceScale = this.currentScale * dpr;
+
     this.drawBackground(context, metrics, renderOptions);
     if (page.pathItems && page.pathItems.length > 0) {
-      this.drawPathItems(context, page, metrics, renderOptions);
+      this.drawPathItems(context, page, metrics, renderOptions, deviceScale);
     } else {
-      this.drawRects(context, page, metrics, renderOptions);
-      this.drawLines(context, page, metrics, renderOptions);
+      this.drawRects(context, page, metrics, renderOptions, deviceScale);
+      this.drawLines(context, page, metrics, renderOptions, deviceScale);
     }
-    this.drawImages(context, page, metrics, renderOptions, this.currentScale * dpr);
+    this.drawImages(context, page, metrics, renderOptions, deviceScale);
     this.drawImagePlaceholders(context, page, metrics, renderOptions);
     this.drawTextItems(context, page, metrics, renderOptions);
 
@@ -224,7 +227,8 @@ export class CanvasRenderer {
     context: CanvasRenderingContext2D,
     page: PDFPage,
     metrics: ReturnType<CanvasRenderer['computePageMetrics']>,
-    _options: Required<RenderOptions>
+    _options: Required<RenderOptions>,
+    deviceScale: number
   ): void {
     if (!page.lineItems || page.lineItems.length === 0) {
       return;
@@ -235,7 +239,7 @@ export class CanvasRenderer {
     for (const line of page.lineItems) {
       const [r, g, b, a] = line.strokeColor;
       context.strokeStyle = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
-      context.lineWidth = Math.max(0.5, line.lineWidth);
+      context.lineWidth = this.resolveStrokeWidth(line.lineWidth, deviceScale);
       context.lineCap = 'butt';
 
       const startX = metrics.offsetX + line.start.x;
@@ -262,7 +266,8 @@ export class CanvasRenderer {
     context: CanvasRenderingContext2D,
     page: PDFPage,
     metrics: ReturnType<CanvasRenderer['computePageMetrics']>,
-    _options: Required<RenderOptions>
+    _options: Required<RenderOptions>,
+    deviceScale: number
   ): void {
     if (!page.pathItems || page.pathItems.length === 0) {
       return;
@@ -284,10 +289,10 @@ export class CanvasRenderer {
         context.fill(path.fillRule);
       }
 
-      if (path.strokeColor && path.lineWidth > 0) {
+      if (path.strokeColor && path.lineWidth >= 0) {
         const [r, g, b, a] = path.strokeColor;
         context.strokeStyle = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
-        context.lineWidth = Math.max(0.5, path.lineWidth);
+        context.lineWidth = this.resolveStrokeWidth(path.lineWidth, deviceScale);
         context.lineCap = path.lineCap;
         context.lineJoin = path.lineJoin;
         context.miterLimit = path.miterLimit;
@@ -302,7 +307,8 @@ export class CanvasRenderer {
     context: CanvasRenderingContext2D,
     page: PDFPage,
     metrics: ReturnType<CanvasRenderer['computePageMetrics']>,
-    _options: Required<RenderOptions>
+    _options: Required<RenderOptions>,
+    deviceScale: number
   ): void {
     if (!page.rectItems || page.rectItems.length === 0) {
       return;
@@ -327,10 +333,10 @@ export class CanvasRenderer {
       }
 
       // Draw stroke on top
-      if (rect.strokeColor && rect.lineWidth > 0) {
+      if (rect.strokeColor && rect.lineWidth >= 0) {
         const [r, g, b, a] = rect.strokeColor;
         context.strokeStyle = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
-        context.lineWidth = rect.lineWidth;
+        context.lineWidth = this.resolveStrokeWidth(rect.lineWidth, deviceScale);
         context.strokeRect(x, y, width, height);
       }
     }
@@ -382,7 +388,7 @@ export class CanvasRenderer {
             ? image.bounds.minY * options.scale + metrics.offsetY
             : metrics.offsetY - image.bounds.maxY * options.scale;
 
-        if (!image.mask || typeof document === 'undefined') {
+        if (!image.mask) {
           continue;
         }
 
@@ -392,6 +398,21 @@ export class CanvasRenderer {
         const g = Math.round(fill[1] * 255);
         const b = Math.round(fill[2] * 255);
         const alpha = Math.round((fill[3] ?? 1) * 255);
+        const solidMaskPaint = this.readSolidMaskPaint(mask);
+
+        if (solidMaskPaint === true) {
+          context.fillStyle = `rgba(${r}, ${g}, ${b}, ${(fill[3] ?? 1)})`;
+          context.fillRect(x, y, width, height);
+          continue;
+        }
+
+        if (solidMaskPaint === false) {
+          continue;
+        }
+
+        if (typeof document === 'undefined') {
+          continue;
+        }
 
         const maskCanvas = document.createElement('canvas');
         maskCanvas.width = mask.width;
@@ -493,6 +514,22 @@ export class CanvasRenderer {
     drawMaskLayers();
   }
 
+  private readSolidMaskPaint(mask: NonNullable<PDFImageItem['mask']>): boolean | undefined {
+    if (mask.data.length === 0) {
+      return false;
+    }
+
+    const firstPaint = mask.blackIs1 ? mask.data[0] === 1 : mask.data[0] === 0;
+    for (let index = 1; index < mask.data.length; index += 1) {
+      const paint = mask.blackIs1 ? mask.data[index] === 1 : mask.data[index] === 0;
+      if (paint !== firstPaint) {
+        return undefined;
+      }
+    }
+
+    return firstPaint;
+  }
+
   private drawImagePlaceholders(
     context: CanvasRenderingContext2D,
     page: PDFPage,
@@ -513,6 +550,17 @@ export class CanvasRenderer {
       return DEFAULT_OPTIONS.scale;
     }
     return value;
+  }
+
+  private resolveStrokeWidth(lineWidth: number, deviceScale: number): number {
+    const thinStrokeFloor = deviceScale > 0 ? 0.25 / deviceScale : 0.25;
+    if (lineWidth > 0) {
+      return Math.max(lineWidth, thinStrokeFloor);
+    }
+    if (deviceScale > 0) {
+      return 1 / deviceScale;
+    }
+    return 1;
   }
 
   private detectYAxisOrientation(items: PDFTextItem[]): 'ascending' | 'descending' {
@@ -589,7 +637,9 @@ export class CanvasRenderer {
       const baselineWidth = item.baselineStart && item.baselineEnd
         ? Math.hypot(item.baselineEnd.x - item.baselineStart.x, item.baselineEnd.y - item.baselineStart.y)
         : 0;
-      if (!(height > 0) || (!(width > 0) && !(baselineWidth > 0.01))) {
+      const hasRenderableType3Glyph =
+        Boolean(item.type3Glyphs) && item.type3Glyphs!.some((glyph) => Boolean(this.measureType3GlyphBounds(glyph)));
+      if (!(height > 0) || (!(width > 0) && !(baselineWidth > 0.01) && !hasRenderableType3Glyph)) {
         continue;
       }
 
@@ -735,47 +785,30 @@ export class CanvasRenderer {
     let cursorX = 0;
 
     for (const glyph of glyphs) {
-      if (glyph.pathCommands.length === 0) {
+      if (glyph.pathCommands.length === 0 && (!glyph.imageLayers || glyph.imageLayers.length === 0)) {
         cursorX += advancePerGlyph;
         continue;
       }
 
-      // Compute visual bounding box of this glyph from its path commands
-      let gxMin = Infinity, gxMax = -Infinity;
-      let gyMin = Infinity, gyMax = -Infinity;
-      for (const cmd of glyph.pathCommands) {
-        if ('x' in cmd && typeof cmd.x === 'number') { gxMin = Math.min(gxMin, cmd.x); gxMax = Math.max(gxMax, cmd.x); }
-        if ('x1' in cmd && typeof cmd.x1 === 'number') { gxMin = Math.min(gxMin, cmd.x1); gxMax = Math.max(gxMax, cmd.x1); }
-        if ('x2' in cmd && typeof cmd.x2 === 'number') { gxMin = Math.min(gxMin, cmd.x2); gxMax = Math.max(gxMax, cmd.x2); }
-        if ('x3' in cmd && typeof cmd.x3 === 'number') { gxMin = Math.min(gxMin, cmd.x3); gxMax = Math.max(gxMax, cmd.x3); }
-        if ('y' in cmd && typeof cmd.y === 'number') { gyMin = Math.min(gyMin, cmd.y); gyMax = Math.max(gyMax, cmd.y); }
-        if ('y1' in cmd && typeof cmd.y1 === 'number') { gyMin = Math.min(gyMin, cmd.y1); gyMax = Math.max(gyMax, cmd.y1); }
-        if ('y2' in cmd && typeof cmd.y2 === 'number') { gyMin = Math.min(gyMin, cmd.y2); gyMax = Math.max(gyMax, cmd.y2); }
-        if ('y3' in cmd && typeof cmd.y3 === 'number') { gyMin = Math.min(gyMin, cmd.y3); gyMax = Math.max(gyMax, cmd.y3); }
-      }
-
-      if (gxMin === Infinity || gyMin === Infinity) {
+      const glyphBounds = this.measureType3GlyphBounds(glyph);
+      if (!glyphBounds) {
         cursorX += advancePerGlyph;
         continue;
       }
-
-      // Center the glyph both horizontally and vertically within its advance slot.
-      // Many Type3 glyphs have their paths offset from origin (e.g. negative X coords),
-      // so we shift the glyph so its visual center sits at the center of the advance width.
-      const glyphVisualWidth = gxMax - gxMin;
-      const glyphCenterX = (gxMin + gxMax) / 2;
-      // The advance slot in canvas pixels for this glyph
-      const slotCenterX = advancePerGlyph / 2;
 
       context.save();
-      // Position at the horizontal center of this glyph's advance slot
-      context.translate(cursorX + slotCenterX, 0);
-      // Scale: X stays as-is, Y is negated to flip from PDF coords to canvas coords.
-      context.scale(glyphScale, -glyphScale);
-      // Use the parsed text baseline for vertical placement; centering each glyph
-      // independently causes OCR headers to wobble up and down.
-      context.translate(-glyphCenterX, 0);
+      if (advancePerGlyph > 0.01) {
+        const glyphCenterX = (glyphBounds.minX + glyphBounds.maxX) / 2;
+        const slotCenterX = advancePerGlyph / 2;
+        context.translate(cursorX + slotCenterX, 0);
+        context.scale(glyphScale, -glyphScale);
+        context.translate(-glyphCenterX, 0);
+      } else {
+        context.translate(cursorX, 0);
+        context.scale(glyphScale, -glyphScale);
+      }
 
+      this.drawGlyphImageLayers(context, glyph.imageLayers);
       this.drawGlyphPaths(context, glyph);
 
       context.restore();
@@ -843,6 +876,140 @@ export class CanvasRenderer {
           // End path without painting
           context.beginPath();
           break;
+      }
+    }
+  }
+
+  private measureType3GlyphBounds(glyph: Type3Glyph): PDFImageBounds | undefined {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (const cmd of glyph.pathCommands) {
+      if ('x' in cmd && typeof cmd.x === 'number') {
+        minX = Math.min(minX, cmd.x);
+        maxX = Math.max(maxX, cmd.x);
+      }
+      if ('y' in cmd && typeof cmd.y === 'number') {
+        minY = Math.min(minY, cmd.y);
+        maxY = Math.max(maxY, cmd.y);
+      }
+      if ('x1' in cmd && typeof cmd.x1 === 'number') {
+        minX = Math.min(minX, cmd.x1);
+        maxX = Math.max(maxX, cmd.x1);
+      }
+      if ('y1' in cmd && typeof cmd.y1 === 'number') {
+        minY = Math.min(minY, cmd.y1);
+        maxY = Math.max(maxY, cmd.y1);
+      }
+      if ('x2' in cmd && typeof cmd.x2 === 'number') {
+        minX = Math.min(minX, cmd.x2);
+        maxX = Math.max(maxX, cmd.x2);
+      }
+      if ('y2' in cmd && typeof cmd.y2 === 'number') {
+        minY = Math.min(minY, cmd.y2);
+        maxY = Math.max(maxY, cmd.y2);
+      }
+      if ('x3' in cmd && typeof cmd.x3 === 'number') {
+        minX = Math.min(minX, cmd.x3);
+        maxX = Math.max(maxX, cmd.x3);
+      }
+      if ('y3' in cmd && typeof cmd.y3 === 'number') {
+        minY = Math.min(minY, cmd.y3);
+        maxY = Math.max(maxY, cmd.y3);
+      }
+    }
+
+    for (const layer of glyph.imageLayers ?? []) {
+      minX = Math.min(minX, layer.bounds.minX);
+      minY = Math.min(minY, layer.bounds.minY);
+      maxX = Math.max(maxX, layer.bounds.maxX);
+      maxY = Math.max(maxY, layer.bounds.maxY);
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+      return undefined;
+    }
+
+    return { minX, minY, maxX, maxY };
+  }
+
+  private drawGlyphImageLayers(
+    context: CanvasRenderingContext2D,
+    imageLayers: Type3GlyphImageLayer[] | undefined
+  ): void {
+    if (!imageLayers || imageLayers.length === 0) {
+      return;
+    }
+
+    for (const layer of imageLayers) {
+      const width = layer.bounds.maxX - layer.bounds.minX;
+      const height = layer.bounds.maxY - layer.bounds.minY;
+      if (!(width > 0) || !(height > 0)) {
+        continue;
+      }
+
+      const x = layer.bounds.minX;
+      const y = layer.bounds.minY;
+
+      if (layer.mask) {
+        const fill = layer.fillColor ?? [0, 0, 0, 1];
+        const r = Math.round(fill[0] * 255);
+        const g = Math.round(fill[1] * 255);
+        const b = Math.round(fill[2] * 255);
+        const alpha = Math.round((fill[3] ?? 1) * 255);
+        const solidMaskPaint = this.readSolidMaskPaint(layer.mask);
+
+        if (solidMaskPaint === true) {
+          context.fillStyle = `rgba(${r}, ${g}, ${b}, ${(fill[3] ?? 1)})`;
+          context.fillRect(x, y, width, height);
+          continue;
+        }
+
+        if (solidMaskPaint === false || typeof document === 'undefined') {
+          continue;
+        }
+
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = layer.mask.width;
+        maskCanvas.height = layer.mask.height;
+        const maskContext = maskCanvas.getContext('2d');
+        if (!maskContext) {
+          continue;
+        }
+
+        const imageData = maskContext.createImageData(layer.mask.width, layer.mask.height);
+        const pixels = imageData.data;
+        for (let index = 0; index < layer.mask.data.length; index += 1) {
+          const paint = layer.mask.blackIs1 ? layer.mask.data[index] === 1 : layer.mask.data[index] === 0;
+          const offset = index * 4;
+          if (paint) {
+            pixels[offset] = r;
+            pixels[offset + 1] = g;
+            pixels[offset + 2] = b;
+            pixels[offset + 3] = alpha;
+          }
+        }
+
+        maskContext.putImageData(imageData, 0, 0);
+        context.drawImage(maskCanvas, x, y, width, height);
+        continue;
+      }
+
+      if (layer.pixels && typeof document !== 'undefined') {
+        const bufferCanvas = document.createElement('canvas');
+        bufferCanvas.width = layer.pixels.width;
+        bufferCanvas.height = layer.pixels.height;
+        const bufferContext = bufferCanvas.getContext('2d');
+        if (!bufferContext) {
+          continue;
+        }
+
+        const imageData = bufferContext.createImageData(layer.pixels.width, layer.pixels.height);
+        imageData.data.set(layer.pixels.data);
+        bufferContext.putImageData(imageData, 0, 0);
+        context.drawImage(bufferCanvas, x, y, width, height);
       }
     }
   }

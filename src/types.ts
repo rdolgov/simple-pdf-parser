@@ -24,10 +24,31 @@ export type Type3PathCommand =
   | { op: 'n' };
 
 /** A Type3 glyph with pre-parsed path commands */
+export interface Type3GlyphImageLayer {
+  bounds: PDFImageBounds;
+  fillColor?: [number, number, number, number];
+  mask?: {
+    width: number;
+    height: number;
+    data: Uint8Array;
+    blackIs1: boolean;
+  };
+  pixels?: {
+    width: number;
+    height: number;
+    data: Uint8ClampedArray;
+    offsetX?: number;
+    offsetY?: number;
+    originalWidth?: number;
+    originalHeight?: number;
+  };
+}
+
 export interface Type3Glyph {
   glyphName: string;
   pathCommands: Type3PathCommand[];
   width: number;
+  imageLayers?: Type3GlyphImageLayer[];
 }
 
 export interface PDFTextItem {

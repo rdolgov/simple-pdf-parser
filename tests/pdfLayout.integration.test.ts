@@ -365,6 +365,9 @@ describe('PDF layout integration', () => {
       (draw) => draw.font.includes("'LINE10'") && draw.translateX >= 430 && draw.translateX <= 510 && draw.translateY >= 400 && draw.translateY <= 570
     );
     const drawTexts = relevantDraws.map((draw) => draw.text);
+    const titleDraw = context.textDraws.find(
+      (draw) => draw.text.includes('Introduction to Information Theory') && draw.translateY >= 220 && draw.translateY <= 260
+    );
 
     expect(joinedText).toContain('Introduction to Information Theory');
     expect(joinedText).toContain('fundamental problem');
@@ -379,6 +382,7 @@ describe('PDF layout integration', () => {
     expect(drawTexts.some((text) => text.includes('╲'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('R @'))).toBe(false);
     expect(drawTexts.some((text) => text.includes('@'))).toBe(false);
+    expect(titleDraw?.font.startsWith('italic')).toBe(true);
   });
 
   it('keeps MacKay CCITT illustration XObjects available to the renderer on pages 16 and 19', () => {
@@ -396,6 +400,37 @@ describe('PDF layout integration', () => {
     expect(page19Figures.length).toBeGreaterThanOrEqual(4);
     expect(page16Figures.every((item) => Boolean(item.pixels))).toBe(true);
     expect(page19Figures.every((item) => Boolean(item.pixels))).toBe(true);
+  });
+
+  it('keeps MacKay page-17 inline image masks available for diagram rendering', () => {
+    const document = loadMacKayDocument();
+    const page = document.getPage(17);
+
+    expect(page).toBeDefined();
+
+    const masks = page!.imageItems.filter((item) => Boolean(item.mask));
+
+    expect(masks.length).toBeGreaterThanOrEqual(20);
+    expect(masks.some((item) => item.bounds.maxX - item.bounds.minX > 100 && item.bounds.maxY - item.bounds.minY < 2)).toBe(true);
+    expect(masks.some((item) => item.bounds.maxY - item.bounds.minY > 25 && item.bounds.maxX - item.bounds.minX < 2)).toBe(true);
+  });
+
+  it('renders the MacKay page-17 LINE10 figure with vertical arrows instead of fallback digits', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 17);
+    const relevantDraws = context.textDraws.filter(
+      (draw) => draw.font.includes("'LINE10'") && draw.translateX >= 140 && draw.translateX <= 310 && draw.translateY >= 90 && draw.translateY <= 245
+    );
+    const drawTexts = relevantDraws.map((draw) => draw.text);
+
+    expect(drawTexts.some((text) => text.includes('↑'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('↓'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('6'))).toBe(false);
+    expect(drawTexts.some((text) => text.includes('?'))).toBe(false);
   });
 
   it('renders Type3 OCR overlays on scanned pages', () => {
