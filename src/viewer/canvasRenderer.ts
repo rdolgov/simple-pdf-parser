@@ -1,4 +1,12 @@
-import type { PDFImageBounds, PDFImageItem, PDFLineItem, PDFPage, PDFRectItem, PDFTextItem, Type3Glyph } from '../types.js';
+import type {
+  PDFImageBounds,
+  PDFImageItem,
+  PDFPage,
+  PDFPathCommand,
+  PDFPathItem,
+  PDFTextItem,
+  Type3Glyph
+} from '../types.js';
 import type { PDFDocument } from '../pdfDocument.js';
 import { resolveCanvasFontFallback } from './fontFallback.js';
 
@@ -138,8 +146,12 @@ export class CanvasRenderer {
     context.scale(this.currentScale * dpr, this.currentScale * dpr);
 
     this.drawBackground(context, metrics, renderOptions);
-    this.drawRects(context, page, metrics, renderOptions);
-    this.drawLines(context, page, metrics, renderOptions);
+    if (page.pathItems && page.pathItems.length > 0) {
+      this.drawPathItems(context, page, metrics, renderOptions);
+    } else {
+      this.drawRects(context, page, metrics, renderOptions);
+      this.drawLines(context, page, metrics, renderOptions);
+    }
     this.drawImages(context, page, metrics, renderOptions, this.currentScale * dpr);
     this.drawImagePlaceholders(context, page, metrics, renderOptions);
     this.drawTextItems(context, page, metrics, renderOptions);
@@ -241,6 +253,46 @@ export class CanvasRenderer {
       context.moveTo(startX, startY);
       context.lineTo(endX, endY);
       context.stroke();
+    }
+
+    context.restore();
+  }
+
+  private drawPathItems(
+    context: CanvasRenderingContext2D,
+    page: PDFPage,
+    metrics: ReturnType<CanvasRenderer['computePageMetrics']>,
+    _options: Required<RenderOptions>
+  ): void {
+    if (!page.pathItems || page.pathItems.length === 0) {
+      return;
+    }
+
+    context.save();
+
+    for (const path of page.pathItems) {
+      if (path.commands.length === 0) {
+        continue;
+      }
+
+      context.beginPath();
+      this.tracePagePath(context, path.commands, metrics);
+
+      if (path.fillColor) {
+        const [r, g, b, a] = path.fillColor;
+        context.fillStyle = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
+        context.fill(path.fillRule);
+      }
+
+      if (path.strokeColor && path.lineWidth > 0) {
+        const [r, g, b, a] = path.strokeColor;
+        context.strokeStyle = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
+        context.lineWidth = Math.max(0.5, path.lineWidth);
+        context.lineCap = path.lineCap;
+        context.lineJoin = path.lineJoin;
+        context.miterLimit = path.miterLimit;
+        context.stroke();
+      }
     }
 
     context.restore();
@@ -793,6 +845,44 @@ export class CanvasRenderer {
           break;
       }
     }
+  }
+
+  private tracePagePath(
+    context: CanvasRenderingContext2D,
+    commands: PDFPathCommand[],
+    metrics: ReturnType<CanvasRenderer['computePageMetrics']>
+  ): void {
+    for (const command of commands) {
+      switch (command.op) {
+        case 'M':
+          context.moveTo(this.pageXToCanvas(command.x, metrics), this.pageYToCanvas(command.y, metrics));
+          break;
+        case 'L':
+          context.lineTo(this.pageXToCanvas(command.x, metrics), this.pageYToCanvas(command.y, metrics));
+          break;
+        case 'C':
+          context.bezierCurveTo(
+            this.pageXToCanvas(command.x1, metrics),
+            this.pageYToCanvas(command.y1, metrics),
+            this.pageXToCanvas(command.x2, metrics),
+            this.pageYToCanvas(command.y2, metrics),
+            this.pageXToCanvas(command.x3, metrics),
+            this.pageYToCanvas(command.y3, metrics)
+          );
+          break;
+        case 'Z':
+          context.closePath();
+          break;
+      }
+    }
+  }
+
+  private pageXToCanvas(x: number, metrics: ReturnType<CanvasRenderer['computePageMetrics']>): number {
+    return metrics.offsetX + x;
+  }
+
+  private pageYToCanvas(y: number, metrics: ReturnType<CanvasRenderer['computePageMetrics']>): number {
+    return metrics.orientation === 'ascending' ? metrics.offsetY + y : metrics.offsetY - y;
   }
 
   private resolveVerticalTextFit(

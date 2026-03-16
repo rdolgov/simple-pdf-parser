@@ -5,10 +5,10 @@
 import type { FontResource, FontMap } from './parserTypes.js';
 import {
   CONTROL_CHAR_CMMI_OVERRIDES,
+  CONTROL_CHAR_CMSY_OVERRIDES,
   CONTROL_CHAR_CMEX_OVERRIDES,
   CONTROL_CHAR_FALLBACK,
   CONTROL_CHAR_LINE_OVERRIDES,
-  CONTROL_CHAR_MATH_OVERRIDES,
   PRINTABLE_CMMI_OVERRIDES,
   PRINTABLE_CMEX_OVERRIDES,
   PRINTABLE_CMSY_OVERRIDES,
@@ -31,7 +31,7 @@ export function controlCharOverrides(font?: FontResource): Record<number, string
     return CONTROL_CHAR_CMMI_OVERRIDES;
   }
   if (/CMSY/i.test(font.baseFontName)) {
-    return CONTROL_CHAR_MATH_OVERRIDES;
+    return CONTROL_CHAR_CMSY_OVERRIDES;
   }
   if (/LINE10/i.test(font.baseFontName)) {
     return CONTROL_CHAR_LINE_OVERRIDES;

@@ -300,6 +300,17 @@ describe('PDF layout integration', () => {
     expect(page110Joined).toContain('Huffman coding');
   });
 
+  it('renders Bezier path geometry for the MacKay contents page instead of flattening it to line segments', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 9);
+
+    expect(context.operations.some((operation) => operation.startsWith('bezierCurveTo:'))).toBe(true);
+  });
+
   it('renders repaired MacKay lexical boundaries on additional body pages', () => {
     const document = loadMacKayDocument();
     const page150Context = new RecordingContext();
@@ -349,11 +360,18 @@ describe('PDF layout integration', () => {
     const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
 
     renderer.render(canvas, document, 15);
+    const joinedText = context.textDraws.map((draw) => draw.text).join(' ');
     const relevantDraws = context.textDraws.filter(
       (draw) => draw.font.includes("'LINE10'") && draw.translateX >= 430 && draw.translateX <= 510 && draw.translateY >= 400 && draw.translateY <= 570
     );
     const drawTexts = relevantDraws.map((draw) => draw.text);
 
+    expect(joinedText).toContain('Introduction to Information Theory');
+    expect(joinedText).toContain('fundamental problem');
+    expect(joinedText).toContain('analogue telephone line');
+    expect(joinedText).not.toContain('Intro duction');
+    expect(joinedText).not.toContain('ffl');
+    expect(joinedText).toContain('•');
     expect(drawTexts.some((text) => text.includes('→'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('↗'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('↘'))).toBe(true);
@@ -361,6 +379,23 @@ describe('PDF layout integration', () => {
     expect(drawTexts.some((text) => text.includes('╲'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('R @'))).toBe(false);
     expect(drawTexts.some((text) => text.includes('@'))).toBe(false);
+  });
+
+  it('keeps MacKay CCITT illustration XObjects available to the renderer on pages 16 and 19', () => {
+    const document = loadMacKayDocument();
+    const page16 = document.getPage(16);
+    const page19 = document.getPage(19);
+
+    expect(page16).toBeDefined();
+    expect(page19).toBeDefined();
+
+    const page16Figures = page16!.imageItems.filter((item) => !item.name.startsWith('inline'));
+    const page19Figures = page19!.imageItems.filter((item) => !item.name.startsWith('inline'));
+
+    expect(page16Figures).toHaveLength(2);
+    expect(page19Figures.length).toBeGreaterThanOrEqual(4);
+    expect(page16Figures.every((item) => Boolean(item.pixels))).toBe(true);
+    expect(page19Figures.every((item) => Boolean(item.pixels))).toBe(true);
   });
 
   it('renders Type3 OCR overlays on scanned pages', () => {

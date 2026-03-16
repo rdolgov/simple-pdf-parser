@@ -42,12 +42,16 @@ export class RecordingContext {
   fillStyle: string | CanvasGradient | CanvasPattern = '';
   strokeStyle: string | CanvasGradient | CanvasPattern = '';
   lineWidth = 1;
+  lineCap: CanvasLineCap = 'butt';
+  lineJoin: CanvasLineJoin = 'miter';
+  miterLimit = 10;
   font = '';
   textBaseline: CanvasTextBaseline = 'alphabetic';
   imageSmoothingEnabled = true;
   textRendering?: string;
   readonly textDraws: RecordedTextDraw[] = [];
   readonly pathPaints: RecordedPathPaint[] = [];
+  readonly operations: string[] = [];
 
   private state: TransformState = { ...DEFAULT_STATE };
   private readonly stack: TransformState[] = [];
@@ -80,19 +84,32 @@ export class RecordingContext {
     this.state.rotation += angle;
   }
 
-  fillRect(): void {}
+  fillRect(): void {
+    this.operations.push('fillRect');
+  }
 
-  strokeRect(): void {}
+  strokeRect(): void {
+    this.operations.push('strokeRect');
+  }
 
-  beginPath(): void {}
+  beginPath(): void {
+    this.operations.push('beginPath');
+  }
 
-  moveTo(): void {}
+  moveTo(x: number, y: number): void {
+    this.operations.push(`moveTo:${x},${y}`);
+  }
 
-  lineTo(): void {}
+  lineTo(x: number, y: number): void {
+    this.operations.push(`lineTo:${x},${y}`);
+  }
 
-  closePath(): void {}
+  closePath(): void {
+    this.operations.push('closePath');
+  }
 
   stroke(): void {
+    this.operations.push('stroke');
     this.pathPaints.push({
       kind: 'stroke',
       rotation: this.state.rotation,
@@ -104,6 +121,7 @@ export class RecordingContext {
   }
 
   fill(fillRule?: CanvasFillRule): void {
+    this.operations.push(`fill:${fillRule ?? 'nonzero'}`);
     this.pathPaints.push({
       kind: 'fill',
       fillRule,
@@ -115,11 +133,17 @@ export class RecordingContext {
     });
   }
 
-  drawImage(): void {}
+  drawImage(): void {
+    this.operations.push('drawImage');
+  }
 
-  rect(): void {}
+  rect(x: number, y: number, width: number, height: number): void {
+    this.operations.push(`rect:${x},${y},${width},${height}`);
+  }
 
-  bezierCurveTo(): void {}
+  bezierCurveTo(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): void {
+    this.operations.push(`bezierCurveTo:${x1},${y1},${x2},${y2},${x3},${y3}`);
+  }
 
   measureText(text: string): TextMetrics {
     const fontSize = readFontSize(this.font);

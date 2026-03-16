@@ -14,12 +14,12 @@ interface BoundaryPlan {
 
 const COMMON_WORDS = new Set([
   'a', 'about', 'above', 'across', 'after', 'again', 'against', 'all', 'along', 'also',
-  'among', 'an', 'and', 'any', 'are', 'around', 'as', 'at', 'be', 'because',
+  'among', 'an', 'and', 'another', 'any', 'are', 'around', 'as', 'at', 'be', 'because',
   'before', 'behind', 'below', 'between', 'both', 'but', 'by', 'can', 'do',
   'each', 'either', 'for', 'from', 'given', 'has', 'have', 'how', 'if', 'in',
-  'into', 'is', 'it', 'its', 'know', 'let', 'lets', 'mean', 'more', 'most',
+  'into', 'is', 'it', 'its', 'know', 'let', 'lets', 'measure', 'mean', 'more', 'most',
   'no', 'not', 'of', 'on', 'one', 'only', 'or', 'other', 'our', 'out', 'over',
-  'probable', 'same', 'see', 'so', 'some', 'start', 'such', 'than', 'that',
+  'perfectly', 'probable', 'same', 'see', 'selected', 'so', 'some', 'start', 'such', 'than', 'that',
   'the', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'those',
   'therefore', 'through', 'thus', 'to', 'under', 'up', 'use', 'using', 'we',
   'were', 'what', 'when', 'where', 'which', 'while', 'who', 'why', 'with',
@@ -32,12 +32,13 @@ const TECHNICAL_WORDS = new Set([
   'conditional', 'content', 'data', 'define', 'defining',
   'describe', 'distribution', 'document', 'efficient', 'english', 'entropy',
   'enumeration', 'exact', 'exercise', 'exercises', 'figure', 'first',
-  'formula', 'function', 'gaussian', 'hardware', 'huffman', 'immediately', 'implicit',
+  'formula', 'function', 'fundamental', 'gaussian', 'hardware', 'huffman', 'immediately', 'implicit',
   'independent', 'inference', 'information', 'initial', 'intuitive', 'joint',
   'letter', 'letters', 'likelihood', 'matrix', 'message', 'messages', 'method',
-  'methods', 'model', 'models', 'monte', 'natural', 'noisy', 'page', 'paper',
+  'methods', 'model', 'models', 'monte', 'natural', 'noisy', 'orbiting', 'page', 'paper',
   'prefix', 'probability', 'random', 'review', 'second', 'source', 'stirling',
-  'system', 'theorem', 'variable', 'variables', 'variance'
+  'system', 'telephone', 'theorem', 'variable', 'variables', 'variance',
+  'introduction', 'magnetization', 'neighbouring', 'reproducing', 'spacecraft'
 ]);
 
 const COMMON_BIGRAMS = new Set([
@@ -129,11 +130,12 @@ function buildLexicon(items: PDFTextItem[]): BoundaryLexicon {
 }
 
 function refineItemText(text: string, fontKey: string, lexicon: BoundaryLexicon): string {
+  const dehyphenated = mergeKnownHyphenatedSplits(text, fontKey, lexicon);
   let cursor = 0;
   let refined = '';
 
-  while (cursor < text.length) {
-    const currentChar = text[cursor] ?? '';
+  while (cursor < dehyphenated.length) {
+    const currentChar = dehyphenated[cursor] ?? '';
     if (!isAsciiLetter(currentChar)) {
       refined += currentChar;
       cursor += 1;
@@ -141,8 +143,8 @@ function refineItemText(text: string, fontKey: string, lexicon: BoundaryLexicon)
     }
 
     let end = cursor + 1;
-    while (end < text.length) {
-      const candidate = text[end] ?? '';
+    while (end < dehyphenated.length) {
+      const candidate = dehyphenated[end] ?? '';
       if (isAsciiLetter(candidate) || candidate === ' ') {
         end += 1;
         continue;
@@ -150,11 +152,11 @@ function refineItemText(text: string, fontKey: string, lexicon: BoundaryLexicon)
       break;
     }
 
-    refined += refineSegment(text.slice(cursor, end), fontKey, lexicon);
+    refined += refineSegment(dehyphenated.slice(cursor, end), fontKey, lexicon);
     cursor = end;
   }
 
-  return mergeCanonicalShortWordPairs(refined, fontKey, lexicon);
+  return mergeStrongSplitWordRuns(mergeCanonicalShortWordPairs(refined, fontKey, lexicon), fontKey, lexicon);
 }
 
 function refineSegment(segment: string, fontKey: string, lexicon: BoundaryLexicon): string {
@@ -165,7 +167,7 @@ function refineSegment(segment: string, fontKey: string, lexicon: BoundaryLexico
     return segment;
   }
 
-  if (/[A-Z].*[A-Z].*[A-Z]/.test(core)) {
+  if (hasAllCapsAcronymWords(core)) {
     return segment;
   }
 
@@ -440,6 +442,66 @@ function mergeCanonicalShortWordPairs(
   }
 
   return refined;
+}
+
+function mergeStrongSplitWordRuns(
+  text: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string {
+  const tokens = tokenizeWordSeparators(text);
+  if (tokens.length < 3) {
+    return text;
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+
+    for (let start = 0; start < tokens.length; start += 1) {
+      if (tokens[start]?.kind !== 'word') {
+        continue;
+      }
+
+      let mergedThisRound = false;
+      for (const runLength of [4, 3, 2]) {
+        const end = findWordRunEnd(tokens, start, runLength);
+        if (end === -1 || !hasOnlyWhitespaceSeparators(tokens, start, end)) {
+          continue;
+        }
+
+        const words = readWordRun(tokens, start, end);
+        if (!shouldMergeWordRun(words, fontKey, lexicon)) {
+          continue;
+        }
+
+        tokens.splice(start, end - start + 1, {
+          kind: 'word',
+          value: words.join('')
+        });
+        changed = true;
+        mergedThisRound = true;
+        break;
+      }
+
+      if (mergedThisRound) {
+        break;
+      }
+    }
+  }
+
+  return tokens.map((token) => token.value).join('');
+}
+
+function mergeKnownHyphenatedSplits(
+  text: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string {
+  return text.replace(/\b([A-Za-z]{2,})-\s+([A-Za-z]{2,})\b/g, (match, left, right) => {
+    const merged = `${left}${right}`;
+    return scoreWord(merged, fontKey, lexicon) >= 9 ? merged : match;
+  });
 }
 
 function scoreSegmentation(
@@ -796,4 +858,111 @@ function incrementCount(counts: Map<string, number>, key: string): void {
 
 function isAsciiLetter(char: string): boolean {
   return /^[A-Za-z]$/.test(char);
+}
+
+type BoundaryToken = {
+  kind: 'word' | 'sep';
+  value: string;
+};
+
+function tokenizeWordSeparators(text: string): BoundaryToken[] {
+  const matches = text.match(/[A-Za-z]+|\s+|[^A-Za-z\s]+/g) ?? [];
+  return matches.map((value) => ({
+    kind: /^[A-Za-z]+$/.test(value) ? 'word' : 'sep',
+    value
+  }));
+}
+
+function findWordRunEnd(tokens: BoundaryToken[], start: number, wordCount: number): number {
+  let seenWords = 0;
+  for (let index = start; index < tokens.length; index += 1) {
+    if (tokens[index]?.kind !== 'word') {
+      continue;
+    }
+    seenWords += 1;
+    if (seenWords === wordCount) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function hasOnlyWhitespaceSeparators(tokens: BoundaryToken[], start: number, end: number): boolean {
+  for (let index = start + 1; index < end; index += 1) {
+    const token = tokens[index];
+    if (!token) {
+      return false;
+    }
+    if (token.kind === 'word') {
+      continue;
+    }
+    if (!/^\s+$/.test(token.value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function readWordRun(tokens: BoundaryToken[], start: number, end: number): string[] {
+  const words: string[] = [];
+  for (let index = start; index <= end; index += 1) {
+    const token = tokens[index];
+    if (token?.kind === 'word') {
+      words.push(token.value);
+    }
+  }
+  return words;
+}
+
+function shouldMergeWordRun(
+  words: string[],
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): boolean {
+  if (words.length < 2) {
+    return false;
+  }
+
+  const merged = words.join('');
+  const normalizedMerged = merged.toLowerCase();
+  const mergedScore = scoreWord(merged, fontKey, lexicon);
+  const hasWeakFragment = words.some((word) => word.length <= 5 || scoreWord(word, fontKey, lexicon) < 8);
+  const isExplicitKnownWord = COMMON_WORDS.has(normalizedMerged) || TECHNICAL_WORDS.has(normalizedMerged);
+
+  if (!hasWeakFragment || mergedScore < 9) {
+    return false;
+  }
+
+  if (isExplicitKnownWord) {
+    return true;
+  }
+
+  const originalBoundaries = new Set<number>();
+  let offset = 0;
+  for (let index = 0; index < words.length - 1; index += 1) {
+    offset += words[index]?.length ?? 0;
+    originalBoundaries.add(offset);
+  }
+
+  const originalScore = scoreSegmentation(words, originalBoundaries, fontKey, lexicon);
+  return mergedScore > originalScore + 1.25;
+}
+
+function hasAllCapsAcronymWords(segment: string): boolean {
+  const words = segment.split(/\s+/).filter(Boolean);
+  let acronymLikeCount = 0;
+
+  for (const word of words) {
+    if (word.length < 2) {
+      continue;
+    }
+    if (word === word.toUpperCase() && /[A-Z]/.test(word)) {
+      acronymLikeCount += 1;
+      if (acronymLikeCount >= 2) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }

@@ -227,6 +227,11 @@ export const CONTROL_CHAR_MATH_OVERRIDES: Record<number, string> = {
   17: '≡'
 };
 
+export const CONTROL_CHAR_CMSY_OVERRIDES: Record<number, string> = {
+  ...CONTROL_CHAR_MATH_OVERRIDES,
+  15: '•'
+};
+
 export const CONTROL_CHAR_CMMI_OVERRIDES: Record<number, string> = {
   21: '\u03bb',
   25: '\u03c0'

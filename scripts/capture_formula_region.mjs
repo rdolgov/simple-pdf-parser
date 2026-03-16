@@ -82,7 +82,15 @@ async function runCommand(command, commandArgs, options = {}) {
   });
 }
 
-async function captureWithHeadlessChrome({ chromeBinary, outputPath, url, userDataDir, windowSize }) {
+async function captureWithHeadlessChrome({
+  chromeBinary,
+  outputPath,
+  url,
+  userDataDir,
+  windowSize,
+  captureTimeoutMs,
+  virtualTimeBudgetMs
+}) {
   rmSync(outputPath, { force: true });
 
   const chrome = spawn(chromeBinary, [
@@ -94,7 +102,7 @@ async function captureWithHeadlessChrome({ chromeBinary, outputPath, url, userDa
     `--window-size=${windowSize.width},${windowSize.height}`,
     `--screenshot=${outputPath}`,
     '--run-all-compositor-stages-before-draw',
-    '--virtual-time-budget=5000',
+    `--virtual-time-budget=${virtualTimeBudgetMs}`,
     url
   ], {
     cwd: repoRoot,
@@ -104,7 +112,7 @@ async function captureWithHeadlessChrome({ chromeBinary, outputPath, url, userDa
   try {
     const startedAt = Date.now();
     let lastSize = -1;
-    while (Date.now() - startedAt < 15000) {
+    while (Date.now() - startedAt < captureTimeoutMs) {
       if (existsSync(outputPath)) {
         const { size } = statSync(outputPath);
         if (size > 0 && size === lastSize) {
@@ -323,6 +331,8 @@ async function main() {
   const padding = Math.max(0, parseNumber(args.get('padding'), 16));
   const cropPadding = Math.max(0, parseNumber(args.get('crop-padding'), 8));
   const scale = Math.max(1, parseNumber(args.get('scale'), 2));
+  const virtualTimeBudgetMs = Math.max(5000, Math.floor(parseNumber(args.get('virtual-time-budget-ms'), 15000)));
+  const captureTimeoutMs = Math.max(15000, Math.floor(parseNumber(args.get('capture-timeout-ms'), 45000)));
   const skipBuild = args.has('skip-build');
   const portArg = args.get('port');
   const port = portArg ? Math.max(1024, Math.floor(parseNumber(portArg, 4174))) : 0;
@@ -366,6 +376,8 @@ async function main() {
         outputPath,
         url,
         userDataDir: chromeUserDataDir,
+        captureTimeoutMs,
+        virtualTimeBudgetMs,
         windowSize: {
           height: captureHeight,
           width: captureWidth

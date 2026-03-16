@@ -315,6 +315,26 @@ ET
     expect(page578Text).toContain('average entropy');
   });
 
+  it('preserves Bezier path geometry for the MacKay contents-page badges and circles', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(9);
+
+    expect(page).toBeDefined();
+    expect(page!.pathItems?.length ?? 0).toBeGreaterThan(0);
+    expect(page!.pathItems!.some((item) => item.commands.some((command) => command.op === 'C'))).toBe(true);
+    expect(
+      page!.pathItems!.some(
+        (item) =>
+          item.lineWidth >= 3 &&
+          item.strokeColor?.[0] === 1 &&
+          item.strokeColor?.[1] === 1 &&
+          item.strokeColor?.[2] === 1
+      )
+    ).toBe(true);
+  });
+
   it('decodes Computer Modern math glyphs on the MacKay chapter-1 review page', () => {
     const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);
@@ -427,11 +447,26 @@ ET
 
     expect(page).toBeDefined();
 
+    const pageText = page!.textItems.map((item) => item.text).join(' ');
+
     const diagramItems = page!.textItems
       .filter((item) => item.font === 'LINE10' && item.bounds.minX >= 430 && item.bounds.maxX <= 505 && item.bounds.minY >= 250 && item.bounds.maxY <= 400)
       .sort((left, right) => left.bounds.minY - right.bounds.minY || left.bounds.minX - right.bounds.minX);
     const diagramText = diagramItems.map((item) => item.text).join(' ');
 
+    expect(pageText).toContain('Introduction to Information Theory');
+    expect(pageText).toContain('fundamental problem');
+    expect(pageText).toContain('reproducing');
+    expect(pageText).toContain('another point');
+    expect(pageText).toContain('analogue telephone line');
+    expect(pageText).not.toContain('Intro duction');
+    expect(pageText).not.toContain('fundamen tal');
+    expect(pageText).not.toContain('repro ducing');
+    expect(pageText).not.toContain('an other');
+    expect(pageText).not.toContain('teleph one');
+    expect(pageText).not.toContain('or biting');
+    expect(pageText).not.toContain('ffl');
+    expect(page!.textItems.some((item) => item.text === '•')).toBe(true);
     expect(diagramText).toContain('→');
     expect(diagramText).toContain('↗');
     expect(diagramText).toContain('↘');
@@ -439,6 +474,28 @@ ET
     expect(diagramText).toContain('╲');
     expect(diagramText).not.toContain('R @');
     expect(diagramText).not.toContain('@');
+  });
+
+  it('decodes CCITT-compressed grayscale illustration XObjects on MacKay pages 16 and 19', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page16 = document.getPage(16);
+    const page19 = document.getPage(19);
+
+    expect(page16).toBeDefined();
+    expect(page19).toBeDefined();
+
+    const page16Figures = page16!.imageItems.filter((item) => !item.name.startsWith('inline'));
+    const page19Figures = page19!.imageItems.filter((item) => !item.name.startsWith('inline'));
+
+    expect(page16Figures).toHaveLength(2);
+    expect(page16Figures.every((item) => Boolean(item.pixels))).toBe(true);
+    expect(page16Figures.every((item) => item.sourceWidth === 200 && item.sourceHeight === 200)).toBe(true);
+
+    expect(page19Figures.length).toBeGreaterThanOrEqual(4);
+    expect(page19Figures.every((item) => Boolean(item.pixels))).toBe(true);
+    expect(page19Figures.some((item) => item.sourceHeight === 600)).toBe(true);
   });
 
   it('does not merge across table columns in Table 3 (NIPS Transformer paper)', () => {

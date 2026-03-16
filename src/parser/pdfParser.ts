@@ -4,6 +4,8 @@ import type {
   PDFImageItem,
   PDFLayout,
   PDFLineItem,
+  PDFPathCommand,
+  PDFPathItem,
   PDFPage,
   PDFPageSize,
   PDFRectItem,
@@ -23,6 +25,14 @@ import {
   computeImageBounds,
   transformImageItem
 } from './mathUtils.js';
+import {
+  buildRectanglePathCommands,
+  clonePathCommands,
+  closePathCommands,
+  mapPdfLineCap,
+  mapPdfLineJoin,
+  transformPathItem
+} from './pathUtils.js';
 import { decodeCcitt } from './ccittDecoder.js';
 import type { CcittMask } from './ccittDecoder.js';
 import { decodeFlate } from './streamDecoder.js';
@@ -97,6 +107,7 @@ import {
   applyImagePredictor,
   resolveColorComponentCount,
   decodeFlateImage,
+  ccittMaskToGrayPixels,
   ccittMaskToPixels,
   trimPixelBounds
 } from './imageDecoder.js';
@@ -620,6 +631,7 @@ export class PDFParser {
         imageItems: extracted.imageItems,
         lineItems: extracted.lineItems,
         rectItems: extracted.rectItems,
+        pathItems: extracted.pathItems,
         size: this.defaultPageSize()
       });
 
@@ -634,6 +646,7 @@ export class PDFParser {
       const imageItems: PDFImageItem[] = [];
       const lineItems: PDFLineItem[] = [];
       const rectItems: PDFRectItem[] = [];
+      const pathItems: PDFPathItem[] = [];
       const pageSize = this.resolvePageSize(pageObject, objects) ?? this.defaultPageSize();
 
       for (const ref of contentRefs) {
@@ -653,6 +666,7 @@ export class PDFParser {
         imageItems.push(...extracted.imageItems);
         lineItems.push(...extracted.lineItems);
         rectItems.push(...extracted.rectItems);
+        pathItems.push(...extracted.pathItems);
       }
 
       pages.push({
@@ -661,6 +675,7 @@ export class PDFParser {
         imageItems,
         lineItems,
         rectItems,
+        pathItems,
         size: pageSize
       });
 
@@ -676,11 +691,18 @@ export class PDFParser {
     objects: Map<string, PDFRawObject>,
     rawContent: string,
     visitedForms: Set<string> = new Set()
-  ): { textItems: PDFTextItem[]; imageItems: PDFImageItem[]; lineItems: PDFLineItem[]; rectItems: PDFRectItem[] } {
+  ): {
+    textItems: PDFTextItem[];
+    imageItems: PDFImageItem[];
+    lineItems: PDFLineItem[];
+    rectItems: PDFRectItem[];
+    pathItems: PDFPathItem[];
+  } {
     const textItems: PDFTextItem[] = [];
     const imageItems: PDFImageItem[] = [];
     const lineItems: PDFLineItem[] = [];
     const rectItems: PDFRectItem[] = [];
+    const pathItems: PDFPathItem[] = [];
     const stack: PDFOperatorValue[] = [];
     const graphicsStack: Matrix[] = [identityMatrix()];
     const length = streamContent.length;
@@ -700,6 +722,9 @@ export class PDFParser {
     let currentFillColor: [number, number, number, number] = [0, 0, 0, 1];
     let currentStrokeColor: [number, number, number, number] = [0, 0, 0, 1];
     let currentLineWidth = 1;
+    let currentLineCap = mapPdfLineCap(0);
+    let currentLineJoin = mapPdfLineJoin(0);
+    let currentMiterLimit = 10;
 
     // Graphics state stack for stroke/fill state
     interface GraphicsState {
@@ -707,18 +732,75 @@ export class PDFParser {
       fillColor: [number, number, number, number];
       strokeColor: [number, number, number, number];
       lineWidth: number;
+      lineCap: PDFPathItem['lineCap'];
+      lineJoin: PDFPathItem['lineJoin'];
+      miterLimit: number;
     }
     const gStateStack: GraphicsState[] = [{
       matrix: identityMatrix(),
       fillColor: [0, 0, 0, 1],
       strokeColor: [0, 0, 0, 1],
-      lineWidth: 1
+      lineWidth: 1,
+      lineCap: mapPdfLineCap(0),
+      lineJoin: mapPdfLineJoin(0),
+      miterLimit: 10
     }];
 
     // Path construction state
     interface PathPoint { x: number; y: number }
-    let currentPath: PathPoint[] = [];
+    let currentPath: PDFPathCommand[] = [];
+    let currentPoint: PathPoint | null = null;
     let pathStartPoint: PathPoint | null = null;
+    const resetCurrentPath = (): void => {
+      currentPath = [];
+      currentPoint = null;
+      pathStartPoint = null;
+    };
+    const emitCurrentPath = ({
+      closePath = false,
+      stroke = false,
+      fill = false,
+      fillRule = 'nonzero' as PDFPathItem['fillRule']
+    }: {
+      closePath?: boolean;
+      stroke?: boolean;
+      fill?: boolean;
+      fillRule?: PDFPathItem['fillRule'];
+    }): void => {
+      if (currentPath.length === 0) {
+        resetCurrentPath();
+        return;
+      }
+
+      let commands = clonePathCommands(currentPath);
+      let endPoint = currentPoint ? { ...currentPoint } : null;
+
+      if (closePath) {
+        const closed = closePathCommands(commands, endPoint, pathStartPoint);
+        commands = closed.commands;
+        endPoint = closed.currentPoint;
+      }
+
+      const currentMatrix = graphicsStack[graphicsStack.length - 1];
+      pathItems.push(
+        transformPathItem(
+          {
+            commands,
+            lineWidth: currentLineWidth,
+            strokeColor: stroke ? ([...currentStrokeColor] as [number, number, number, number]) : null,
+            fillColor: fill ? ([...currentFillColor] as [number, number, number, number]) : null,
+            fillRule,
+            lineCap: currentLineCap,
+            lineJoin: currentLineJoin,
+            miterLimit: currentMiterLimit
+          },
+          currentMatrix
+        )
+      );
+
+      currentPoint = endPoint;
+      resetCurrentPath();
+    };
 
     while (index < length) {
       const char = streamContent[index];
@@ -789,7 +871,10 @@ export class PDFParser {
           matrix: cloneMatrix(current),
           fillColor: [...currentFillColor] as [number, number, number, number],
           strokeColor: [...currentStrokeColor] as [number, number, number, number],
-          lineWidth: currentLineWidth
+          lineWidth: currentLineWidth,
+          lineCap: currentLineCap,
+          lineJoin: currentLineJoin,
+          miterLimit: currentMiterLimit
         });
         index += 1;
         stack.length = 0;
@@ -807,6 +892,9 @@ export class PDFParser {
           currentFillColor = [...restored.fillColor] as [number, number, number, number];
           currentStrokeColor = [...restored.strokeColor] as [number, number, number, number];
           currentLineWidth = restored.lineWidth;
+          currentLineCap = restored.lineCap;
+          currentLineJoin = restored.lineJoin;
+          currentMiterLimit = restored.miterLimit;
         }
         // When stack underflows (extra Q without matching q), ignore the Q
         // rather than resetting to identity - preserves transformation state
@@ -937,6 +1025,11 @@ export class PDFParser {
                       imageItems.push(transformImageItem(item, currentMatrix));
                     }
                   }
+                  if (nested.pathItems.length > 0) {
+                    for (const item of nested.pathItems) {
+                      pathItems.push(transformPathItem(item, currentMatrix));
+                    }
+                  }
                 } finally {
                   visitedForms.delete(key);
                 }
@@ -1023,6 +1116,30 @@ export class PDFParser {
         continue;
       }
 
+      if (this.isOperatorAt(streamContent, index, 'J')) {
+        currentLineCap = mapPdfLineCap(this.popNumber(stack));
+        index += 1;
+        stack.length = 0;
+        continue;
+      }
+
+      if (this.isOperatorAt(streamContent, index, 'j')) {
+        currentLineJoin = mapPdfLineJoin(this.popNumber(stack));
+        index += 1;
+        stack.length = 0;
+        continue;
+      }
+
+      if (this.isOperatorAt(streamContent, index, 'M')) {
+        const miterLimit = this.popNumber(stack);
+        if (typeof miterLimit === 'number' && miterLimit > 0) {
+          currentMiterLimit = miterLimit;
+        }
+        index += 1;
+        stack.length = 0;
+        continue;
+      }
+
       // Gray fill color (lowercase 'g')
       if (this.isOperatorAt(streamContent, index, 'g')) {
         const gray = clampColor(this.popNumber(stack));
@@ -1036,7 +1153,8 @@ export class PDFParser {
       if (this.isOperatorAt(streamContent, index, 'm')) {
         const y = this.popNumber(stack) ?? 0;
         const x = this.popNumber(stack) ?? 0;
-        currentPath = [{ x, y }];
+        currentPath.push({ op: 'M', x, y });
+        currentPoint = { x, y };
         pathStartPoint = { x, y };
         index += 1;
         stack.length = 0;
@@ -1047,7 +1165,8 @@ export class PDFParser {
       if (this.isOperatorAt(streamContent, index, 'l')) {
         const y = this.popNumber(stack) ?? 0;
         const x = this.popNumber(stack) ?? 0;
-        currentPath.push({ x, y });
+        currentPath.push({ op: 'L', x, y });
+        currentPoint = { x, y };
         index += 1;
         stack.length = 0;
         continue;
@@ -1059,29 +1178,51 @@ export class PDFParser {
         const w = this.popNumber(stack) ?? 0;
         const y = this.popNumber(stack) ?? 0;
         const x = this.popNumber(stack) ?? 0;
-        // Rectangle adds a closed subpath
-        currentPath = [
-          { x, y },
-          { x: x + w, y },
-          { x: x + w, y: y + h },
-          { x, y: y + h },
-          { x, y } // close
-        ];
+        currentPath.push(...buildRectanglePathCommands(x, y, w, h));
+        currentPoint = { x, y };
         pathStartPoint = { x, y };
         index += 2;
         stack.length = 0;
         continue;
       }
 
-      // Path construction: curveto (cubic Bezier) - approximate with line to endpoint
+      // Path construction: curveto (cubic Bezier)
       if (this.isOperatorAt(streamContent, index, 'c')) {
         const y3 = this.popNumber(stack) ?? 0;
         const x3 = this.popNumber(stack) ?? 0;
-        this.popNumber(stack); // y2 - control point, ignored
-        this.popNumber(stack); // x2 - control point, ignored
-        this.popNumber(stack); // y1 - control point, ignored
-        this.popNumber(stack); // x1 - control point, ignored
-        currentPath.push({ x: x3, y: y3 });
+        const y2 = this.popNumber(stack) ?? 0;
+        const x2 = this.popNumber(stack) ?? 0;
+        const y1 = this.popNumber(stack) ?? 0;
+        const x1 = this.popNumber(stack) ?? 0;
+        currentPath.push({ op: 'C', x1, y1, x2, y2, x3, y3 });
+        currentPoint = { x: x3, y: y3 };
+        index += 1;
+        stack.length = 0;
+        continue;
+      }
+
+      // Path construction: curveto with first control point replicated from current point
+      if (this.isOperatorAt(streamContent, index, 'v')) {
+        const y3 = this.popNumber(stack) ?? 0;
+        const x3 = this.popNumber(stack) ?? 0;
+        const y2 = this.popNumber(stack) ?? 0;
+        const x2 = this.popNumber(stack) ?? 0;
+        const start = currentPoint ?? pathStartPoint ?? { x: 0, y: 0 };
+        currentPath.push({ op: 'C', x1: start.x, y1: start.y, x2, y2, x3, y3 });
+        currentPoint = { x: x3, y: y3 };
+        index += 1;
+        stack.length = 0;
+        continue;
+      }
+
+      // Path construction: curveto with final control point replicated from endpoint
+      if (this.isOperatorAt(streamContent, index, 'y')) {
+        const y3 = this.popNumber(stack) ?? 0;
+        const x3 = this.popNumber(stack) ?? 0;
+        const y1 = this.popNumber(stack) ?? 0;
+        const x1 = this.popNumber(stack) ?? 0;
+        currentPath.push({ op: 'C', x1, y1, x2: x3, y2: y3, x3, y3 });
+        currentPoint = { x: x3, y: y3 };
         index += 1;
         stack.length = 0;
         continue;
@@ -1089,8 +1230,10 @@ export class PDFParser {
 
       // Path construction: closepath
       if (this.isOperatorAt(streamContent, index, 'h')) {
-        if (pathStartPoint && currentPath.length > 0) {
-          currentPath.push({ ...pathStartPoint });
+        if (currentPath.length > 0) {
+          const closed = closePathCommands(currentPath, currentPoint, pathStartPoint);
+          currentPath = closed.commands;
+          currentPoint = closed.currentPoint;
         }
         index += 1;
         stack.length = 0;
@@ -1099,22 +1242,7 @@ export class PDFParser {
 
       // Path painting: stroke
       if (this.isOperatorAt(streamContent, index, 'S')) {
-        const currentMatrix = graphicsStack[graphicsStack.length - 1];
-        // Convert path to line items
-        for (let i = 0; i < currentPath.length - 1; i++) {
-          const p1 = currentPath[i];
-          const p2 = currentPath[i + 1];
-          const start = transformPoint(currentMatrix, p1.x, p1.y);
-          const end = transformPoint(currentMatrix, p2.x, p2.y);
-          lineItems.push({
-            start: { x: start.x, y: start.y },
-            end: { x: end.x, y: end.y },
-            lineWidth: currentLineWidth,
-            strokeColor: [...currentStrokeColor] as [number, number, number, number]
-          });
-        }
-        currentPath = [];
-        pathStartPoint = null;
+        emitCurrentPath({ stroke: true });
         index += 1;
         stack.length = 0;
         continue;
@@ -1122,99 +1250,55 @@ export class PDFParser {
 
       // Path painting: close and stroke
       if (this.isOperatorAt(streamContent, index, 's')) {
-        // Close path first
-        if (pathStartPoint && currentPath.length > 0) {
-          currentPath.push({ ...pathStartPoint });
-        }
-        // Then stroke
-        const currentMatrix = graphicsStack[graphicsStack.length - 1];
-        for (let i = 0; i < currentPath.length - 1; i++) {
-          const p1 = currentPath[i];
-          const p2 = currentPath[i + 1];
-          const start = transformPoint(currentMatrix, p1.x, p1.y);
-          const end = transformPoint(currentMatrix, p2.x, p2.y);
-          lineItems.push({
-            start: { x: start.x, y: start.y },
-            end: { x: end.x, y: end.y },
-            lineWidth: currentLineWidth,
-            strokeColor: [...currentStrokeColor] as [number, number, number, number]
-          });
-        }
-        currentPath = [];
-        pathStartPoint = null;
+        emitCurrentPath({ stroke: true, closePath: true });
         index += 1;
         stack.length = 0;
         continue;
       }
 
       // Path painting: fill (f, F, f*)
-      if (this.isOperatorAt(streamContent, index, 'f') || this.isOperatorAt(streamContent, index, 'F')) {
-        // For fill, we extract rectangles if the path is rectangular
-        if (currentPath.length === 5) {
-          const currentMatrix = graphicsStack[graphicsStack.length - 1];
-          const p0 = transformPoint(currentMatrix, currentPath[0].x, currentPath[0].y);
-          const p2 = transformPoint(currentMatrix, currentPath[2].x, currentPath[2].y);
-          const minX = Math.min(p0.x, p2.x);
-          const maxX = Math.max(p0.x, p2.x);
-          const minY = Math.min(p0.y, p2.y);
-          const maxY = Math.max(p0.y, p2.y);
-          rectItems.push({
-            bounds: { minX, minY, maxX, maxY },
-            lineWidth: 0,
-            strokeColor: null,
-            fillColor: [...currentFillColor] as [number, number, number, number]
-          });
-        }
-        currentPath = [];
-        pathStartPoint = null;
-        index += 1;
+      if (
+        this.isOperatorAt(streamContent, index, 'f*') ||
+        this.isOperatorAt(streamContent, index, 'f') ||
+        this.isOperatorAt(streamContent, index, 'F')
+      ) {
+        const evenOdd = this.isOperatorAt(streamContent, index, 'f*');
+        emitCurrentPath({ fill: true, fillRule: evenOdd ? 'evenodd' : 'nonzero' });
+        index += evenOdd ? 2 : 1;
+        stack.length = 0;
+        continue;
+      }
+
+      // Path painting: close, fill, and stroke
+      if (this.isOperatorAt(streamContent, index, 'b*') || this.isOperatorAt(streamContent, index, 'b')) {
+        const evenOdd = this.isOperatorAt(streamContent, index, 'b*');
+        emitCurrentPath({
+          closePath: true,
+          stroke: true,
+          fill: true,
+          fillRule: evenOdd ? 'evenodd' : 'nonzero'
+        });
+        index += evenOdd ? 2 : 1;
         stack.length = 0;
         continue;
       }
 
       // Path painting: fill and stroke (B, B*)
-      if (this.isOperatorAt(streamContent, index, 'B')) {
-        const currentMatrix = graphicsStack[graphicsStack.length - 1];
-        // For fill+stroke, extract rectangle if path is rectangular
-        if (currentPath.length === 5) {
-          const p0 = transformPoint(currentMatrix, currentPath[0].x, currentPath[0].y);
-          const p2 = transformPoint(currentMatrix, currentPath[2].x, currentPath[2].y);
-          const minX = Math.min(p0.x, p2.x);
-          const maxX = Math.max(p0.x, p2.x);
-          const minY = Math.min(p0.y, p2.y);
-          const maxY = Math.max(p0.y, p2.y);
-          rectItems.push({
-            bounds: { minX, minY, maxX, maxY },
-            lineWidth: currentLineWidth,
-            strokeColor: [...currentStrokeColor] as [number, number, number, number],
-            fillColor: [...currentFillColor] as [number, number, number, number]
-          });
-        } else {
-          // Stroke the path
-          for (let i = 0; i < currentPath.length - 1; i++) {
-            const p1 = currentPath[i];
-            const p2 = currentPath[i + 1];
-            const start = transformPoint(currentMatrix, p1.x, p1.y);
-            const end = transformPoint(currentMatrix, p2.x, p2.y);
-            lineItems.push({
-              start: { x: start.x, y: start.y },
-              end: { x: end.x, y: end.y },
-              lineWidth: currentLineWidth,
-              strokeColor: [...currentStrokeColor] as [number, number, number, number]
-            });
-          }
-        }
-        currentPath = [];
-        pathStartPoint = null;
-        index += 1;
+      if (this.isOperatorAt(streamContent, index, 'B*') || this.isOperatorAt(streamContent, index, 'B')) {
+        const evenOdd = this.isOperatorAt(streamContent, index, 'B*');
+        emitCurrentPath({
+          stroke: true,
+          fill: true,
+          fillRule: evenOdd ? 'evenodd' : 'nonzero'
+        });
+        index += evenOdd ? 2 : 1;
         stack.length = 0;
         continue;
       }
 
       // Path painting: end path without painting (n)
       if (this.isOperatorAt(streamContent, index, 'n')) {
-        currentPath = [];
-        pathStartPoint = null;
+        resetCurrentPath();
         index += 1;
         stack.length = 0;
         continue;
@@ -1242,7 +1326,7 @@ export class PDFParser {
       stack.length = 0;
       index = nextIndex + 1;
     }
-    return { textItems, imageItems, lineItems, rectItems };
+    return { textItems, imageItems, lineItems, rectItems, pathItems };
   }
 
   private findTextBlockEnd(source: string, startIndex: number): number {
@@ -3731,13 +3815,7 @@ export class PDFParser {
         return undefined;
       }
 
-      let blackIs1 = Boolean(resource.decodeParms?.BlackIs1);
-      if (Array.isArray(resource.decode) && resource.decode.length >= 2) {
-        const [decodeStart, decodeEnd] = resource.decode;
-        if (Number.isFinite(decodeStart) && Number.isFinite(decodeEnd) && decodeStart > decodeEnd) {
-          blackIs1 = !blackIs1;
-        }
-      }
+      const blackIs1 = Boolean(resource.decodeParms?.BlackIs1);
 
       const mask = decodeCcitt(bytes, columns, rows, {
         columns,
@@ -3764,6 +3842,59 @@ export class PDFParser {
           height: mask.height,
           data: mask.data,
           blackIs1: mask.blackIs1
+        }
+      };
+    }
+
+    if (isCcitt) {
+      const columns =
+        typeof resource.decodeParms?.Columns === 'number'
+          ? resource.decodeParms.Columns
+          : resource.width ?? 0;
+      const rows =
+        typeof resource.decodeParms?.Rows === 'number' ? resource.decodeParms.Rows : resource.height ?? 0;
+
+      if (!(columns > 0) || !(rows > 0)) {
+        return undefined;
+      }
+
+      let blackIs1 = Boolean(resource.decodeParms?.BlackIs1);
+      if (Array.isArray(resource.decode) && resource.decode.length >= 2) {
+        const [decodeStart, decodeEnd] = resource.decode;
+        if (Number.isFinite(decodeStart) && Number.isFinite(decodeEnd) && decodeStart > decodeEnd) {
+          blackIs1 = !blackIs1;
+        }
+      }
+
+      const ccittImage = decodeCcitt(bytes, columns, rows, {
+        columns,
+        rows,
+        blackIs1,
+        k: typeof resource.decodeParms?.K === 'number' ? Number(resource.decodeParms.K) : -1,
+        endOfLine:
+          typeof resource.decodeParms?.EndOfLine === 'boolean' ? Boolean(resource.decodeParms.EndOfLine) : undefined,
+        encodedByteAlign:
+          typeof resource.decodeParms?.EncodedByteAlign === 'boolean'
+            ? Boolean(resource.decodeParms.EncodedByteAlign)
+            : undefined,
+        endOfBlock:
+          typeof resource.decodeParms?.EndOfBlock === 'boolean'
+            ? Boolean(resource.decodeParms.EndOfBlock)
+            : undefined
+      });
+      const trimmed = trimPixelBounds(ccittMaskToGrayPixels(ccittImage, resource.decode));
+
+      return {
+        width: resource.width,
+        height: resource.height,
+        pixels: {
+          width: trimmed.width,
+          height: trimmed.height,
+          data: trimmed.data,
+          offsetX: trimmed.offsetX,
+          offsetY: trimmed.offsetY,
+          originalWidth: ccittImage.width,
+          originalHeight: ccittImage.height
         }
       };
     }

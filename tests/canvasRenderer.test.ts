@@ -9,6 +9,9 @@ class MockContext {
   fillStyle = '';
   strokeStyle = '';
   lineWidth = 1;
+  lineCap: CanvasLineCap = 'butt';
+  lineJoin: CanvasLineJoin = 'miter';
+  miterLimit = 10;
   font = '';
   textBaseline = 'alphabetic';
   imageSmoothingEnabled = true;
@@ -146,6 +149,49 @@ describe('CanvasRenderer', () => {
     const operations = contextImpl.operations;
     expect(operations.some((entry) => entry.startsWith('fillText:Hello'))).toBe(true);
     expect(operations.some((entry) => entry.startsWith('fillText:World'))).toBe(true);
+  });
+
+  it('renders preserved Bezier page paths instead of flattening them to straight lines', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          pathItems: [
+            {
+              commands: [
+                { op: 'M' as const, x: 40, y: 40 },
+                { op: 'C' as const, x1: 50, y1: 60, x2: 70, y2: 60, x3: 80, y3: 40 },
+                { op: 'Z' as const }
+              ],
+              lineWidth: 2,
+              strokeColor: [0, 0, 0, 1] as [number, number, number, number],
+              fillColor: [1, 1, 1, 1] as [number, number, number, number],
+              fillRule: 'nonzero' as const,
+              lineCap: 'round' as const,
+              lineJoin: 'round' as const,
+              miterLimit: 10
+            }
+          ],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    expect(contextImpl.operations.some((entry) => entry.startsWith('bezierCurveTo:'))).toBe(true);
+    expect(contextImpl.operations).toContain('fill:nonzero');
+    expect(contextImpl.operations).toContain('stroke');
   });
 
   it('throws when page does not exist', () => {

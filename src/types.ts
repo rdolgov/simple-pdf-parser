@@ -3,6 +3,13 @@ export interface Vector2D {
   y: number;
 }
 
+/** A single path command for page-level vector graphics */
+export type PDFPathCommand =
+  | { op: 'M'; x: number; y: number }
+  | { op: 'L'; x: number; y: number }
+  | { op: 'C'; x1: number; y1: number; x2: number; y2: number; x3: number; y3: number }
+  | { op: 'Z' };
+
 /** A single path command for Type3 glyph rendering */
 export type Type3PathCommand =
   | { op: 'M'; x: number; y: number }
@@ -102,12 +109,29 @@ export interface PDFRectItem {
   fillColor: [number, number, number, number] | null;
 }
 
+export type PDFPathFillRule = 'nonzero' | 'evenodd';
+export type PDFLineCapStyle = 'butt' | 'round' | 'square';
+export type PDFLineJoinStyle = 'miter' | 'round' | 'bevel';
+
+/** A general vector path extracted from PDF graphics */
+export interface PDFPathItem {
+  commands: PDFPathCommand[];
+  lineWidth: number;
+  strokeColor: [number, number, number, number] | null;
+  fillColor: [number, number, number, number] | null;
+  fillRule: PDFPathFillRule;
+  lineCap: PDFLineCapStyle;
+  lineJoin: PDFLineJoinStyle;
+  miterLimit: number;
+}
+
 export interface PDFPage {
   number: number;
   textItems: PDFTextItem[];
   imageItems: PDFImageItem[];
   lineItems: PDFLineItem[];
   rectItems: PDFRectItem[];
+  pathItems?: PDFPathItem[];
   size: PDFPageSize;
 }
 

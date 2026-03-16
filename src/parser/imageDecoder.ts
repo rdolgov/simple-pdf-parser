@@ -255,6 +255,36 @@ export function ccittMaskToPixels(mask: CcittMask): { width: number; height: num
 }
 
 /**
+ * Convert a CCITT-decoded 1-bit image into grayscale RGBA pixels.
+ */
+export function ccittMaskToGrayPixels(
+  mask: CcittMask,
+  decode?: number[]
+): { width: number; height: number; data: Uint8ClampedArray } {
+  const total = mask.width * mask.height;
+  const data = new Uint8ClampedArray(total * 4);
+  const invertByDecode =
+    Array.isArray(decode) &&
+    decode.length >= 2 &&
+    Number.isFinite(decode[0]) &&
+    Number.isFinite(decode[1]) &&
+    decode[0] > decode[1];
+
+  for (let i = 0; i < total; i += 1) {
+    const isBlack = mask.blackIs1 ? mask.data[i] === 1 : mask.data[i] === 0;
+    const normalized = invertByDecode ? (isBlack ? 1 : 0) : isBlack ? 0 : 1;
+    const value = Math.round(normalized * 255);
+    const offset = i * 4;
+    data[offset] = value;
+    data[offset + 1] = value;
+    data[offset + 2] = value;
+    data[offset + 3] = 255;
+  }
+
+  return { width: mask.width, height: mask.height, data };
+}
+
+/**
  * Trim whitespace/transparent borders from an image
  */
 export function trimPixelBounds(image: { width: number; height: number; data: Uint8ClampedArray }): {

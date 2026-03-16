@@ -165,6 +165,10 @@ async function captureRenderedPage({ pdfPath, pageNumber, pageSize, scale, outpu
     '0',
     '--scale',
     String(scale),
+    '--virtual-time-budget-ms',
+    '15000',
+    '--capture-timeout-ms',
+    '45000',
     '--skip-build',
     '--output',
     outputPath
