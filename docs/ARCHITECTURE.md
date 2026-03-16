@@ -72,9 +72,13 @@ compare against pdftocairo/ghostscript reference
 - `src/viewer/canvasRenderer.ts`
   - draws page vector paths, raster/mask images, and text
   - handles Type3 path glyphs and bitmap glyphs
+  - recognizes CMEX brace-construction fragments and renders them as font-independent vector braces
   - applies a small thin-stroke floor so canvas output matches PDF rasterizers more closely than raw subpixel stroke widths do
 - `src/viewer/fontFallback.ts`
   - browser font-family fallback choices for decoded PDF fonts
+- `src/viewer/cmexComposite.ts`
+  - groups TeX `CMEX` brace-construction runs such as `z}|` + `{` and `{z` + `|` + `}`
+  - keeps composite math ornament handling out of the generic text layout path
 
 ### Public API
 
@@ -108,6 +112,7 @@ The engine tries to stay close to PDF semantics instead of baking in document-sp
 - text position comes from the text matrix and text line matrix
 - spacing uses `Tc`, `Tw`, `TJ`, `Tj`, `Td`, `TD`, `Tm`, `T*`
 - simple-font decode prefers `ToUnicode`, then `/Encoding`, then controlled font-specific fallbacks
+- TeX math-extension construction fragments are treated as semantic ornaments when they are not printable text
 - style inference is separate from content decode
   - for example `CMMI`, `CMTI`, and `CMSL` should render as italic/slanted families
 
@@ -232,6 +237,7 @@ The current renderer differs from the older version in a few important ways:
 - added CCITT grayscale decode for scanned/bitmap figures
 - added Type3 bitmap glyph support for CharProc inline images
 - added lexical boundary repair after geometric text merge
+- added a dedicated CMEX composite-brace layer so TeX brace pieces render as stable vector overbraces/underbraces
 - added reference-raster comparison scripts based on `pdftocairo` and `magick`
 
 ## Known Limits

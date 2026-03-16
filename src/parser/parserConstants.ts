@@ -264,7 +264,8 @@ export const PRINTABLE_CMSY_OVERRIDES: Record<string, string> = {
 
 export const PRINTABLE_CMMI_OVERRIDES: Record<string, string> = {
   ';': ',',
-  ':': '.'
+  ':': '.',
+  '?': '*'
 };
 
 export const PRINTABLE_CMEX_OVERRIDES: Record<string, string> = {

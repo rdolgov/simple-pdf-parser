@@ -9,6 +9,7 @@ import type {
   Type3GlyphImageLayer
 } from '../types.js';
 import type { PDFDocument } from '../pdfDocument.js';
+import { detectCmexComposites, type CmexComposite } from './cmexComposite.js';
 import { resolveCanvasFontFallback } from './fontFallback.js';
 
 export interface RenderOptions {
@@ -157,7 +158,7 @@ export class CanvasRenderer {
     }
     this.drawImages(context, page, metrics, renderOptions, deviceScale);
     this.drawImagePlaceholders(context, page, metrics, renderOptions);
-    this.drawTextItems(context, page, metrics, renderOptions);
+    this.drawTextItems(context, page, metrics, renderOptions, deviceScale);
 
     context.restore();
   }
@@ -451,7 +452,7 @@ export class CanvasRenderer {
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.scale(asyncScale, asyncScale);
       drawMaskLayers();
-      this.drawTextItems(context, page, metrics, options);
+      this.drawTextItems(context, page, metrics, options, asyncScale);
       context.restore();
     };
 
@@ -600,7 +601,8 @@ export class CanvasRenderer {
     context: CanvasRenderingContext2D,
     page: PDFPage,
     metrics: ReturnType<CanvasRenderer['computePageMetrics']>,
-    options: Required<RenderOptions>
+    options: Required<RenderOptions>,
+    deviceScale: number
   ): void {
     const sortedItems = [...page.textItems].sort((left, right) => {
       const yLeft = left.bounds.minY;
@@ -631,7 +633,14 @@ export class CanvasRenderer {
       return { x: scaledX, y: scaledY };
     };
 
-    for (const item of sortedItems) {
+    const cmexComposites = detectCmexComposites(sortedItems);
+    this.drawCmexComposites(context, cmexComposites.composites, projectPoint, options);
+
+    for (const [index, item] of sortedItems.entries()) {
+      if (cmexComposites.hiddenIndices.has(index)) {
+        continue;
+      }
+
       const width = item.bounds.maxX - item.bounds.minX;
       const height = item.bounds.maxY - item.bounds.minY;
       const baselineWidth = item.baselineStart && item.baselineEnd
@@ -706,6 +715,92 @@ export class CanvasRenderer {
     }
 
     context.restore();
+  }
+
+  private drawCmexComposites(
+    context: CanvasRenderingContext2D,
+    composites: CmexComposite[],
+    projectPoint: (x: number, y: number) => { x: number; y: number },
+    options: Required<RenderOptions>
+  ): void {
+    if (composites.length === 0) {
+      return;
+    }
+
+    context.save();
+    context.strokeStyle = options.textColor;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+
+    for (const composite of composites) {
+      const left = projectPoint(composite.minX, composite.centerY);
+      const right = projectPoint(composite.maxX, composite.centerY);
+      const targetWidth = Math.max(1, Math.abs(right.x - left.x));
+      const targetHeight = Math.max(1, composite.targetHeight * options.scale * 0.72);
+      const leftX = Math.min(left.x, right.x);
+      const centerY = left.y;
+
+      context.beginPath();
+      this.traceCmexBracePath(context, composite.kind, leftX, centerY, targetWidth, targetHeight);
+      context.lineWidth = Math.max(composite.fontSize * options.scale * 0.045, 0.6);
+      context.stroke();
+    }
+
+    context.restore();
+  }
+
+  private traceCmexBracePath(
+    context: CanvasRenderingContext2D,
+    kind: CmexComposite['kind'],
+    leftX: number,
+    centerY: number,
+    width: number,
+    height: number
+  ): void {
+    const rightX = leftX + width;
+    const middleX = leftX + width / 2;
+    const direction = kind === 'overbrace' ? 1 : -1;
+    const shoulderY = centerY - direction * height * 0.44;
+    const endY = centerY - direction * height * 0.1;
+    const cuspY = centerY + direction * height * 0.42;
+    const leftInnerX = leftX + width * 0.14;
+    const rightInnerX = rightX - width * 0.14;
+    const leftCurveX = leftX + width * 0.28;
+    const rightCurveX = rightX - width * 0.28;
+
+    context.moveTo(leftX, endY);
+    context.bezierCurveTo(
+      leftX + width * 0.03,
+      endY,
+      leftX + width * 0.06,
+      shoulderY,
+      leftInnerX,
+      shoulderY
+    );
+    context.bezierCurveTo(
+      leftCurveX,
+      shoulderY,
+      middleX - width * 0.08,
+      endY,
+      middleX,
+      cuspY
+    );
+    context.bezierCurveTo(
+      middleX + width * 0.08,
+      endY,
+      rightCurveX,
+      shoulderY,
+      rightInnerX,
+      shoulderY
+    );
+    context.bezierCurveTo(
+      rightX - width * 0.06,
+      shoulderY,
+      rightX - width * 0.03,
+      endY,
+      rightX,
+      endY
+    );
   }
   private resolveTextPlacement(
     item: PDFTextItem,

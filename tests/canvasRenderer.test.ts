@@ -152,6 +152,79 @@ describe('CanvasRenderer', () => {
     expect(operations.some((entry) => entry.startsWith('fillText:World'))).toBe(true);
   });
 
+  it('renders CMEX brace construction fragments as vector braces', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: 'z}|',
+              bounds: { minX: 20, minY: 60, maxX: 34, maxY: 70 },
+              font: 'CMEX10',
+              fontSize: 10,
+              baselineStart: { x: 20, y: 62 },
+              baselineEnd: { x: 34, y: 62 }
+            },
+            {
+              text: '{',
+              bounds: { minX: 34.5, minY: 50, maxX: 39, maxY: 73 },
+              font: 'CMEX10',
+              fontSize: 10,
+              baselineStart: { x: 34.5, y: 62 },
+              baselineEnd: { x: 39, y: 62 }
+            },
+            {
+              text: '{z',
+              bounds: { minX: 50, minY: 40, maxX: 59, maxY: 50 },
+              font: 'CMEX10',
+              fontSize: 10,
+              baselineStart: { x: 50, y: 42 },
+              baselineEnd: { x: 59, y: 42 }
+            },
+            {
+              text: '|',
+              bounds: { minX: 45.5, minY: 20, maxX: 50, maxY: 43 },
+              font: 'CMEX10',
+              fontSize: 10,
+              baselineStart: { x: 45.5, y: 42 },
+              baselineEnd: { x: 50, y: 42 }
+            },
+            {
+              text: '}',
+              bounds: { minX: 59.5, minY: 20, maxX: 64, maxY: 43 },
+              font: 'CMEX10',
+              fontSize: 10,
+              baselineStart: { x: 59.5, y: 42 },
+              baselineEnd: { x: 64, y: 42 }
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    const operations = contextImpl.operations;
+    expect(operations.filter((entry) => entry.startsWith('bezierCurveTo:')).length).toBeGreaterThanOrEqual(8);
+    expect(operations.filter((entry) => entry === 'stroke').length).toBeGreaterThanOrEqual(2);
+    expect(operations.some((entry) => entry.startsWith('fillText:z}|@'))).toBe(false);
+    expect(operations.some((entry) => entry.startsWith('fillText:{@'))).toBe(false);
+    expect(operations.some((entry) => entry.startsWith('fillText:{z@'))).toBe(false);
+    expect(operations.some((entry) => entry.startsWith('fillText:|@'))).toBe(false);
+    expect(operations.some((entry) => entry.startsWith('fillText:}@'))).toBe(false);
+  });
+
   it('renders preserved Bezier page paths instead of flattening them to straight lines', () => {
     const contextImpl = new MockContext();
     const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);

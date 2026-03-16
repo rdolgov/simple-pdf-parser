@@ -549,6 +549,28 @@ ET
     expect(figureText).not.toContain('?');
   });
 
+  it('decodes the MacKay page-19 figure markers as stars instead of question marks', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(19);
+
+    expect(page).toBeDefined();
+
+    const figureMarkers = page!.textItems.filter(
+      (item) =>
+        /CMMI/i.test(item.font ?? '') &&
+        item.bounds.minX >= 210 &&
+        item.bounds.maxX <= 305 &&
+        item.bounds.minY >= 485 &&
+        item.bounds.maxY <= 515
+    );
+    const markerText = figureMarkers.map((item) => item.text).join(' ');
+
+    expect(markerText).toContain('*');
+    expect(markerText).not.toContain('?');
+  });
+
   it('does not merge across table columns in Table 3 (NIPS Transformer paper)', () => {
     const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);

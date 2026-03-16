@@ -433,6 +433,40 @@ describe('PDF layout integration', () => {
     expect(drawTexts.some((text) => text.includes('?'))).toBe(false);
   });
 
+  it('replaces MacKay brace-construction fragments instead of rendering raw CMEX fallback text', () => {
+    const document = loadMacKayDocument();
+    const page17Context = new RecordingContext();
+    const page17Canvas = new RecordingCanvas(page17Context);
+    const page19Context = new RecordingContext();
+    const page19Canvas = new RecordingCanvas(page19Context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(page17Canvas, document, 17);
+    renderer.render(page19Canvas, document, 19);
+
+    const page17FigureDraws = page17Context.textDraws.filter((draw) => {
+      const x = draw.translateX || draw.x;
+      const y = draw.translateY || draw.y;
+      return x >= 150 && x <= 340 && y >= 675 && y <= 705;
+    });
+    const page19FigureDraws = page19Context.textDraws.filter((draw) => {
+      const x = draw.translateX || draw.x;
+      const y = draw.translateY || draw.y;
+      return x >= 185 && x <= 375 && y >= 275 && y <= 370;
+    });
+
+    expect(page17FigureDraws.some((draw) => draw.text === 'z}|')).toBe(false);
+    expect(page17FigureDraws.some((draw) => draw.text === '{')).toBe(false);
+
+    expect(page19FigureDraws.some((draw) => draw.text === 'z}|')).toBe(false);
+    expect(page19FigureDraws.some((draw) => draw.text === '{')).toBe(false);
+    expect(page19FigureDraws.some((draw) => draw.text === '{z')).toBe(false);
+    expect(page19FigureDraws.some((draw) => draw.text === '|')).toBe(false);
+    expect(page19FigureDraws.some((draw) => draw.text === '}')).toBe(false);
+    expect(page19FigureDraws.some((draw) => draw.text === '?')).toBe(false);
+    expect(page19FigureDraws.some((draw) => draw.text === '*')).toBe(true);
+  });
+
   it('renders Type3 OCR overlays on scanned pages', () => {
     const document = loadAdobeScannedDocument();
     const context = new RecordingContext();
