@@ -273,6 +273,24 @@ describe('PDF layout integration', () => {
     expect(context.pathPaints.some((paint) => paint.kind === 'stroke')).toBe(true);
   });
 
+  it('renders the MacKay page-13 display summation with a tall vertical fit between its limits', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 13);
+
+    const displaySumDraw = context.textDraws.find((draw) => {
+      const x = draw.translateX || draw.x;
+      const y = draw.translateY || draw.y;
+      return x >= 220 && x <= 240 && y >= 450 && y <= 470 && draw.text === '∑';
+    });
+
+    expect(displaySumDraw).toBeDefined();
+    expect(displaySumDraw!.scaleY).toBeGreaterThan(1.5);
+  });
+
   it('renders the MacKay page-14 italic heading with per-glyph advances instead of a single browser-shaped word', () => {
     const document = loadMacKayDocument();
     const context = new RecordingContext();

@@ -275,6 +275,8 @@ export const PRINTABLE_CMEX_OVERRIDES: Record<string, string> = {
   i: ')'
 };
 
+export const CMEX_DISPLAY_OPERATOR_CODES = [88, 89, 90] as const;
+
 export const PRINTABLE_LINE_OVERRIDES: Record<string, string> = {
   '-': '\u2192',
   '6': '\u2191',

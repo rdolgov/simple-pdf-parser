@@ -77,6 +77,7 @@ import {
   INLINE_IMAGE_OPERATOR_REGEX,
   DO_OPERATOR_REGEX,
   BASIC_GLYPH_MAP,
+  CMEX_DISPLAY_OPERATOR_CODES,
   CONTROL_CHAR_MATH_OVERRIDES,
   CONTROL_CHAR_FALLBACK
 } from './parserConstants.js';
@@ -1958,7 +1959,8 @@ export class PDFParser {
     const { ascenderHeight, descenderDepth } = this.resolveTextVerticalExtents(
       fontResource,
       metrics.text,
-      metrics.fontSize
+      metrics.fontSize,
+      metrics.glyphSpans
     );
 
     const textStart = transformPoint(startMatrix, 0, state.textRise);
@@ -2009,9 +2011,22 @@ export class PDFParser {
   private resolveTextVerticalExtents(
     fontResource: FontResource | undefined,
     text: string,
-    fontSize: number
+    fontSize: number,
+    glyphSpans?: PDFGlyphSpan[]
   ): { ascenderHeight: number; descenderDepth: number } {
     const baseFontName = fontResource?.baseFontName ?? '';
+    const singleGlyphCode = glyphSpans?.length === 1 ? glyphSpans[0]?.glyphCode : undefined;
+    const isCmexDisplayOperator =
+      /CMEX/i.test(baseFontName) &&
+      typeof singleGlyphCode === 'number' &&
+      CMEX_DISPLAY_OPERATOR_CODES.includes(singleGlyphCode as (typeof CMEX_DISPLAY_OPERATOR_CODES)[number]);
+
+    if (isCmexDisplayOperator) {
+      return {
+        ascenderHeight: fontSize * 1.1,
+        descenderDepth: fontSize * 0.95
+      };
+    }
 
     // TeX radical glyphs in CMSY/CMEX fonts descend much further below the baseline
     // than normal text. Using standard text ratios makes the glyph render too high

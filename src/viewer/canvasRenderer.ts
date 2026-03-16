@@ -11,6 +11,12 @@ import type {
 import type { PDFDocument } from '../pdfDocument.js';
 import { detectCmexComposites, type CmexComposite } from './cmexComposite.js';
 import {
+  isStretchyMathDelimiter,
+  isStretchyMathOperator,
+  resolveGlyphScaleX,
+  resolveVerticalScaleBounds
+} from './embeddedFontRenderPolicy.js';
+import {
   prepareEmbeddedFontsForDocument,
   resolveRegisteredEmbeddedFont,
   type RegisteredEmbeddedFont
@@ -681,12 +687,19 @@ export class CanvasRenderer {
 
       const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
       const projectedWidth = textPlacement.projectedWidth;
-      const textMetrics = context.measureText(item.text);
-      const measuredWidth = textMetrics.width;
-      const verticalFit = this.resolveVerticalTextFit(item, textMetrics, textPlacement.rotation, options.scale);
       const glyphSpanRun = resolveRenderableGlyphSpanRun(item, {
         force: embeddedFont?.renderMode === 'glyph-span'
       });
+      const measureTextInput = this.resolveMeasurementText(item, glyphSpanRun, embeddedFont);
+      const textMetrics = context.measureText(measureTextInput);
+      const measuredWidth = textMetrics.width;
+      const verticalFit = this.resolveVerticalTextFit(
+        item,
+        textMetrics,
+        textPlacement.rotation,
+        options.scale,
+        embeddedFont
+      );
 
       // Scale horizontally to fit width
       let scaleX = 1;
@@ -738,7 +751,7 @@ export class CanvasRenderer {
       }
 
       if (glyphSpanRun) {
-        this.drawGlyphSpanTextItem(context, textPlacement, glyphSpanRun, verticalFit, embeddedFont);
+        this.drawGlyphSpanTextItem(context, item, textPlacement, glyphSpanRun, verticalFit, embeddedFont);
         continue;
       }
 
@@ -959,6 +972,7 @@ export class CanvasRenderer {
 
   private drawGlyphSpanTextItem(
     context: CanvasRenderingContext2D,
+    item: PDFTextItem,
     textPlacement: { baseline: { x: number; y: number }; projectedWidth: number; rotation: number },
     glyphSpanRun: ReturnType<typeof resolveRenderableGlyphSpanRun>,
     verticalFit: VerticalTextFit,
@@ -990,10 +1004,7 @@ export class CanvasRenderer {
 
       const measuredWidth = Math.max(context.measureText(renderedText).width, 1);
       const rawScaleX = spanProjectedWidth / measuredWidth;
-      const scaleX =
-        embeddedFont?.renderMode === 'glyph-span'
-          ? Math.min(Math.max(rawScaleX, 0.9), 1.1)
-          : rawScaleX;
+      const scaleX = resolveGlyphScaleX(rawScaleX, item, glyphSpanRun.spans.length, embeddedFont);
 
       context.save();
       context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
@@ -1021,6 +1032,27 @@ export class CanvasRenderer {
     }
 
     return boundsWidth > boundsHeight * 12;
+  }
+
+  private resolveMeasurementText(
+    item: PDFTextItem,
+    glyphSpanRun: ReturnType<typeof resolveRenderableGlyphSpanRun>,
+    embeddedFont?: RegisteredEmbeddedFont
+  ): string {
+    if (embeddedFont?.renderMode !== 'glyph-span' || !glyphSpanRun) {
+      return item.text;
+    }
+
+    const rendered = glyphSpanRun.spans
+      .map((span) => {
+        if (span.glyphCode === undefined) {
+          return span.text;
+        }
+        return embeddedFont.glyphCodeToText?.get(span.glyphCode) ?? span.text;
+      })
+      .join('');
+
+    return rendered || item.text;
   }
 
   private drawGlyphPaths(context: CanvasRenderingContext2D, glyph: Type3Glyph): void {
@@ -1245,14 +1277,16 @@ export class CanvasRenderer {
     item: PDFTextItem,
     textMetrics: TextMetrics,
     rotation: number,
-    scale: number
+    scale: number,
+    embeddedFont?: RegisteredEmbeddedFont
   ): VerticalTextFit {
     if (Math.abs(rotation) > 0.001) {
       return { scaleY: 1, localYOffset: 0 };
     }
 
-    const isStretchyDelimiter = this.isStretchyMathDelimiter(item);
-    if (!isStretchyDelimiter && !this.isStretchyMathOperator(item)) {
+    const stretchyDelimiter = isStretchyMathDelimiter(item);
+    const stretchyOperator = isStretchyMathOperator(item);
+    if (!stretchyDelimiter && !stretchyOperator) {
       return { scaleY: 1, localYOffset: 0 };
     }
 
@@ -1281,22 +1315,14 @@ export class CanvasRenderer {
     }
 
     const unclampedScaleY = desiredHeight / measuredHeight;
-    const maxScaleY = isStretchyDelimiter ? 3.5 : 1.15;
-    const scaleY = Math.min(Math.max(unclampedScaleY, 0.85), maxScaleY);
+    const { minScaleY, maxScaleY } = resolveVerticalScaleBounds(item, embeddedFont);
+    const scaleY = Math.min(Math.max(unclampedScaleY, minScaleY), maxScaleY);
     const yOffset = scaleY * actualAscent - desiredAscent;
 
     return {
       scaleY,
       localYOffset: scaleY !== 0 ? yOffset / scaleY : 0
     };
-  }
-
-  private isStretchyMathOperator(item: PDFTextItem): boolean {
-    return /(cmsy|cmex)/i.test(item.font ?? '') && /[√∑∈∞∗∏∫⋃⋂⋁⋀]/.test(item.text);
-  }
-
-  private isStretchyMathDelimiter(item: PDFTextItem): boolean {
-    return /cmex/i.test(item.font ?? '') && /^[()[\]{}|]$/.test(item.text.trim());
   }
 
   private readPositiveMetric(value: number | undefined): number | undefined {

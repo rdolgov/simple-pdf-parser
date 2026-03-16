@@ -375,6 +375,31 @@ ET
     expect(formulaText).not.toMatch(/[\u0000-\u001f]/);
   });
 
+  it('assigns tall display-style bounds to MacKay CMEX summation operators with limits', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(13);
+
+    expect(page).toBeDefined();
+
+    const displaySum = page!.textItems.find(
+      (item) =>
+        item.text === '∑' &&
+        item.font === 'CMEX10' &&
+        item.glyphSpans?.[0]?.glyphCode === 88 &&
+        item.bounds.minX >= 210 &&
+        item.bounds.maxX <= 227
+    );
+
+    expect(displaySum).toBeDefined();
+    expect(displaySum!.fontSize).toBeDefined();
+
+    const displayHeight = displaySum!.bounds.maxY - displaySum!.bounds.minY;
+    expect(displayHeight).toBeGreaterThan(displaySum!.fontSize! * 1.8);
+    expect(displaySum!.bounds.minY).toBeLessThan(displaySum!.baselineStart!.y - displaySum!.fontSize! * 0.9);
+  });
+
   it('keeps MacKay binomial-coefficient delimiters separate and decodes its punctuation', () => {
     const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);
