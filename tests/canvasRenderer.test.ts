@@ -225,6 +225,48 @@ describe('CanvasRenderer', () => {
     expect(operations.some((entry) => entry.startsWith('fillText:}@'))).toBe(false);
   });
 
+  it('renders CMMI glyph spans character-by-character instead of browser-shaping the full run', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: 'rrr',
+              bounds: { minX: 20, minY: 60, maxX: 44, maxY: 70 },
+              font: 'CMMI10~80',
+              fontSize: 10,
+              fontStyle: 'italic',
+              baselineStart: { x: 20, y: 62 },
+              baselineEnd: { x: 44, y: 62 },
+              glyphSpans: [
+                { text: 'r', advance: 8 },
+                { text: 'r', advance: 8 },
+                { text: 'r', advance: 8 }
+              ]
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    const rDraws = contextImpl.operations.filter((entry) => entry.startsWith('fillText:r@'));
+    expect(rDraws).toHaveLength(3);
+    expect(contextImpl.operations.some((entry) => entry.startsWith('fillText:rrr@'))).toBe(false);
+  });
+
   it('renders preserved Bezier page paths instead of flattening them to straight lines', () => {
     const contextImpl = new MockContext();
     const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);

@@ -11,6 +11,7 @@ import type {
 import type { PDFDocument } from '../pdfDocument.js';
 import { detectCmexComposites, type CmexComposite } from './cmexComposite.js';
 import { resolveCanvasFontFallback } from './fontFallback.js';
+import { resolveRenderableGlyphSpanRun } from './glyphSpanRenderer.js';
 
 export interface RenderOptions {
   backgroundColor?: string;
@@ -661,6 +662,7 @@ export class CanvasRenderer {
       const textMetrics = context.measureText(item.text);
       const measuredWidth = textMetrics.width;
       const verticalFit = this.resolveVerticalTextFit(item, textMetrics, textPlacement.rotation, options.scale);
+      const glyphSpanRun = resolveRenderableGlyphSpanRun(item);
 
       // Scale horizontally to fit width
       let scaleX = 1;
@@ -695,6 +697,11 @@ export class CanvasRenderer {
       // Use Type3 glyph path rendering if available
       if (item.type3Glyphs && item.type3Glyphs.length > 0) {
         this.drawType3TextItem(context, item, projectPoint, options, metrics);
+        continue;
+      }
+
+      if (glyphSpanRun) {
+        this.drawGlyphSpanTextItem(context, textPlacement, glyphSpanRun, verticalFit);
         continue;
       }
 
@@ -742,7 +749,7 @@ export class CanvasRenderer {
 
       context.beginPath();
       this.traceCmexBracePath(context, composite.kind, leftX, centerY, targetWidth, targetHeight);
-      context.lineWidth = Math.max(composite.fontSize * options.scale * 0.045, 0.6);
+      context.lineWidth = Math.max(composite.fontSize * options.scale * 0.035, 0.4);
       context.stroke();
     }
 
@@ -911,6 +918,43 @@ export class CanvasRenderer {
     }
 
     context.restore();
+  }
+
+  private drawGlyphSpanTextItem(
+    context: CanvasRenderingContext2D,
+    textPlacement: { baseline: { x: number; y: number }; projectedWidth: number; rotation: number },
+    glyphSpanRun: ReturnType<typeof resolveRenderableGlyphSpanRun>,
+    verticalFit: VerticalTextFit
+  ): void {
+    if (!glyphSpanRun || !(glyphSpanRun.totalAdvance > 0) || !(textPlacement.projectedWidth > 0)) {
+      return;
+    }
+
+    const scaleY = verticalFit.scaleY;
+    const needsRotation = Math.abs(textPlacement.rotation) > 0.001;
+    let consumedAdvance = 0;
+
+    for (const span of glyphSpanRun.spans) {
+      const spanProjectedWidth = (span.advance / glyphSpanRun.totalAdvance) * textPlacement.projectedWidth;
+      const offsetX = (consumedAdvance / glyphSpanRun.totalAdvance) * textPlacement.projectedWidth;
+      consumedAdvance += span.advance;
+      if (!(spanProjectedWidth > 0)) {
+        continue;
+      }
+
+      const measuredWidth = Math.max(context.measureText(span.text).width, 1);
+      const scaleX = spanProjectedWidth / measuredWidth;
+
+      context.save();
+      context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
+      if (needsRotation) {
+        context.rotate(textPlacement.rotation);
+      }
+      context.translate(offsetX, 0);
+      context.scale(scaleX, scaleY);
+      context.fillText(span.text, 0, verticalFit.localYOffset);
+      context.restore();
+    }
   }
 
   private shouldSkipSuspiciousType3Whitespace(

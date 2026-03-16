@@ -94,6 +94,7 @@ export function mergeTextRuns(
     const textToAppend = decision.insertSpace
       ? prependSpaceIfNeeded(last.text, normalizedSegment)
       : normalizedSegment;
+    const previousLastEndX = lastEndX ?? getBounds(last).maxX;
 
     last.text += textToAppend;
     const lastBounds = getBounds(last);
@@ -106,11 +107,24 @@ export function mergeTextRuns(
     };
     last.baselineStart = clonePoint(last.baselineStart ?? current.baselineStart);
     last.baselineEnd = clonePoint(current.baselineEnd ?? current.baselineStart ?? last.baselineEnd);
-    lastEndX = last.bounds.maxX;
     last.font = last.font ?? current.font;
     if (last.fontSize === undefined) {
       last.fontSize = current.fontSize;
     }
+    if (current.glyphSpans && current.glyphSpans.length > 0) {
+      const insertedSpaceAdvance = decision.insertSpace
+        ? Math.max(0, currentBounds.minX - previousLastEndX)
+        : 0;
+      if (last.glyphSpans) {
+        if (insertedSpaceAdvance > 0) {
+          last.glyphSpans.push({ text: ' ', advance: insertedSpaceAdvance });
+        }
+        last.glyphSpans = [...last.glyphSpans, ...current.glyphSpans.map(cloneGlyphSpan)];
+      } else {
+        last.glyphSpans = current.glyphSpans.map(cloneGlyphSpan);
+      }
+    }
+    lastEndX = last.bounds.maxX;
     // Merge Type3 glyph arrays
     if (current.type3Glyphs && current.type3Glyphs.length > 0) {
       if (last.type3Glyphs) {
@@ -406,7 +420,8 @@ function cloneItem(item: PDFTextItem): PDFTextItem {
     text: item.text,
     bounds: { ...item.bounds },
     baselineStart: clonePoint(item.baselineStart),
-    baselineEnd: clonePoint(item.baselineEnd)
+    baselineEnd: clonePoint(item.baselineEnd),
+    glyphSpans: item.glyphSpans?.map(cloneGlyphSpan)
   };
 }
 
@@ -417,6 +432,10 @@ function baselineY(item: PDFTextItem): number {
 
 function clonePoint(point: PDFTextItem['baselineStart']): PDFTextItem['baselineStart'] {
   return point ? { ...point } : undefined;
+}
+
+function cloneGlyphSpan(span: NonNullable<PDFTextItem['glyphSpans']>[number]) {
+  return { ...span };
 }
 
 function normalizeWordFragment(text: string): string {

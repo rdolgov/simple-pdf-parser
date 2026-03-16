@@ -274,6 +274,30 @@ describe('PDF layout integration', () => {
     expect(drawTexts.some((text) => text.includes('Appr oximating'))).toBe(false);
   });
 
+  it('renders MacKay page-18 repeated math variables using preserved glyph advances', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 18);
+
+    const equationDraws = context.textDraws.filter((draw) => {
+      const x = draw.translateX || draw.x;
+      const y = draw.translateY || draw.y;
+      return x >= 180 && x <= 320 && y >= 350 && y <= 390;
+    });
+    const repeatedRDraws = equationDraws.filter(
+      (draw) => draw.text === 'r' && draw.font.includes("'CMMI10~80'")
+    );
+    const indexDraws = equationDraws.filter((draw) => /^[123]$/.test(draw.text));
+
+    expect(repeatedRDraws.length).toBeGreaterThanOrEqual(3);
+    expect(indexDraws.length).toBeGreaterThanOrEqual(3);
+    expect(equationDraws.some((draw) => draw.text === 'rrr')).toBe(false);
+    expect(equationDraws.some((draw) => draw.text === '1 2 3')).toBe(false);
+  });
+
   it('renders repaired MacKay prose ligatures and split words on sampled body pages', () => {
     const document = loadMacKayDocument();
     const page85Context = new RecordingContext();

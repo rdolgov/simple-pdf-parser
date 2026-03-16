@@ -10,6 +10,7 @@ import type {
   PDFPageSize,
   PDFRectItem,
   PDFTextItem,
+  PDFGlyphSpan,
   Type3Glyph,
   Type3PathCommand,
   Vector2D
@@ -119,6 +120,7 @@ import {
   decodeByteWithEncoding,
   applyControlCharFallback,
   controlCharOverrides,
+  decodeGlyphSegments,
   extractGlyphCodes,
   lookupGlyphWidth,
   bytesToCid,
@@ -1970,7 +1972,8 @@ export class PDFParser {
       font: fontFamily,
       fontSize: state.fontSize,
       fontWeight: this.extractFontWeight(baseFontName),
-      fontStyle: this.extractFontStyle(baseFontName)
+      fontStyle: this.extractFontStyle(baseFontName),
+      glyphSpans: metrics.glyphSpans
     };
 
     // Attach Type3 glyph path data for canvas rendering
@@ -2064,12 +2067,13 @@ export class PDFParser {
     rawText: string,
     state: TextState,
     fonts: FontMap
-  ): { text: string; advance: number; fontSize: number } | undefined {
+  ): { text: string; advance: number; fontSize: number; glyphSpans?: PDFGlyphSpan[] } | undefined {
     if (rawText.length === 0) {
       return undefined;
     }
 
     const decoded = decodeText(rawText, state.font, fonts);
+    const glyphTexts = decodeGlyphSegments(rawText, state.font, fonts);
     const fontSize = state.fontSize ?? DEFAULT_FONT_SIZE;
     const font = state.font ? fonts.get(state.font) : undefined;
 
@@ -2081,15 +2085,21 @@ export class PDFParser {
       return undefined;
     }
 
+    const glyphUnitAdvances: number[] = [];
     let glyphUnits = 0;
     for (const code of glyphCodes) {
-      glyphUnits += isType3
+      const advanceUnits = isType3
         ? this.resolveType3AdvanceWidth(font, code)
         : lookupGlyphWidth(font, code);
+      glyphUnitAdvances.push(advanceUnits);
+      glyphUnits += advanceUnits;
     }
 
     if (glyphCodes.length === 0 && decoded.length > 0) {
       glyphUnits = decoded.length * 500;
+      for (let index = 0; index < decoded.length; index += 1) {
+        glyphUnitAdvances.push(500);
+      }
     }
 
     const spaceCount = countSpaces(decoded);
@@ -2103,12 +2113,56 @@ export class PDFParser {
     const advanceTextSpace = (glyphAdvance + spacingAdvance) * state.horizontalScale;
     const advance = Number.isFinite(advanceTextSpace) ? advanceTextSpace : 0;
     const normalizedFontSize = Number.isFinite(fontSize) ? Math.abs(fontSize) : DEFAULT_FONT_SIZE;
+    const glyphSpans = this.buildGlyphSpans(
+      glyphTexts,
+      glyphUnitAdvances,
+      font,
+      normalizedFontSize,
+      state
+    );
 
     return {
       text: decoded,
       advance,
-      fontSize: normalizedFontSize
+      fontSize: normalizedFontSize,
+      glyphSpans
     };
+  }
+
+  private buildGlyphSpans(
+    glyphTexts: string[],
+    glyphUnitAdvances: number[],
+    font: FontResource | undefined,
+    fontSize: number,
+    state: TextState
+  ): PDFGlyphSpan[] | undefined {
+    if (glyphTexts.length === 0 || glyphTexts.length !== glyphUnitAdvances.length) {
+      return undefined;
+    }
+
+    const isType3 = font?.subtype === 'Type3';
+    const spans: PDFGlyphSpan[] = [];
+
+    for (let index = 0; index < glyphTexts.length; index += 1) {
+      const text = glyphTexts[index];
+      if (!text) {
+        continue;
+      }
+
+      const glyphAdvance = isType3
+        ? glyphUnitAdvances[index] * fontSize * (font?.fontMatrix?.[0] ?? 1)
+        : (glyphUnitAdvances[index] * fontSize) / 1000;
+      const spacingAdvance =
+        state.charSpacing + (text === ' ' ? state.wordSpacing : 0);
+      const advance = (glyphAdvance + spacingAdvance) * state.horizontalScale;
+
+      spans.push({
+        text,
+        advance: Number.isFinite(advance) ? advance : 0
+      });
+    }
+
+    return spans.length > 0 ? spans : undefined;
   }
 
   private resolveType3AdvanceWidth(font: FontResource | undefined, code: number): number {
@@ -3845,7 +3899,8 @@ export class PDFParser {
         ...item,
         bounds: { ...item.bounds },
         baselineStart: item.baselineStart ? { ...item.baselineStart } : undefined,
-        baselineEnd: item.baselineEnd ? { ...item.baselineEnd } : undefined
+        baselineEnd: item.baselineEnd ? { ...item.baselineEnd } : undefined,
+        glyphSpans: item.glyphSpans?.map((span) => ({ ...span }))
       }));
     }
 
@@ -3873,7 +3928,8 @@ export class PDFParser {
         baselineEnd: item.baselineEnd
           ? transformPoint(matrix, item.baselineEnd.x, item.baselineEnd.y)
           : undefined,
-        fontSize: Number.isFinite(height) && height > 0 ? height : item.fontSize
+        fontSize: Number.isFinite(height) && height > 0 ? height : item.fontSize,
+        glyphSpans: item.glyphSpans?.map((span) => ({ ...span }))
       };
     });
   }

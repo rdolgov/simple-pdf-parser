@@ -187,6 +187,60 @@ export function extractGlyphCodes(rawText: string, font: FontResource | undefine
 }
 
 /**
+ * Decode text into per-glyph text segments using the same font mappings as decodeText.
+ */
+export function decodeGlyphSegments(text: string, fontName: string | undefined, fonts: FontMap): string[] {
+  if (!text) {
+    return [];
+  }
+
+  if (!fontName) {
+    return Array.from(text);
+  }
+
+  const font = fonts.get(fontName);
+  if (!font) {
+    return Array.from(text);
+  }
+
+  if (font.toUnicodeMap && font.toUnicodeMap.size > 0) {
+    const bytes = latin1ToUint8(text);
+    const maxLength = Math.max(1, font.maxCodeLength);
+    const result: string[] = [];
+
+    for (let index = 0; index < bytes.length; ) {
+      let matched = false;
+      const available = bytes.length - index;
+      for (let length = Math.min(maxLength, available); length > 0; length -= 1) {
+        const key = bytesToKey(bytes, index, length);
+        const mapped = font.toUnicodeMap.get(key);
+        if (mapped !== undefined) {
+          result.push(applyControlCharFallback(mapped, font));
+          index += length;
+          matched = true;
+          break;
+        }
+      }
+
+      if (!matched) {
+        result.push(applyControlCharFallback(decodeByteWithEncoding(bytes[index], font.encodingMap), font));
+        index += 1;
+      }
+    }
+
+    return result;
+  }
+
+  if (font.encodingMap && font.encodingMap.size > 0) {
+    return Array.from(latin1ToUint8(text), (byte) =>
+      applyControlCharFallback(decodeByteWithEncoding(byte, font.encodingMap), font)
+    );
+  }
+
+  return Array.from(text, (segment) => applyControlCharFallback(segment, font));
+}
+
+/**
  * Decode text using font's ToUnicode map and encoding
  */
 export function decodeText(text: string, fontName: string | undefined, fonts: FontMap): string {

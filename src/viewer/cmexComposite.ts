@@ -71,8 +71,10 @@ export function detectCmexComposites(items: PDFTextItem[]): CmexCompositeDetecti
       const left = items[leftIndex];
       const right = items[rightIndex];
       const fontSize = item.fontSize ?? left.fontSize ?? right.fontSize ?? 12;
-      const rawHeight = Math.max(item.bounds.maxY, left.bounds.maxY, right.bounds.maxY) -
-        Math.min(item.bounds.minY, left.bounds.minY, right.bounds.minY);
+      const minY = Math.min(item.bounds.minY, left.bounds.minY, right.bounds.minY);
+      const maxY = Math.max(item.bounds.maxY, left.bounds.maxY, right.bounds.maxY);
+      const rawHeight = maxY - minY;
+      const centerY = resolveUnderbraceCenterY(item, left, right, minY, maxY, fontSize);
 
       composites.push({
         kind: 'underbrace',
@@ -80,7 +82,7 @@ export function detectCmexComposites(items: PDFTextItem[]): CmexCompositeDetecti
         hiddenIndices: [leftIndex, index, rightIndex],
         minX: left.bounds.minX,
         maxX: right.bounds.maxX,
-        centerY: (item.bounds.minY + item.bounds.maxY) / 2,
+        centerY,
         targetHeight: Math.min(rawHeight, fontSize * 1.35),
         fontSize
       });
@@ -206,4 +208,28 @@ function hasCompatibleFontSize(left: PDFTextItem, right: PDFTextItem): boolean {
 
 function itemBaseline(item: PDFTextItem): number {
   return item.baselineStart?.y ?? item.bounds.maxY;
+}
+
+function resolveUnderbraceCenterY(
+  head: PDFTextItem,
+  left: PDFTextItem,
+  right: PDFTextItem,
+  minY: number,
+  maxY: number,
+  fontSize: number
+): number {
+  const fallbackCenter = (minY + maxY) / 2;
+  const baselines = [itemBaseline(head), itemBaseline(left), itemBaseline(right)].filter((value) =>
+    Number.isFinite(value)
+  );
+
+  if (baselines.length === 0) {
+    return fallbackCenter;
+  }
+
+  const sharedBaseline = baselines.reduce((sum, value) => sum + value, 0) / baselines.length;
+  const anchoredCenter = sharedBaseline - fontSize * 0.5;
+  const headCenter = (head.bounds.minY + head.bounds.maxY) / 2;
+
+  return Math.min(Math.max(anchoredCenter, fallbackCenter), headCenter);
 }

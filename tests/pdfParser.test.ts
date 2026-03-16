@@ -412,6 +412,41 @@ ET
     expect(formulaText).not.toContain('... g');
   });
 
+  it('preserves per-glyph advances for the MacKay page-18 repeated math variables', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(18);
+
+    expect(page).toBeDefined();
+
+    const repeatedRun = page!.textItems.find(
+      (item) =>
+        item.text === 'rrr' &&
+        /CMMI/i.test(item.font ?? '') &&
+        item.bounds.minX >= 185 &&
+        item.bounds.maxX <= 215 &&
+        item.bounds.minY >= 440 &&
+        item.bounds.maxY <= 460
+    );
+
+    expect(repeatedRun).toBeDefined();
+    expect(repeatedRun!.glyphSpans?.map((span) => span.text)).toEqual(['r', 'r', 'r']);
+    expect(repeatedRun!.glyphSpans?.every((span) => span.advance > 0)).toBe(true);
+
+    const indexRun = page!.textItems.find(
+      (item) =>
+        item.text === '1 2 3' &&
+        item.bounds.minX >= 190 &&
+        item.bounds.maxX <= 220 &&
+        item.bounds.minY >= 445 &&
+        item.bounds.maxY <= 454
+    );
+
+    expect(indexRun).toBeDefined();
+    expect(indexRun!.glyphSpans?.map((span) => span.text)).toEqual(['1', ' ', '2', ' ', '3']);
+  });
+
   it('drops stray CMEX fallback glyphs from MacKay page-13 variance formula and decodes page-14 square brackets', () => {
     const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);

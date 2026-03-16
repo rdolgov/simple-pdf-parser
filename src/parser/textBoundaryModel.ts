@@ -80,7 +80,8 @@ export function refineLexicalTextBoundaries(items: PDFTextItem[]): PDFTextItem[]
     changed = true;
     return {
       ...item,
-      text: refinedText
+      text: refinedText,
+      glyphSpans: reconcileGlyphSpans(item, refinedText)
     };
   });
 
@@ -836,6 +837,52 @@ function normalizeFontKey(font: string | undefined): string {
   }
 
   return font.replace(/^[A-Z]{6}\+/, '').toLowerCase();
+}
+
+function reconcileGlyphSpans(item: PDFTextItem, refinedText: string): PDFTextItem['glyphSpans'] {
+  if (!item.glyphSpans || item.glyphSpans.length === 0) {
+    return item.glyphSpans;
+  }
+
+  const originalGlyphs = item.glyphSpans.filter((span) => span.text !== ' ');
+  if (originalGlyphs.length === 0 || !originalGlyphs.every((span) => span.text.length === 1)) {
+    return item.glyphSpans;
+  }
+
+  const collapsedOriginal = originalGlyphs.map((span) => span.text).join('');
+  const collapsedRefined = refinedText.replace(/\s+/g, '');
+  if (collapsedOriginal !== collapsedRefined) {
+    return item.glyphSpans;
+  }
+
+  const insertedSpaces = Array.from(refinedText).filter((char) => /\s/.test(char)).length;
+  if (insertedSpaces === 0) {
+    return item.glyphSpans;
+  }
+
+  const originalAdvance = item.glyphSpans.reduce((sum, span) => sum + span.advance, 0);
+  const baselineAdvance = item.baselineStart && item.baselineEnd
+    ? Math.hypot(item.baselineEnd.x - item.baselineStart.x, item.baselineEnd.y - item.baselineStart.y)
+    : item.bounds.maxX - item.bounds.minX;
+  const insertedSpaceAdvance = Math.max(0, baselineAdvance - originalAdvance) / insertedSpaces;
+
+  const rebuiltSpans: NonNullable<PDFTextItem['glyphSpans']> = [];
+  let glyphIndex = 0;
+  for (const char of Array.from(refinedText)) {
+    if (/\s/.test(char)) {
+      rebuiltSpans.push({ text: ' ', advance: insertedSpaceAdvance });
+      continue;
+    }
+
+    const span = originalGlyphs[glyphIndex];
+    if (!span || span.text !== char) {
+      return item.glyphSpans;
+    }
+    rebuiltSpans.push({ ...span });
+    glyphIndex += 1;
+  }
+
+  return rebuiltSpans;
 }
 
 function getOrCreateWordCounts(

@@ -51,6 +51,11 @@ export interface Type3Glyph {
   imageLayers?: Type3GlyphImageLayer[];
 }
 
+export interface PDFGlyphSpan {
+  text: string;
+  advance: number;
+}
+
 export interface PDFTextItem {
   text: string;
   bounds: PDFImageBounds;
@@ -62,6 +67,8 @@ export interface PDFTextItem {
   baselineStart?: Vector2D;
   /** Baseline end point in page coordinates, used for rotated text rendering */
   baselineEnd?: Vector2D;
+  /** Optional per-glyph advances preserved from the PDF text-showing operators */
+  glyphSpans?: PDFGlyphSpan[];
   /** For Type3 fonts: per-character glyph path data for canvas rendering */
   type3Glyphs?: Type3Glyph[];
   /** For Type3 fonts: the font matrix [a b c d e f] */
