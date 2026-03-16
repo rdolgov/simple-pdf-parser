@@ -11,6 +11,10 @@ import type {
 import type { PDFDocument } from '../pdfDocument.js';
 import { detectCmexComposites, type CmexComposite } from './cmexComposite.js';
 import {
+  resolveVectorDisplayOperatorPlan,
+  traceVectorDisplayOperator
+} from './displayOperatorRenderer.js';
+import {
   isStretchyMathDelimiter,
   isStretchyMathOperator,
   resolveGlyphScaleX,
@@ -734,6 +738,19 @@ export class CanvasRenderer {
       // Use Type3 glyph path rendering if available
       if (item.type3Glyphs && item.type3Glyphs.length > 0) {
         this.drawType3TextItem(context, item, projectPoint, options, metrics);
+        continue;
+      }
+
+      const vectorDisplayOperatorPlan = resolveVectorDisplayOperatorPlan(item, projectPoint, options.scale);
+      if (vectorDisplayOperatorPlan) {
+        context.save();
+        context.beginPath();
+        traceVectorDisplayOperator(context, vectorDisplayOperatorPlan);
+        context.lineWidth = vectorDisplayOperatorPlan.strokeWidth;
+        context.lineCap = 'butt';
+        context.lineJoin = 'miter';
+        context.stroke();
+        context.restore();
         continue;
       }
 

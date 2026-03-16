@@ -198,7 +198,7 @@ describe('PDF layout integration', () => {
     expect(radicalDraw!.y).toBeGreaterThan(2);
   });
 
-  it('uses a math-aware browser fallback stack for Computer Modern symbols', () => {
+  it('uses a math-aware browser fallback stack for non-vector Computer Modern symbols', () => {
     const document = loadAttentionPaperDocument();
     const context = new RecordingContext();
     const canvas = new RecordingCanvas(context);
@@ -273,7 +273,7 @@ describe('PDF layout integration', () => {
     expect(context.pathPaints.some((paint) => paint.kind === 'stroke')).toBe(true);
   });
 
-  it('renders the MacKay page-13 display summation with a tall vertical fit between its limits', () => {
+  it('renders the MacKay page-13 display summation as a vector operator between its limits', () => {
     const document = loadMacKayDocument();
     const context = new RecordingContext();
     const canvas = new RecordingCanvas(context);
@@ -287,8 +287,8 @@ describe('PDF layout integration', () => {
       return x >= 220 && x <= 240 && y >= 450 && y <= 470 && draw.text === '∑';
     });
 
-    expect(displaySumDraw).toBeDefined();
-    expect(displaySumDraw!.scaleY).toBeGreaterThan(1.5);
+    expect(displaySumDraw).toBeUndefined();
+    expect(context.pathPaints.some((paint) => paint.kind === 'stroke')).toBe(true);
   });
 
   it('renders the MacKay page-14 italic heading with per-glyph advances instead of a single browser-shaped word', () => {
@@ -349,14 +349,12 @@ describe('PDF layout integration', () => {
       const y = draw.translateY || draw.y;
       return x >= 175 && x <= 340 && y >= 595 && y <= 622;
     });
-    const productDraw = equationDraws.find((draw) => draw.text === '∏');
 
-    expect(productDraw).toBeDefined();
-    expect(productDraw!.font).toContain("'CMEX10");
-    expect(productDraw!.font).toContain('math');
+    expect(equationDraws.some((draw) => draw.text === '∏')).toBe(false);
     expect(equationDraws.some((draw) => draw.text === 'Y')).toBe(false);
     expect(equationDraws.some((draw) => draw.text === 'N')).toBe(true);
     expect(equationDraws.some((draw) => draw.text === '=1')).toBe(true);
+    expect(context.pathPaints.some((paint) => paint.kind === 'stroke')).toBe(true);
   });
 
   it('renders repaired MacKay prose ligatures and split words on sampled body pages', () => {

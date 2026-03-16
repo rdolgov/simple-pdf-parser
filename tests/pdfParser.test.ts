@@ -503,9 +503,9 @@ ET
     expect(page).toBeDefined();
 
     const equationItems = page!.textItems
-      .filter((item) => item.bounds.minY >= 235 && item.bounds.maxY <= 266 && item.bounds.minX >= 150 && item.bounds.maxX <= 325)
+      .filter((item) => item.bounds.minX >= 220 && item.bounds.maxX <= 325 && item.bounds.minY >= 135 && item.bounds.maxY <= 182)
       .sort((left, right) => left.bounds.minX - right.bounds.minX);
-    const product = equationItems.find((item) => item.text === '∏');
+    const product = equationItems.find((item) => item.text === '∏' && item.glyphSpans?.[0]?.glyphCode === 89);
 
     expect(product).toBeDefined();
     expect(product!.font).toMatch(/CMEX/i);

@@ -601,4 +601,106 @@ describe('CanvasRenderer', () => {
     expect(contextImpl.operations).toContain('translate:108,156');
     expect(contextImpl.operations).not.toContain('translate:108,153');
   });
+
+  it('renders CMEX product operators as vector strokes instead of raw text glyphs', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: '∏',
+              bounds: { minX: 40, minY: 40, maxX: 54, maxY: 62 },
+              font: 'CMEX10',
+              fontSize: 10,
+              baselineStart: { x: 40, y: 50 },
+              baselineEnd: { x: 54, y: 50 },
+              glyphSpans: [{ text: '∏', advance: 14, glyphCode: 89 }]
+            },
+            {
+              text: 'N',
+              bounds: { minX: 43, minY: 57, maxX: 48, maxY: 63 },
+              font: 'CMMI7',
+              fontSize: 6
+            },
+            {
+              text: 'n=1',
+              bounds: { minX: 41, minY: 33, maxX: 52, maxY: 39 },
+              font: 'Times New Roman',
+              fontSize: 6
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+    renderer.render(canvas, document, 1);
+
+    const operations = contextImpl.operations;
+    expect(operations.some((entry) => entry.startsWith('fillText:∏@'))).toBe(false);
+    expect(operations.filter((entry) => entry.startsWith('lineTo:')).length).toBeGreaterThanOrEqual(4);
+    expect(operations.some((entry) => entry === 'stroke')).toBe(true);
+    expect(operations.some((entry) => entry.startsWith('fillText:N@'))).toBe(true);
+    expect(operations.some((entry) => entry.startsWith('fillText:n=1@'))).toBe(true);
+  });
+
+  it('renders CMEX summation operators as vector strokes instead of raw text glyphs', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: '∑',
+              bounds: { minX: 40, minY: 40, maxX: 54, maxY: 62 },
+              font: 'CMEX10',
+              fontSize: 10,
+              baselineStart: { x: 40, y: 50 },
+              baselineEnd: { x: 54, y: 50 },
+              glyphSpans: [{ text: '∑', advance: 14, glyphCode: 88 }]
+            },
+            {
+              text: 'N',
+              bounds: { minX: 43, minY: 57, maxX: 48, maxY: 63 },
+              font: 'CMMI7',
+              fontSize: 6
+            },
+            {
+              text: 'r=0',
+              bounds: { minX: 41, minY: 33, maxX: 52, maxY: 39 },
+              font: 'Times New Roman',
+              fontSize: 6
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+    renderer.render(canvas, document, 1);
+
+    const operations = contextImpl.operations;
+    expect(operations.some((entry) => entry.startsWith('fillText:∑@'))).toBe(false);
+    expect(operations.filter((entry) => entry.startsWith('lineTo:')).length).toBeGreaterThanOrEqual(4);
+    expect(operations.some((entry) => entry === 'stroke')).toBe(true);
+    expect(operations.some((entry) => entry.startsWith('fillText:N@'))).toBe(true);
+    expect(operations.some((entry) => entry.startsWith('fillText:r=0@'))).toBe(true);
+  });
 });
