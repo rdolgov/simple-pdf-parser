@@ -300,6 +300,32 @@ describe('PDF layout integration', () => {
     expect(page110Joined).toContain('Huffman coding');
   });
 
+  it('renders repaired MacKay lexical boundaries on additional body pages', () => {
+    const document = loadMacKayDocument();
+    const page150Context = new RecordingContext();
+    const page150Canvas = new RecordingCanvas(page150Context);
+    const page253Context = new RecordingContext();
+    const page253Canvas = new RecordingCanvas(page253Context);
+    const page578Context = new RecordingContext();
+    const page578Canvas = new RecordingCanvas(page578Context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(page150Canvas, document, 150);
+    renderer.render(page253Canvas, document, 253);
+    renderer.render(page578Canvas, document, 578);
+
+    const page150Joined = page150Context.textDraws.map((draw) => draw.text).join(' ');
+    const page253Joined = page253Context.textDraws.map((draw) => draw.text).join(' ');
+    const page578Joined = page578Context.textDraws.map((draw) => draw.text).join(' ');
+
+    expect(page150Joined).toContain('communication over noisy channels');
+    expect(page150Joined).toContain('do with entropy');
+    expect(page150Joined).toContain('joint entropy');
+    expect(page150Joined).toContain('conditional entropy');
+    expect(page253Joined).toContain('behind you');
+    expect(page578Joined).toContain('average entropy');
+  });
+
   it('does not render stray CMEX fallback glyphs on the MacKay page-13 variance formula', () => {
     const document = loadMacKayDocument();
     const context = new RecordingContext();

@@ -13,6 +13,7 @@ import type {
   Vector2D
 } from '../types.js';
 import { mergeTextRuns } from './textSmoother.js';
+import { refineLexicalTextBoundaries } from './textBoundaryModel.js';
 import type { Matrix } from './mathUtils.js';
 import {
   identityMatrix,
@@ -3359,7 +3360,9 @@ export class PDFParser {
     if (!this.shouldSmoothText()) {
       return refinedItems;
     }
-    return this.refineTextBounds(mergeTextRuns(refinedItems));
+    const smoothedItems = mergeTextRuns(refinedItems);
+    const boundaryRefinedItems = refineLexicalTextBoundaries(smoothedItems);
+    return this.refineTextBounds(boundaryRefinedItems);
   }
 
   private shouldSmoothText(): boolean {

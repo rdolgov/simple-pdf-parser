@@ -273,16 +273,25 @@ ET
     const page65 = document.getPage(65);
     const page85 = document.getPage(85);
     const page110 = document.getPage(110);
+    const page150 = document.getPage(150);
+    const page253 = document.getPage(253);
+    const page578 = document.getPage(578);
 
     expect(page9).toBeDefined();
     expect(page65).toBeDefined();
     expect(page85).toBeDefined();
     expect(page110).toBeDefined();
+    expect(page150).toBeDefined();
+    expect(page253).toBeDefined();
+    expect(page578).toBeDefined();
 
     const page9Text = page9!.textItems.map((item) => item.text).join(' ');
     const page65Text = page65!.textItems.map((item) => item.text).join(' ');
     const page85Text = page85!.textItems.map((item) => item.text).join(' ');
     const page110Text = page110!.textItems.map((item) => item.text).join(' ');
+    const page150Text = page150!.textItems.map((item) => item.text).join(' ');
+    const page253Text = page253!.textItems.map((item) => item.text).join(' ');
+    const page578Text = page578!.textItems.map((item) => item.text).join(' ');
 
     expect(page9Text).toContain('Exact Inference by Complete Enumeration');
     expect(page9Text).toContain('Efficient Monte Carlo Methods');
@@ -297,6 +306,13 @@ ET
     expect(page110Text).toContain('defining implicit probabilities');
     expect(page110Text).toContain('Huffman coding');
     expect(page110Text).toContain('shown in figure 5.3?');
+    expect(page150Text).toContain('communication over noisy channels');
+    expect(page150Text).toContain('do with entropy');
+    expect(page150Text).toContain('The joint entropy of');
+    expect(page150Text).toContain('The conditional entropy of');
+    expect(page253Text).toContain('soldier behind you');
+    expect(page253Text).toContain('behind you says');
+    expect(page578Text).toContain('average entropy');
   });
 
   it('decodes Computer Modern math glyphs on the MacKay chapter-1 review page', () => {
