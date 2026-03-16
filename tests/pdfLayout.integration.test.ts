@@ -298,6 +298,29 @@ describe('PDF layout integration', () => {
     expect(equationDraws.some((draw) => draw.text === '1 2 3')).toBe(false);
   });
 
+  it('renders the MacKay page-18 product operator as a math product instead of a literal Y', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 18);
+
+    const equationDraws = context.textDraws.filter((draw) => {
+      const x = draw.translateX || draw.x;
+      const y = draw.translateY || draw.y;
+      return x >= 175 && x <= 340 && y >= 595 && y <= 622;
+    });
+    const productDraw = equationDraws.find((draw) => draw.text === '∏');
+
+    expect(productDraw).toBeDefined();
+    expect(productDraw!.font).toContain("'CMEX10");
+    expect(productDraw!.font).toContain('math');
+    expect(equationDraws.some((draw) => draw.text === 'Y')).toBe(false);
+    expect(equationDraws.some((draw) => draw.text === 'N')).toBe(true);
+    expect(equationDraws.some((draw) => draw.text === '=1')).toBe(true);
+  });
+
   it('renders repaired MacKay prose ligatures and split words on sampled body pages', () => {
     const document = loadMacKayDocument();
     const page85Context = new RecordingContext();

@@ -270,6 +270,7 @@ export const PRINTABLE_CMMI_OVERRIDES: Record<string, string> = {
 
 export const PRINTABLE_CMEX_OVERRIDES: Record<string, string> = {
   X: '∑',
+  Y: '∏',
   h: '(',
   i: ')'
 };

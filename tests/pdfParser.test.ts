@@ -447,6 +447,27 @@ ET
     expect(indexRun!.glyphSpans?.map((span) => span.text)).toEqual(['1', ' ', '2', ' ', '3']);
   });
 
+  it('decodes the MacKay page-18 product operator instead of a literal CMEX fallback Y', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(18);
+
+    expect(page).toBeDefined();
+
+    const equationItems = page!.textItems
+      .filter((item) => item.bounds.minY >= 235 && item.bounds.maxY <= 266 && item.bounds.minX >= 150 && item.bounds.maxX <= 325)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX);
+    const product = equationItems.find((item) => item.text === '∏');
+
+    expect(product).toBeDefined();
+    expect(product!.font).toMatch(/CMEX/i);
+    expect(product!.bounds.minY).toBeLessThan(product!.baselineStart!.y - product!.fontSize! * 0.45);
+    expect(equationItems.some((item) => item.text === 'Y')).toBe(false);
+    expect(equationItems.some((item) => item.text === 'N')).toBe(true);
+    expect(equationItems.some((item) => item.text === '=1')).toBe(true);
+  });
+
   it('drops stray CMEX fallback glyphs from MacKay page-13 variance formula and decodes page-14 square brackets', () => {
     const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);
