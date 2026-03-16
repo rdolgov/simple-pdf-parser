@@ -235,8 +235,17 @@ export const CONTROL_CHAR_CMMI_OVERRIDES: Record<number, string> = {
 export const CONTROL_CHAR_CMEX_OVERRIDES: Record<number, string> = {
   0: '(',
   1: ')',
+  2: '',
+  3: '',
   18: '(',
-  19: ')'
+  19: ')',
+  20: '[',
+  21: ']'
+};
+
+export const CONTROL_CHAR_LINE_OVERRIDES: Record<number, string> = {
+  0: '\u2571',
+  18: '\u2197'
 };
 
 export const PRINTABLE_CMSY_OVERRIDES: Record<string, string> = {
@@ -259,6 +268,12 @@ export const PRINTABLE_CMEX_OVERRIDES: Record<string, string> = {
   i: ')'
 };
 
+export const PRINTABLE_LINE_OVERRIDES: Record<string, string> = {
+  '-': '\u2192',
+  '@': '\u2572',
+  R: '\u2198'
+};
+
 /** Default control character fallbacks for ligatures */
 export const CONTROL_CHAR_FALLBACK: Record<number, string> = {
   1: 'ff',
@@ -268,5 +283,9 @@ export const CONTROL_CHAR_FALLBACK: Record<number, string> = {
   5: 'ffi',
   6: 'Ł',
   7: 'Œ',
-  8: 'œ'
+  8: 'œ',
+  11: 'ff',
+  12: 'fi',
+  14: 'ffi',
+  15: 'ffl'
 };

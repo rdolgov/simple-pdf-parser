@@ -7,10 +7,12 @@ import {
   CONTROL_CHAR_CMMI_OVERRIDES,
   CONTROL_CHAR_CMEX_OVERRIDES,
   CONTROL_CHAR_FALLBACK,
+  CONTROL_CHAR_LINE_OVERRIDES,
   CONTROL_CHAR_MATH_OVERRIDES,
   PRINTABLE_CMMI_OVERRIDES,
   PRINTABLE_CMEX_OVERRIDES,
-  PRINTABLE_CMSY_OVERRIDES
+  PRINTABLE_CMSY_OVERRIDES,
+  PRINTABLE_LINE_OVERRIDES
 } from './parserConstants.js';
 import { bytesToKey } from './parserUtils.js';
 import { latin1ToUint8 } from '../utils/buffer.js';
@@ -31,6 +33,9 @@ export function controlCharOverrides(font?: FontResource): Record<number, string
   if (/CMSY/i.test(font.baseFontName)) {
     return CONTROL_CHAR_MATH_OVERRIDES;
   }
+  if (/LINE10/i.test(font.baseFontName)) {
+    return CONTROL_CHAR_LINE_OVERRIDES;
+  }
   return undefined;
 }
 
@@ -46,6 +51,9 @@ function printableMathOverrides(font?: FontResource): Record<string, string> | u
   }
   if (/CMSY/i.test(font.baseFontName)) {
     return PRINTABLE_CMSY_OVERRIDES;
+  }
+  if (/LINE10/i.test(font.baseFontName)) {
+    return PRINTABLE_LINE_OVERRIDES;
   }
   return undefined;
 }

@@ -265,6 +265,40 @@ ET
     ).toBe(true);
   });
 
+  it('repairs split prose words and ligatures on sampled MacKay body pages', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page9 = document.getPage(9);
+    const page65 = document.getPage(65);
+    const page85 = document.getPage(85);
+    const page110 = document.getPage(110);
+
+    expect(page9).toBeDefined();
+    expect(page65).toBeDefined();
+    expect(page85).toBeDefined();
+    expect(page110).toBeDefined();
+
+    const page9Text = page9!.textItems.map((item) => item.text).join(' ');
+    const page65Text = page65!.textItems.map((item) => item.text).join(' ');
+    const page85Text = page85!.textItems.map((item) => item.text).join(' ');
+    const page110Text = page110!.textItems.map((item) => item.text).join(' ');
+
+    expect(page9Text).toContain('Exact Inference by Complete Enumeration');
+    expect(page9Text).toContain('Efficient Monte Carlo Methods');
+    expect(page65Text).toContain("write down Bayes' theorem again");
+    expect(page65Text).toContain('know how probable H is given the data');
+    expect(page85Text).toContain('five-character word');
+    expect(page85Text).toContain('The average information content per character');
+    expect(page85Text).toContain('the first letter of a word is');
+    expect(page85Text).toContain('The information content is thus highly variable');
+    expect(page110Text).toContain('there exists a prefix code');
+    expect(page110Text).toContain('confirming that the Kraft inequality is satisfied');
+    expect(page110Text).toContain('defining implicit probabilities');
+    expect(page110Text).toContain('Huffman coding');
+    expect(page110Text).toContain('shown in figure 5.3?');
+  });
+
   it('decodes Computer Modern math glyphs on the MacKay chapter-1 review page', () => {
     const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);
@@ -340,6 +374,55 @@ ET
     expect(gaussianText).not.toContain('≈ π');
     expect(formulaText).not.toContain('2 f');
     expect(formulaText).not.toContain('... g');
+  });
+
+  it('drops stray CMEX fallback glyphs from MacKay page-13 variance formula and decodes page-14 square brackets', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page13 = document.getPage(13);
+    const page14 = document.getPage(14);
+
+    expect(page13).toBeDefined();
+    expect(page14).toBeDefined();
+
+    const varianceItems = page13!.textItems
+      .filter((item) => item.bounds.minY >= 128 && item.bounds.maxY <= 148 && item.bounds.minX >= 110 && item.bounds.maxX <= 340)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX);
+    const varianceText = varianceItems.map((item) => item.text).join(' ');
+
+    const bracketItems = page14!.textItems
+      .filter((item) => item.bounds.minY >= 145 && item.bounds.maxY <= 170 && item.bounds.minX >= 250 && item.bounds.maxX <= 335)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX);
+    const bracketText = bracketItems.map((item) => item.text).join(' ');
+
+    expect(varianceText).not.toContain('fi');
+    expect(varianceText).not.toContain('¹');
+    expect(bracketText).toContain('[');
+    expect(bracketText).toContain(']');
+    expect(bracketText).toContain('π');
+  });
+
+  it('decodes the MacKay page-15 LINE10 diagram glyphs into arrows and diagonals', () => {
+    const fixtureUrl = new URL('../pdfs/InformationTheoryByMacKay.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(15);
+
+    expect(page).toBeDefined();
+
+    const diagramItems = page!.textItems
+      .filter((item) => item.font === 'LINE10' && item.bounds.minX >= 430 && item.bounds.maxX <= 505 && item.bounds.minY >= 250 && item.bounds.maxY <= 400)
+      .sort((left, right) => left.bounds.minY - right.bounds.minY || left.bounds.minX - right.bounds.minX);
+    const diagramText = diagramItems.map((item) => item.text).join(' ');
+
+    expect(diagramText).toContain('→');
+    expect(diagramText).toContain('↗');
+    expect(diagramText).toContain('↘');
+    expect(diagramText).toContain('╱');
+    expect(diagramText).toContain('╲');
+    expect(diagramText).not.toContain('R @');
+    expect(diagramText).not.toContain('@');
   });
 
   it('does not merge across table columns in Table 3 (NIPS Transformer paper)', () => {

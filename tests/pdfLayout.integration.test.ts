@@ -268,8 +268,73 @@ describe('PDF layout integration', () => {
     expect(drawTexts.some((text) => text.includes('}'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('√'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('π'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('['))).toBe(true);
+    expect(drawTexts.some((text) => text.includes(']'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('≈ π'))).toBe(false);
     expect(drawTexts.some((text) => text.includes('Appr oximating'))).toBe(false);
+  });
+
+  it('renders repaired MacKay prose ligatures and split words on sampled body pages', () => {
+    const document = loadMacKayDocument();
+    const page85Context = new RecordingContext();
+    const page85Canvas = new RecordingCanvas(page85Context);
+    const page110Context = new RecordingContext();
+    const page110Canvas = new RecordingCanvas(page110Context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(page85Canvas, document, 85);
+    renderer.render(page110Canvas, document, 110);
+
+    const page85Texts = page85Context.textDraws.map((draw) => draw.text);
+    const page110Texts = page110Context.textDraws.map((draw) => draw.text);
+    const page85Joined = page85Texts.join(' ');
+    const page110Joined = page110Texts.join(' ');
+
+    expect(page85Joined).toContain('five-character');
+    expect(page85Joined).toContain('average information content per character');
+    expect(page85Joined).toContain('first letter');
+    expect(page85Joined).toContain('thus highly variable');
+    expect(page110Joined).toContain('prefix code');
+    expect(page110Joined).toContain('confirming');
+    expect(page110Joined).toContain('defining implicit probabilities');
+    expect(page110Joined).toContain('Huffman coding');
+  });
+
+  it('does not render stray CMEX fallback glyphs on the MacKay page-13 variance formula', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 13);
+    const relevantDraws = context.textDraws.filter(
+      (draw) => draw.translateX >= 120 && draw.translateX <= 340 && draw.translateY >= 640 && draw.translateY <= 690
+    );
+    const drawTexts = relevantDraws.map((draw) => draw.text);
+
+    expect(drawTexts.some((text) => text.includes('fi'))).toBe(false);
+    expect(drawTexts.some((text) => text.includes('¹'))).toBe(false);
+  });
+
+  it('renders the MacKay page-15 LINE10 diagram as arrows and diagonals instead of raw fallback glyphs', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 15);
+    const relevantDraws = context.textDraws.filter(
+      (draw) => draw.font.includes("'LINE10'") && draw.translateX >= 430 && draw.translateX <= 510 && draw.translateY >= 400 && draw.translateY <= 570
+    );
+    const drawTexts = relevantDraws.map((draw) => draw.text);
+
+    expect(drawTexts.some((text) => text.includes('→'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('↗'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('↘'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('╱'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('╲'))).toBe(true);
+    expect(drawTexts.some((text) => text.includes('R @'))).toBe(false);
+    expect(drawTexts.some((text) => text.includes('@'))).toBe(false);
   });
 
   it('renders Type3 OCR overlays on scanned pages', () => {

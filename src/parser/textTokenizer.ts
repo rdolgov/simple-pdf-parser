@@ -202,6 +202,8 @@ export function decodeEscapeSequence(source: string, startIndex: number): { valu
       return { value: '\b', nextIndex: startIndex + 2 };
     case 'f':
       return { value: '\f', nextIndex: startIndex + 2 };
+    case 'v':
+      return { value: '\v', nextIndex: startIndex + 2 };
     case '(':
     case ')':
     case '\\':

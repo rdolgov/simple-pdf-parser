@@ -534,7 +534,10 @@ export class CanvasRenderer {
     for (const item of sortedItems) {
       const width = item.bounds.maxX - item.bounds.minX;
       const height = item.bounds.maxY - item.bounds.minY;
-      if (!(width > 0) || !(height > 0)) {
+      const baselineWidth = item.baselineStart && item.baselineEnd
+        ? Math.hypot(item.baselineEnd.x - item.baselineStart.x, item.baselineEnd.y - item.baselineStart.y)
+        : 0;
+      if (!(height > 0) || (!(width > 0) && !(baselineWidth > 0.01))) {
         continue;
       }
 

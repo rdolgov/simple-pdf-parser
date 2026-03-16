@@ -22,8 +22,8 @@ const DEFAULT_OPTIONS: Required<TextSmootherOptions> = {
 
 const COMMON_SHORT_WORDS = new Set([
   'a', 'all', 'an', 'and', 'any', 'are', 'as', 'at', 'be', 'but', 'by', 'can',
-  'do', 'for', 'he', 'if', 'in', 'is', 'it', 'my', 'not', 'of', 'on', 'one',
-  'or', 'our', 'out', 'so', 'the', 'to', 'up', 'us', 'we'
+  'do', 'for', 'he', 'if', 'in', 'is', 'it', 'me', 'my', 'no', 'not', 'of',
+  'on', 'one', 'or', 'our', 'out', 'so', 'the', 'to', 'up', 'us', 'we', 'you'
 ]);
 
 const COMBINED_SHORT_WORDS = new Set([
@@ -67,7 +67,7 @@ export function mergeTextRuns(
   }
 
   const config = { ...DEFAULT_OPTIONS, ...options };
-  const orderedItems = sortForSmoothing(items, config);
+  const orderedItems = sortForSmoothing(dropDegenerateDuplicateRuns(items), config);
   const result: PDFTextItem[] = [];
   let lastEndX: number | undefined;
 
@@ -138,11 +138,9 @@ function mergeDecision(
   lastEndX: number,
   options: Required<TextSmootherOptions>
 ): MergeDecision {
-  // Don't merge Type3 font items. Their text content is placeholder (NBSPs)
-  // and each item carries its own glyph path data that should be rendered
-  // at its original position. Merging creates a single wide item that
-  // distorts per-glyph spacing in the renderer.
-  if (prev.type3Glyphs && prev.type3Glyphs.length > 0) {
+  // Don't merge glyph-by-glyph drawing fonts. Their spacing is encoded by the
+  // original PDF positions, so combining runs distorts diagrams and symbols.
+  if (hasIntrinsicGlyphSpacing(prev) || hasIntrinsicGlyphSpacing(next)) {
     return { merge: false, insertSpace: false };
   }
 
@@ -223,6 +221,10 @@ function mergeDecision(
   }
 
   return { merge: true, insertSpace: requiresSpace };
+}
+
+function hasIntrinsicGlyphSpacing(item: PDFTextItem): boolean {
+  return (item.type3Glyphs && item.type3Glyphs.length > 0) || /line10/i.test(item.font ?? '');
 }
 
 function hasCompatibleTextStyle(prev: PDFTextItem, next: PDFTextItem): boolean {
@@ -334,20 +336,26 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
 
   const titleCaseSplit = /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
   const shortContinuation = isLikelyShortWordContinuation(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+  const tightShortPrefixSplit = isTightShortPrefixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+  const tightShortSuffixSplit = isTightShortSuffixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+  const tightThreeLetterPrefixSplit = isTightThreeLetterPrefixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
   const combinedShortWord = COMBINED_SHORT_WORDS.has(`${prevWord}${nextWord}`);
 
   if (combinedShortWord) {
     return gap <= Math.max(avgCharWidth * 0.22, 1);
   }
 
-  if (COMMON_SHORT_WORDS.has(prevWord) || (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation && !titleCaseSplit)) {
+  if (
+    (COMMON_SHORT_WORDS.has(prevWord) && !tightShortPrefixSplit) ||
+    (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation && !tightShortSuffixSplit && !titleCaseSplit)
+  ) {
     return false;
   }
 
-  const suffixSplit = COMMON_SUFFIX_FRAGMENTS.has(nextWord);
+  const suffixSplit = /^[a-z]/.test(nextFragment) && COMMON_SUFFIX_FRAGMENTS.has(nextWord);
   const prefixSplit =
     /^[a-z]/.test(nextFragment) &&
-    (COMMON_PREFIX_FRAGMENTS.has(prevWord) || prevWord.length <= 2 || (prevWord.length === 3 && nextWord.length >= 4));
+    (COMMON_PREFIX_FRAGMENTS.has(prevWord) || prevWord.length <= 2);
   const compactSplit =
     /^[a-z]/.test(nextFragment) &&
     gap <= Math.max(avgCharWidth * 0.18, 1) &&
@@ -357,7 +365,7 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
     prevWord.length >= 3 &&
     nextWord.length >= 4 &&
     prevWord.length + nextWord.length <= 16 &&
-    gap <= Math.max(avgCharWidth * 0.12, 0.75);
+    gap <= Math.max(avgCharWidth * 0.02, 0.25);
 
   const gapLimit = suffixSplit || titleCaseSplit || prefixSplit || compactSplit || tightCompoundSplit
     ? Math.max(avgCharWidth * 1.6, 8)
@@ -368,7 +376,17 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
     return false;
   }
 
-  return shortContinuation || suffixSplit || titleCaseSplit || prefixSplit || compactSplit || tightCompoundSplit;
+  return (
+    shortContinuation ||
+    tightShortPrefixSplit ||
+    tightShortSuffixSplit ||
+    tightThreeLetterPrefixSplit ||
+    suffixSplit ||
+    titleCaseSplit ||
+    prefixSplit ||
+    compactSplit ||
+    tightCompoundSplit
+  );
 }
 
 function prependSpaceIfNeeded(previousText: string, currentText: string): string {
@@ -419,6 +437,9 @@ function hasLikelyWordBoundary(prevText: string, nextText: string, gap: number, 
   const nextWord = normalizeWordFragment(nextFragment);
   const titleCaseSplit = /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
   const shortContinuation = isLikelyShortWordContinuation(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+  const tightShortPrefixSplit = isTightShortPrefixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+  const tightShortSuffixSplit = isTightShortSuffixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
+  const tightThreeLetterPrefixSplit = isTightThreeLetterPrefixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
   const combinedShortWord = COMBINED_SHORT_WORDS.has(`${prevWord}${nextWord}`);
 
   if (prevWord.length === 0 || nextWord.length === 0) {
@@ -438,12 +459,19 @@ function hasLikelyWordBoundary(prevText: string, nextText: string, gap: number, 
     return false;
   }
 
-  if (COMMON_SHORT_WORDS.has(prevWord) || (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation && !titleCaseSplit)) {
+  if (
+    (COMMON_SHORT_WORDS.has(prevWord) && !tightShortPrefixSplit) ||
+    (COMMON_SHORT_WORDS.has(nextWord) && !shortContinuation && !tightShortSuffixSplit && !titleCaseSplit)
+  ) {
     return true;
   }
 
   if (/^[A-Z]/.test(nextFragment)) {
     return true;
+  }
+
+  if (tightThreeLetterPrefixSplit) {
+    return false;
   }
 
   return prevWord.length >= 3 && nextWord.length >= 3;
@@ -473,6 +501,70 @@ function isLikelyShortWordContinuation(
   }
 
   return gap <= Math.max(avgCharWidth * 0.22, 1);
+}
+
+function isTightShortPrefixSplit(
+  prevWord: string,
+  nextWord: string,
+  nextFragment: string,
+  gap: number,
+  avgCharWidth: number
+): boolean {
+  if (!COMMON_SHORT_WORDS.has(prevWord) || prevWord.length > 2) {
+    return false;
+  }
+
+  if (nextWord.length < 2 || !/^[a-z]/.test(nextFragment)) {
+    if (nextWord.length !== 1 || !/^[a-z]/.test(nextFragment)) {
+      return false;
+    }
+  }
+
+  if (nextWord.length === 1 && prevWord.length + nextWord.length < 2) {
+    return false;
+  }
+
+  if (nextWord.length > 1 && prevWord.length + nextWord.length < 4) {
+    return false;
+  }
+
+  return gap <= Math.max(avgCharWidth * 0.1, 0.75);
+}
+
+function isTightShortSuffixSplit(
+  prevWord: string,
+  nextWord: string,
+  nextFragment: string,
+  gap: number,
+  avgCharWidth: number
+): boolean {
+  if (!COMMON_SHORT_WORDS.has(nextWord) || COMMON_SHORT_WORDS.has(prevWord)) {
+    return false;
+  }
+
+  if (prevWord.length === 0 || prevWord.length > 5 || !/^[a-z]/.test(nextFragment)) {
+    return false;
+  }
+
+  return gap <= Math.max(avgCharWidth * 0.1, 0.75);
+}
+
+function isTightThreeLetterPrefixSplit(
+  prevWord: string,
+  nextWord: string,
+  nextFragment: string,
+  gap: number,
+  avgCharWidth: number
+): boolean {
+  if (prevWord.length !== 3 || nextWord.length < 4 || !/^[a-z]/.test(nextFragment)) {
+    return false;
+  }
+
+  if (COMMON_SHORT_WORDS.has(prevWord)) {
+    return false;
+  }
+
+  return gap <= Math.max(avgCharWidth * 0.02, 0.35);
 }
 
 function getLeadingWordFragment(text: string): string {
@@ -513,4 +605,61 @@ function sortForSmoothing(items: PDFTextItem[], options: Required<TextSmootherOp
       return left.index - right.index;
     })
     .map(({ item }) => item);
+}
+
+function dropDegenerateDuplicateRuns(items: PDFTextItem[]): PDFTextItem[] {
+  const groupedIndices = new Map<string, number[]>();
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const key = [
+      item.text,
+      item.font ?? '',
+      roundKey(item.fontSize ?? 0, 100),
+      roundKey(item.bounds.minX, 100),
+      roundKey(item.bounds.minY, 100),
+      roundKey(item.baselineStart?.x ?? item.bounds.minX, 100),
+      roundKey(item.baselineStart?.y ?? item.bounds.minY, 100)
+    ].join('|');
+    const bucket = groupedIndices.get(key);
+    if (bucket) {
+      bucket.push(index);
+    } else {
+      groupedIndices.set(key, [index]);
+    }
+  }
+
+  const skipped = new Set<number>();
+
+  for (const indices of groupedIndices.values()) {
+    if (indices.length < 2) {
+      continue;
+    }
+
+    const hasRenderableSibling = indices.some((index) => !isDegeneratePlaceholderRun(items[index]));
+    if (!hasRenderableSibling) {
+      continue;
+    }
+
+    for (const index of indices) {
+      if (isDegeneratePlaceholderRun(items[index])) {
+        skipped.add(index);
+      }
+    }
+  }
+
+  return items.filter((_, index) => !skipped.has(index));
+}
+
+function isDegeneratePlaceholderRun(item: PDFTextItem): boolean {
+  if ((item.type3Glyphs && item.type3Glyphs.length > 0) || /line10/i.test(item.font ?? '')) {
+    return false;
+  }
+
+  const width = Math.max(0, item.bounds.maxX - item.bounds.minX);
+  return width <= 0.01;
+}
+
+function roundKey(value: number, multiplier: number): string {
+  return String(Math.round(value * multiplier));
 }

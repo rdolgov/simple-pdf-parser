@@ -187,12 +187,13 @@ async function computeCropRect({ pdfPath, pageNumber, matchPattern, matchIndex, 
   };
 }
 
-function buildFormulaCheckUrl({ port, pdfPath, pageNumber, cropRect, scale, cropPadding, debug }) {
+function buildFormulaCheckUrl({ port, pdfPath, pageNumber, cropRect, scale, padding, cropPadding, debug }) {
   const params = new URLSearchParams({
     pdfPath,
     page: String(pageNumber),
     crop: `${cropRect.x},${cropRect.y},${cropRect.width},${cropRect.height}`,
     scale: String(scale),
+    padding: String(padding),
     cropPadding: String(cropPadding)
   });
   if (debug) {
@@ -319,14 +320,18 @@ async function main() {
   const outputPath = isAbsolute(outputArg) ? outputArg : resolve(repoRoot, outputArg);
   const contextX = Math.max(0, parseNumber(args.get('context-x'), 36));
   const contextY = Math.max(0, parseNumber(args.get('context-y'), 18));
+  const padding = Math.max(0, parseNumber(args.get('padding'), 16));
   const cropPadding = Math.max(0, parseNumber(args.get('crop-padding'), 8));
   const scale = Math.max(1, parseNumber(args.get('scale'), 2));
+  const skipBuild = args.has('skip-build');
   const portArg = args.get('port');
   const port = portArg ? Math.max(1024, Math.floor(parseNumber(portArg, 4174))) : 0;
   const debug = args.get('debug') === 'true';
 
-  await runCommand('npm', ['run', 'build:lib']);
-  await runCommand('npm', ['--prefix', 'testApp', 'run', 'build']);
+  if (!skipBuild) {
+    await runCommand('npm', ['run', 'build:lib']);
+    await runCommand('npm', ['--prefix', 'testApp', 'run', 'build']);
+  }
 
   const cropRect =
     explicitCrop ??
@@ -350,6 +355,7 @@ async function main() {
       pageNumber,
       cropRect,
       scale,
+      padding,
       cropPadding,
       debug
     });
