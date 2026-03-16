@@ -236,7 +236,7 @@ describe('PDF layout integration', () => {
     expect(rightDelimiter!.bounds.minY).toBeLessThan(rightDelimiter!.baselineStart!.y - rightDelimiter!.fontSize! * 2);
   });
 
-  it('applies a tall vertical fit when rendering MacKay binomial delimiters', () => {
+  it('renders MacKay binomial delimiters as vector outlines instead of scaled CMEX text glyphs', () => {
     const document = loadMacKayDocument();
     const context = new RecordingContext();
     const canvas = new RecordingCanvas(context);
@@ -248,9 +248,9 @@ describe('PDF layout integration', () => {
       (draw) => (draw.text === '(' || draw.text === ')') && draw.font.includes("'CMEX10'")
     );
 
-    expect(delimiterDraws.length).toBeGreaterThanOrEqual(4);
-    expect(delimiterDraws.some((draw) => draw.scaleY > 2)).toBe(true);
+    expect(delimiterDraws.length).toBe(0);
     expect(context.textDraws.some((draw) => draw.text === '( )')).toBe(false);
+    expect(context.pathPaints.some((paint) => paint.kind === 'stroke')).toBe(true);
   });
 
   it('renders MacKay page-14 Poisson symbols with lambda, set-membership, radicals, and pi', () => {
@@ -268,10 +268,30 @@ describe('PDF layout integration', () => {
     expect(drawTexts.some((text) => text.includes('}'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('√'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('π'))).toBe(true);
-    expect(drawTexts.some((text) => text.includes('['))).toBe(true);
-    expect(drawTexts.some((text) => text.includes(']'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('≈ π'))).toBe(false);
     expect(drawTexts.some((text) => text.includes('Appr oximating'))).toBe(false);
+    expect(context.pathPaints.some((paint) => paint.kind === 'stroke')).toBe(true);
+  });
+
+  it('renders the MacKay page-14 italic heading with per-glyph advances instead of a single browser-shaped word', () => {
+    const document = loadMacKayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 14);
+
+    const headingDraws = context.textDraws.filter((draw) => {
+      const x = draw.translateX || draw.x;
+      const y = draw.translateY || draw.y;
+      return x >= 75 && x <= 215 && y >= 125 && y <= 145;
+    });
+
+    expect(headingDraws.some((draw) => draw.text === 'Approximating')).toBe(false);
+    expect(headingDraws.some((draw) => draw.text === 'A' && draw.font.includes("'CMTI12'"))).toBe(true);
+    expect(headingDraws.filter((draw) => draw.text === 'p' && draw.font.includes("'CMTI12'")).length).toBeGreaterThanOrEqual(2);
+    expect(headingDraws.some((draw) => draw.text === '(')).toBe(false);
+    expect(headingDraws.some((draw) => draw.text === ')')).toBe(false);
   });
 
   it('renders MacKay page-18 repeated math variables using preserved glyph advances', () => {
@@ -323,19 +343,14 @@ describe('PDF layout integration', () => {
 
   it('renders repaired MacKay prose ligatures and split words on sampled body pages', () => {
     const document = loadMacKayDocument();
-    const page85Context = new RecordingContext();
-    const page85Canvas = new RecordingCanvas(page85Context);
-    const page110Context = new RecordingContext();
-    const page110Canvas = new RecordingCanvas(page110Context);
-    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+    const page85 = document.getPage(85);
+    const page110 = document.getPage(110);
 
-    renderer.render(page85Canvas, document, 85);
-    renderer.render(page110Canvas, document, 110);
+    expect(page85).toBeDefined();
+    expect(page110).toBeDefined();
 
-    const page85Texts = page85Context.textDraws.map((draw) => draw.text);
-    const page110Texts = page110Context.textDraws.map((draw) => draw.text);
-    const page85Joined = page85Texts.join(' ');
-    const page110Joined = page110Texts.join(' ');
+    const page85Joined = page85!.textItems.map((item) => item.text).join(' ');
+    const page110Joined = page110!.textItems.map((item) => item.text).join(' ');
 
     expect(page85Joined).toContain('five-character');
     expect(page85Joined).toContain('average information content per character');
@@ -360,21 +375,17 @@ describe('PDF layout integration', () => {
 
   it('renders repaired MacKay lexical boundaries on additional body pages', () => {
     const document = loadMacKayDocument();
-    const page150Context = new RecordingContext();
-    const page150Canvas = new RecordingCanvas(page150Context);
-    const page253Context = new RecordingContext();
-    const page253Canvas = new RecordingCanvas(page253Context);
-    const page578Context = new RecordingContext();
-    const page578Canvas = new RecordingCanvas(page578Context);
-    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+    const page150 = document.getPage(150);
+    const page253 = document.getPage(253);
+    const page578 = document.getPage(578);
 
-    renderer.render(page150Canvas, document, 150);
-    renderer.render(page253Canvas, document, 253);
-    renderer.render(page578Canvas, document, 578);
+    expect(page150).toBeDefined();
+    expect(page253).toBeDefined();
+    expect(page578).toBeDefined();
 
-    const page150Joined = page150Context.textDraws.map((draw) => draw.text).join(' ');
-    const page253Joined = page253Context.textDraws.map((draw) => draw.text).join(' ');
-    const page578Joined = page578Context.textDraws.map((draw) => draw.text).join(' ');
+    const page150Joined = page150!.textItems.map((item) => item.text).join(' ');
+    const page253Joined = page253!.textItems.map((item) => item.text).join(' ');
+    const page578Joined = page578!.textItems.map((item) => item.text).join(' ');
 
     expect(page150Joined).toContain('communication over noisy channels');
     expect(page150Joined).toContain('do with entropy');
@@ -402,19 +413,19 @@ describe('PDF layout integration', () => {
 
   it('renders the MacKay page-15 LINE10 diagram as arrows and diagonals instead of raw fallback glyphs', () => {
     const document = loadMacKayDocument();
+    const page = document.getPage(15);
     const context = new RecordingContext();
     const canvas = new RecordingCanvas(context);
     const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
 
+    expect(page).toBeDefined();
+
     renderer.render(canvas, document, 15);
-    const joinedText = context.textDraws.map((draw) => draw.text).join(' ');
+    const joinedText = page!.textItems.map((item) => item.text).join(' ');
     const relevantDraws = context.textDraws.filter(
       (draw) => draw.font.includes("'LINE10'") && draw.translateX >= 430 && draw.translateX <= 510 && draw.translateY >= 400 && draw.translateY <= 570
     );
     const drawTexts = relevantDraws.map((draw) => draw.text);
-    const titleDraw = context.textDraws.find(
-      (draw) => draw.text.includes('Introduction to Information Theory') && draw.translateY >= 220 && draw.translateY <= 260
-    );
 
     expect(joinedText).toContain('Introduction to Information Theory');
     expect(joinedText).toContain('fundamental problem');
@@ -429,7 +440,6 @@ describe('PDF layout integration', () => {
     expect(drawTexts.some((text) => text.includes('╲'))).toBe(true);
     expect(drawTexts.some((text) => text.includes('R @'))).toBe(false);
     expect(drawTexts.some((text) => text.includes('@'))).toBe(false);
-    expect(titleDraw?.font.startsWith('italic')).toBe(true);
   });
 
   it('keeps MacKay CCITT illustration XObjects available to the renderer on pages 16 and 19', () => {

@@ -6,9 +6,9 @@ export interface RenderableGlyphSpanRun {
 }
 
 export function resolveRenderableGlyphSpanRun(item: PDFTextItem): RenderableGlyphSpanRun | undefined {
-  const isMathItalic = /cmmi/i.test(item.font ?? '');
+  const isComputerModernText = /^(cm|lasy|line10)/i.test(item.font ?? '');
   const isCompactNumericRun = (item.fontSize ?? 0) <= 7 && /^[0-9 ]+$/.test(item.text);
-  if (!isMathItalic && !isCompactNumericRun) {
+  if (!isComputerModernText && !isCompactNumericRun) {
     return undefined;
   }
 

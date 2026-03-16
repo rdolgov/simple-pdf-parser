@@ -76,9 +76,16 @@ compare against pdftocairo/ghostscript reference
   - applies a small thin-stroke floor so canvas output matches PDF rasterizers more closely than raw subpixel stroke widths do
 - `src/viewer/fontFallback.ts`
   - browser font-family fallback choices for decoded PDF fonts
+  - now prefers KaTeX Computer-Modern-like families for `CM*` fonts in the browser path
 - `src/viewer/cmexComposite.ts`
   - groups TeX `CMEX` brace-construction runs such as `z}|` + `{` and `{z` + `|` + `}`
   - keeps composite math ornament handling out of the generic text layout path
+- `src/viewer/glyphSpanRenderer.ts`
+  - renders substitute-font text using PDF glyph advances instead of browser shaping
+  - especially important for embedded Computer Modern fonts when the exact font program is not yet loaded into the browser
+- `src/viewer/stretchyDelimiterRenderer.ts`
+  - renders single-glyph `CMEX` delimiters like tall `(` `)` `[` `]` `|` as vector outlines from parsed bounds
+  - avoids baseline/metric drift from substitute math fonts
 
 ### Public API
 
@@ -112,6 +119,8 @@ The engine tries to stay close to PDF semantics instead of baking in document-sp
 - text position comes from the text matrix and text line matrix
 - spacing uses `Tc`, `Tw`, `TJ`, `Tj`, `Td`, `TD`, `Tm`, `T*`
 - simple-font decode prefers `ToUnicode`, then `/Encoding`, then controlled font-specific fallbacks
+- when the browser cannot use the exact embedded font program, rendering should still respect PDF glyph advances
+  - this is why `glyphSpans` are preserved and can bypass browser shaping for `CM*` runs
 - TeX math-extension construction fragments are treated as semantic ornaments when they are not printable text
 - style inference is separate from content decode
   - for example `CMMI`, `CMTI`, and `CMSL` should render as italic/slanted families
@@ -238,6 +247,18 @@ The current renderer differs from the older version in a few important ways:
 - added Type3 bitmap glyph support for CharProc inline images
 - added lexical boundary repair after geometric text merge
 - added a dedicated CMEX composite-brace layer so TeX brace pieces render as stable vector overbraces/underbraces
+- added advance-positioned rendering for Computer Modern text runs so substitute browser fonts follow PDF glyph advances more closely
+- added vector rendering for single-glyph `CMEX` delimiters instead of stretching fallback browser glyphs
+
+## Current Limitation
+
+Some PDFs, including `InformationTheoryByMacKay.pdf`, embed real Type1C Computer Modern fonts. The parser currently resolves those fonts well enough for decoding and width extraction, but the browser renderer still does not load the embedded font programs themselves. The current mitigation stack is:
+
+- prefer KaTeX Computer Modern-like web fonts in the browser fallback stack
+- preserve PDF glyph advances and render many `CM*` runs glyph-by-glyph
+- render `CMEX` composite braces and tall delimiters as vector geometry where substitute font metrics drift too much
+
+This improves fidelity, but it is still not the same as painting with the exact embedded font program. The long-term root fix is embedded font-program loading or outline extraction for browser/canvas text rendering.
 - added reference-raster comparison scripts based on `pdftocairo` and `magick`
 
 ## Known Limits

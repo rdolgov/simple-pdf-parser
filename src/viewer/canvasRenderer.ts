@@ -12,6 +12,10 @@ import type { PDFDocument } from '../pdfDocument.js';
 import { detectCmexComposites, type CmexComposite } from './cmexComposite.js';
 import { resolveCanvasFontFallback } from './fontFallback.js';
 import { resolveRenderableGlyphSpanRun } from './glyphSpanRenderer.js';
+import {
+  resolveVectorStretchyDelimiterPlan,
+  traceVectorStretchyDelimiter
+} from './stretchyDelimiterRenderer.js';
 
 export interface RenderOptions {
   backgroundColor?: string;
@@ -697,6 +701,19 @@ export class CanvasRenderer {
       // Use Type3 glyph path rendering if available
       if (item.type3Glyphs && item.type3Glyphs.length > 0) {
         this.drawType3TextItem(context, item, projectPoint, options, metrics);
+        continue;
+      }
+
+      const vectorDelimiterPlan = resolveVectorStretchyDelimiterPlan(item, projectPoint, options.scale);
+      if (vectorDelimiterPlan) {
+        context.save();
+        context.beginPath();
+        traceVectorStretchyDelimiter(context, vectorDelimiterPlan);
+        context.lineWidth = vectorDelimiterPlan.strokeWidth;
+        context.lineCap = 'round';
+        context.lineJoin = 'round';
+        context.stroke();
+        context.restore();
         continue;
       }
 

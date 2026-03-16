@@ -1,8 +1,10 @@
-const MATH_FALLBACK_STACK =
-  "math, 'Cambria Math', 'STIX Two Math', 'STIXGeneral', 'Latin Modern Math', 'Times New Roman', serif";
-const SERIF_FALLBACK_STACK = "'Times New Roman', Georgia, serif";
-const SANS_FALLBACK_STACK = "Arial, Helvetica, sans-serif";
-const MONOSPACE_FALLBACK_STACK = "'Courier New', Monaco, monospace";
+const KATEX_MATH_FALLBACK_STACK =
+  "'KaTeX_Math', 'KaTeX_Main', math, 'Cambria Math', 'STIX Two Math', 'STIXGeneral', 'Latin Modern Math', 'Times New Roman', serif";
+const KATEX_DELIMITER_FALLBACK_STACK =
+  "'KaTeX_Size4', 'KaTeX_Size3', 'KaTeX_Size2', 'KaTeX_Size1', 'KaTeX_Math', 'KaTeX_Main', math, 'Cambria Math', 'STIX Two Math', 'STIXGeneral', 'Latin Modern Math', 'Times New Roman', serif";
+const SERIF_FALLBACK_STACK = "'KaTeX_Main', 'Times New Roman', Georgia, serif";
+const SANS_FALLBACK_STACK = "'KaTeX_SansSerif', Arial, Helvetica, sans-serif";
+const MONOSPACE_FALLBACK_STACK = "'KaTeX_Typewriter', 'Courier New', Monaco, monospace";
 const SYMBOL_FALLBACK_STACK =
   "'Apple Symbols', 'Segoe UI Symbol', 'Noto Sans Symbols', 'Noto Sans Symbols 2', 'Symbol', sans-serif";
 
@@ -14,8 +16,12 @@ export function resolveCanvasFontFallback(fontName: string | undefined, fallback
 
   const normalized = fontName.toLowerCase();
 
+  if (/^cmex/.test(normalized)) {
+    return `${KATEX_DELIMITER_FALLBACK_STACK}, ${fallbackFamily}`;
+  }
+
   if (/^cm(?:ex|sy|mi|bsy|mmi|mib)/.test(normalized)) {
-    return `${MATH_FALLBACK_STACK}, ${fallbackFamily}`;
+    return `${KATEX_MATH_FALLBACK_STACK}, ${fallbackFamily}`;
   }
 
   if (/^cmr|^cmbx|^cmti|^cmsl|^cmu/.test(normalized)) {

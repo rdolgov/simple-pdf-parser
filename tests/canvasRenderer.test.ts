@@ -267,6 +267,88 @@ describe('CanvasRenderer', () => {
     expect(contextImpl.operations.some((entry) => entry.startsWith('fillText:rrr@'))).toBe(false);
   });
 
+  it('renders Computer Modern italic words with per-glyph advances instead of browser-shaping the full run', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: 'Approximating',
+              bounds: { minX: 20, minY: 60, maxX: 96, maxY: 72 },
+              font: 'CMTI12',
+              fontSize: 12,
+              fontStyle: 'italic',
+              baselineStart: { x: 20, y: 62 },
+              baselineEnd: { x: 96, y: 62 },
+              glyphSpans: Array.from('Approximating', (text) => ({ text, advance: 500 }))
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 120, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    expect(contextImpl.operations.some((entry) => entry.startsWith('fillText:Approximating@'))).toBe(false);
+    expect(contextImpl.operations.filter((entry) => entry.startsWith('fillText:A@'))).toHaveLength(1);
+    expect(contextImpl.operations.filter((entry) => entry.startsWith('fillText:p@')).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('renders tall CMEX delimiters as vector outlines instead of scaled text glyphs', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: '(',
+              bounds: { minX: 20, minY: 30, maxX: 25, maxY: 56 },
+              font: 'CMEX10',
+              fontSize: 10,
+              baselineStart: { x: 20, y: 55 },
+              baselineEnd: { x: 25, y: 55 }
+            },
+            {
+              text: ')',
+              bounds: { minX: 28, minY: 30, maxX: 33, maxY: 56 },
+              font: 'CMEX10',
+              fontSize: 10,
+              baselineStart: { x: 28, y: 55 },
+              baselineEnd: { x: 33, y: 55 }
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 80, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    expect(contextImpl.operations.filter((entry) => entry.startsWith('bezierCurveTo:')).length).toBeGreaterThanOrEqual(4);
+    expect(contextImpl.operations.some((entry) => entry.startsWith('fillText:(@'))).toBe(false);
+    expect(contextImpl.operations.some((entry) => entry.startsWith('fillText:)@'))).toBe(false);
+  });
+
   it('renders preserved Bezier page paths instead of flattening them to straight lines', () => {
     const contextImpl = new MockContext();
     const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
