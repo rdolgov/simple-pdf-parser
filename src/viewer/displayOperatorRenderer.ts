@@ -85,13 +85,12 @@ function traceVectorSum(
 ): void {
   const width = Math.max(1, plan.right - plan.left);
   const height = Math.max(1, plan.bottom - plan.top);
-  const topY = plan.top + height * 0.34;
-  const middleY = plan.top + height * 0.58;
-  const bottomY = plan.bottom - height * 0.18;
-  const leftX = plan.left + width * 0.24;
-  const upperMidX = plan.left + width * 0.56;
-  const lowerMidX = plan.left + width * 0.58;
-  const rightX = plan.right - width * 0.08;
+  const topY = plan.top + height * 0.41;
+  const middleY = plan.top + height * 0.61;
+  const bottomY = plan.bottom - height * 0.21;
+  const leftX = plan.left + width * 0.26;
+  const upperMidX = plan.left + width * 0.58;
+  const rightX = plan.right - width * 0.1;
 
   context.moveTo(rightX, topY);
   context.lineTo(leftX, topY);
