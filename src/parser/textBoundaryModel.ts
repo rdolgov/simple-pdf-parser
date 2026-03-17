@@ -1,5 +1,7 @@
 import type { PDFTextItem } from '../types.js';
 
+import { SUPPLEMENTAL_TRUSTED_WORDS } from './supplementalWordLexicon.js';
+
 interface BoundaryLexicon {
   globalWordCounts: Map<string, number>;
   fontWordCounts: Map<string, Map<string, number>>;
@@ -29,16 +31,20 @@ const COMMON_WORDS = new Set([
 const TECHNICAL_WORDS = new Set([
   'algorithm', 'approximation', 'average', 'bayes', 'binary', 'channel',
   'channels', 'character', 'code', 'coding', 'communication', 'complete',
+  'computational', 'configuration', 'conclusion', 'contribution',
   'conditional', 'content', 'data', 'define', 'defining',
+  'degradation',
   'describe', 'distribution', 'document', 'efficient', 'english', 'entropy',
-  'enumeration', 'exact', 'exercise', 'exercises', 'figure', 'first',
+  'enumeration', 'evaluation', 'exact', 'exercise', 'exercises', 'figure', 'first',
   'formula', 'function', 'fundamental', 'gaussian', 'hardware', 'huffman', 'immediately', 'implicit',
   'independent', 'inference', 'information', 'initial', 'intuitive', 'joint',
+  'initialization', 'inflectional',
   'letter', 'letters', 'likelihood', 'matrix', 'message', 'messages', 'method',
-  'methods', 'model', 'models', 'monte', 'natural', 'noisy', 'orbiting', 'page', 'paper',
-  'prefix', 'probability', 'random', 'review', 'second', 'source', 'stirling',
+  'methods', 'model', 'models', 'monte', 'motivation', 'natural', 'noisy', 'orbiting', 'page', 'paper',
+  'precision', 'prefix', 'probability', 'quantization', 'random', 'review', 'second', 'source', 'stirling',
   'system', 'telephone', 'theorem', 'variable', 'variables', 'variance',
-  'introduction', 'magnetization', 'neighbouring', 'reproducing', 'spacecraft'
+  'introduction', 'language', 'languages', 'magnetization', 'neighbouring', 'reproducing',
+  'spacecraft', 'translation'
 ]);
 
 const COMMON_BIGRAMS = new Set([
@@ -58,6 +64,7 @@ const MAX_WORD_LENGTH = 28;
 const MIN_IMPROVEMENT = 2.5;
 const ORIGINAL_BOUNDARY_REWARD = 2.75;
 const INSERTED_BOUNDARY_PENALTY = 5.75;
+const SHORT_BOUNDARY_WORDS = new Set(['a', 'an']);
 
 export function refineLexicalTextBoundaries(items: PDFTextItem[]): PDFTextItem[] {
   if (items.length === 0) {
@@ -72,7 +79,9 @@ export function refineLexicalTextBoundaries(items: PDFTextItem[]): PDFTextItem[]
       return item;
     }
 
-    const refinedText = refineItemText(item.text, normalizeFontKey(item.font), lexicon);
+    const fontKey = normalizeFontKey(item.font);
+    const suspiciousSpaceIndices = detectSuspiciousSpaceIndices(item);
+    const refinedText = refineItemText(item.text, fontKey, lexicon, suspiciousSpaceIndices);
     if (refinedText === item.text) {
       return item;
     }
@@ -130,7 +139,12 @@ function buildLexicon(items: PDFTextItem[]): BoundaryLexicon {
   };
 }
 
-function refineItemText(text: string, fontKey: string, lexicon: BoundaryLexicon): string {
+function refineItemText(
+  text: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon,
+  suspiciousSpaceIndices: Set<number> = new Set()
+): string {
   const dehyphenated = mergeKnownHyphenatedSplits(text, fontKey, lexicon);
   let cursor = 0;
   let refined = '';
@@ -153,14 +167,24 @@ function refineItemText(text: string, fontKey: string, lexicon: BoundaryLexicon)
       break;
     }
 
-    refined += refineSegment(dehyphenated.slice(cursor, end), fontKey, lexicon);
+    refined += refineSegment(
+      dehyphenated.slice(cursor, end),
+      fontKey,
+      lexicon,
+      sliceSuspiciousSpaceIndices(suspiciousSpaceIndices, cursor, end)
+    );
     cursor = end;
   }
 
   return mergeStrongSplitWordRuns(mergeCanonicalShortWordPairs(refined, fontKey, lexicon), fontKey, lexicon);
 }
 
-function refineSegment(segment: string, fontKey: string, lexicon: BoundaryLexicon): string {
+function refineSegment(
+  segment: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon,
+  suspiciousSpaceIndices: Set<number> = new Set()
+): string {
   const trailingWhitespace = segment.match(/\s+$/)?.[0] ?? '';
   const core = segment.slice(0, segment.length - trailingWhitespace.length);
 
@@ -172,7 +196,7 @@ function refineSegment(segment: string, fontKey: string, lexicon: BoundaryLexico
     return segment;
   }
 
-  const collapsed = collapseSegment(core);
+  const collapsed = collapseSegment(core, suspiciousSpaceIndices);
   if (collapsed.joined.length < 4) {
     return segment;
   }
@@ -221,15 +245,23 @@ function refineSegment(segment: string, fontKey: string, lexicon: BoundaryLexico
   return refinedCore + trailingWhitespace;
 }
 
-function collapseSegment(segment: string): { joined: string; originalBoundaries: Set<number> } {
+function collapseSegment(
+  segment: string,
+  suspiciousSpaceIndices: Set<number> = new Set()
+): { joined: string; originalBoundaries: Set<number> } {
   let joined = '';
   let sawWhitespace = false;
+  let whitespaceStart = -1;
   const originalBoundaries = new Set<number>();
 
-  for (const char of segment) {
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index] ?? '';
     if (char === ' ') {
       if (joined.length > 0) {
         sawWhitespace = true;
+        if (whitespaceStart === -1) {
+          whitespaceStart = index;
+        }
       }
       continue;
     }
@@ -238,15 +270,77 @@ function collapseSegment(segment: string): { joined: string; originalBoundaries:
       continue;
     }
 
-    if (sawWhitespace && joined.length > 0) {
+    if (
+      sawWhitespace &&
+      joined.length > 0 &&
+      (whitespaceStart === -1 || !suspiciousSpaceIndices.has(whitespaceStart))
+    ) {
       originalBoundaries.add(joined.length);
     }
 
     joined += char;
     sawWhitespace = false;
+    whitespaceStart = -1;
   }
 
   return { joined, originalBoundaries };
+}
+
+function detectSuspiciousSpaceIndices(item: PDFTextItem): Set<number> {
+  const suspicious = new Set<number>();
+  if (!item.glyphSpans || item.glyphSpans.length === 0) {
+    return suspicious;
+  }
+
+  let offset = 0;
+  for (let index = 0; index < item.glyphSpans.length; index += 1) {
+    const span = item.glyphSpans[index];
+    const spanText = span.text ?? '';
+    const previous = item.glyphSpans[index - 1];
+    const next = item.glyphSpans[index + 1];
+
+    if (
+      /^\s+$/.test(spanText) &&
+      previous &&
+      next &&
+      /[A-Za-z]$/.test(previous.text) &&
+      /^[A-Za-z]/.test(next.text) &&
+      isSuspiciousSpaceAdvance(span.advance, item.fontSize)
+    ) {
+      suspicious.add(offset);
+    }
+
+    offset += spanText.length;
+  }
+
+  return suspicious;
+}
+
+function isSuspiciousSpaceAdvance(advance: number, fontSize: number | undefined): boolean {
+  if (!Number.isFinite(advance)) {
+    return false;
+  }
+
+  const threshold = Math.max(0.75, (fontSize ?? 0) * 0.08);
+  return advance <= threshold;
+}
+
+function sliceSuspiciousSpaceIndices(
+  suspiciousSpaceIndices: Set<number>,
+  start: number,
+  end: number
+): Set<number> {
+  if (suspiciousSpaceIndices.size === 0) {
+    return suspiciousSpaceIndices;
+  }
+
+  const sliced = new Set<number>();
+  for (const index of suspiciousSpaceIndices) {
+    if (index >= start && index < end) {
+      sliced.add(index - start);
+    }
+  }
+  return sliced;
 }
 
 function shouldAttemptRefinement(
@@ -535,10 +629,12 @@ function scoreWord(word: string, fontKey: string, lexicon: BoundaryLexicon): num
   const globalCount = lexicon.globalWordCounts.get(normalized) ?? 0;
   const isCommon = COMMON_WORDS.has(normalized);
   const isTechnical = TECHNICAL_WORDS.has(normalized);
-  const isKnown = isCommon || isTechnical || fontCount > 0 || globalCount > 0;
+  const isSupplemental = SUPPLEMENTAL_TRUSTED_WORDS.has(normalized);
+  const isKnown = isCommon || isTechnical || isSupplemental || fontCount > 0 || globalCount > 0;
   const shouldTrustFrequency =
     isCommon ||
     isTechnical ||
+    isSupplemental ||
     normalized.length <= 7 ||
     fontCount >= 4 ||
     globalCount >= 5;
@@ -554,6 +650,10 @@ function scoreWord(word: string, fontKey: string, lexicon: BoundaryLexicon): num
 
   if (isTechnical) {
     score += 7.5;
+  }
+
+  if (isSupplemental) {
+    score += 7;
   }
 
   if (fontCount > 0) {
@@ -725,7 +825,7 @@ function getMergedWordPenalty(
 
   const mergedWord = `${previousWord}${nextWord}`.toLowerCase();
   let penalty = 12;
-  if ((COMMON_WORDS.has(mergedWord) || TECHNICAL_WORDS.has(mergedWord)) && (previousWord.length <= 3 || nextWord.length <= 3)) {
+  if (isTrustedLexiconWord(mergedWord) && (previousWord.length <= 3 || nextWord.length <= 3)) {
     penalty += 10;
   }
 
@@ -741,7 +841,7 @@ function isStrongMergedWord(
   const mergedWord = `${previousWord}${nextWord}`;
   const normalized = mergedWord.toLowerCase();
 
-  if (COMMON_WORDS.has(normalized) || TECHNICAL_WORDS.has(normalized)) {
+  if (isTrustedLexiconWord(normalized)) {
     return true;
   }
 
@@ -768,19 +868,43 @@ function isStrongBoundaryPair(
   fontKey: string,
   lexicon: BoundaryLexicon
 ): boolean {
-  if (!isStrongKnownWord(previousWord, fontKey, lexicon) || !isStrongKnownWord(nextWord, fontKey, lexicon)) {
+  const previousStrong = isStrongKnownWord(previousWord, fontKey, lexicon);
+  const nextStrong = isStrongKnownWord(nextWord, fontKey, lexicon);
+  const previousShortBoundary = isTrustedShortBoundaryWord(previousWord);
+  const nextShortBoundary = isTrustedShortBoundaryWord(nextWord);
+
+  if (
+    !(previousStrong || previousShortBoundary) ||
+    !(nextStrong || nextShortBoundary) ||
+    (!previousStrong && !nextStrong)
+  ) {
     return false;
+  }
+
+  if (previousShortBoundary || nextShortBoundary) {
+    return previousStrong || nextStrong;
   }
 
   if (previousWord.length <= 3 || nextWord.length <= 3) {
     return true;
   }
 
-  if (TECHNICAL_WORDS.has(previousWord.toLowerCase()) || TECHNICAL_WORDS.has(nextWord.toLowerCase())) {
+  if (
+    isTrustedLexiconWord(previousWord.toLowerCase()) ||
+    isTrustedLexiconWord(nextWord.toLowerCase())
+  ) {
     return true;
   }
 
   return scoreBigram(previousWord, nextWord, fontKey, lexicon) > 0;
+}
+
+function isTrustedLexiconWord(word: string): boolean {
+  return COMMON_WORDS.has(word) || TECHNICAL_WORDS.has(word) || SUPPLEMENTAL_TRUSTED_WORDS.has(word);
+}
+
+function isTrustedShortBoundaryWord(word: string): boolean {
+  return SHORT_BOUNDARY_WORDS.has(word.toLowerCase());
 }
 
 function hasPlausibleWordShape(word: string): boolean {
@@ -974,7 +1098,7 @@ function shouldMergeWordRun(
   const normalizedMerged = merged.toLowerCase();
   const mergedScore = scoreWord(merged, fontKey, lexicon);
   const hasWeakFragment = words.some((word) => word.length <= 5 || scoreWord(word, fontKey, lexicon) < 8);
-  const isExplicitKnownWord = COMMON_WORDS.has(normalizedMerged) || TECHNICAL_WORDS.has(normalizedMerged);
+  const isExplicitKnownWord = isTrustedLexiconWord(normalizedMerged);
 
   if (!hasWeakFragment || mergedScore < 9) {
     return false;

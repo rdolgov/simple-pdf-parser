@@ -42,7 +42,14 @@ import { GlobalProgressOverlay } from './components/GlobalProgressOverlay';
 import { findChapterBounds, getHeadingLevel, collectChapterText, collectChapterBlocks } from './utils/structured';
 import { useSemanticSearch } from './search';
 import { SemanticSearchBar } from './components/SemanticSearchBar';
-import { useZoom, useViewMode, useRecordings, useDocumentLoader, useGeminiExtraction } from './hooks';
+import {
+  useZoom,
+  useViewMode,
+  useRecordings,
+  useDocumentLoader,
+  useGeminiExtraction,
+  useCanvasRenderCoordinator
+} from './hooks';
 import { useGlobalFetchActivity } from './hooks/useGlobalFetchActivity';
 import {
   describeAiDetectionMode,
@@ -57,14 +64,12 @@ export default function App(): JSX.Element {
     []
   );
   const aiDetectionModeDescription = useMemo(() => describeAiDetectionMode(aiDetectionMode), [aiDetectionMode]);
+  const devicePixelRatio = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
   const { viewMode, setViewMode, showFocusView } = useViewMode('canvas');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [includeImageData, setIncludeImageData] = useState(false);
   const htmlContainerRef = useRef<HTMLDivElement | null>(null);
   const structuredContainerRef = useRef<HTMLDivElement | null>(null);
-  const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
-  const canvasRefCallbacks = useRef<Map<number, (element: HTMLCanvasElement | null) => void>>(new Map());
-  const [canvasRevision, setCanvasRevision] = useState(0);
   const [structuredState, setStructuredState] = useState<StructuredDataState>({ status: 'idle' });
   const [focusProvider, setFocusProvider] = useState<FocusProvider>('mock');
   const [, setInlineImageGenerationCount] = useState(0);
@@ -93,7 +98,9 @@ export default function App(): JSX.Element {
   const selectedRecording = selectedRecordingFromHook ?? null;
 
   // useZoom hook handles renderer and zoom state
-  const { zoom, setZoom, handleZoomIn, handleZoomOut, handleZoomReset, renderer } = useZoom();
+  const { zoom, setZoom, handleZoomIn, handleZoomOut, handleZoomReset, renderer } = useZoom({
+    devicePixelRatio
+  });
 
   // Focus state needs to be declared before useDocumentLoader callback
   const [focusQuery, setFocusQuery] = useState('');
@@ -107,9 +114,6 @@ export default function App(): JSX.Element {
 
   // Document loader hook with callback for canvas/zoom/focus reset
   const handleDocumentLoad = useCallback(() => {
-    canvasRefs.current.clear();
-    canvasRefCallbacks.current.clear();
-    setCanvasRevision((revision) => revision + 1);
     setViewMode('canvas');
     setZoom(renderer.resetZoom());
     setFocusState({ status: 'idle' });
@@ -170,7 +174,19 @@ export default function App(): JSX.Element {
     await triggerGeminiExtraction();
   }, [aiDetectionSupport.supported, triggerGeminiExtraction, triggerStructuredExtract]);
 
+  const handleCanvasRenderError = useCallback((message: string) => {
+    setState({ status: 'error', message });
+  }, [setState]);
+
   const readyDocument = state.status === 'ready' ? state.document : null;
+  const { canvasRefs, canvasRevision, getCanvasRef, shouldRenderPageOnMainThread } = useCanvasRenderCoordinator({
+    document: readyDocument,
+    pdfData: loadedPdfData,
+    zoom,
+    devicePixelRatio,
+    viewMode,
+    onRenderError: handleCanvasRenderError
+  });
   const structuredTables = useMemo<TableModel[]>(() => {
     if (structuredState.status !== 'ready') {
       return [];
@@ -194,6 +210,9 @@ export default function App(): JSX.Element {
         }
         renderer.setScale(zoom);
         for (const page of readyDocument.pages) {
+          if (!shouldRenderPageOnMainThread(page.number)) {
+            continue;
+          }
           const canvas = canvasRefs.current.get(page.number);
           if (!canvas) {
             continue;
@@ -211,27 +230,7 @@ export default function App(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [readyDocument, renderer, viewMode, zoom, canvasRevision]);
-
-  const getCanvasRef = useCallback(
-    (pageNumber: number) => {
-      const existing = canvasRefCallbacks.current.get(pageNumber);
-      if (existing) {
-        return existing;
-      }
-      const callback = (element: HTMLCanvasElement | null) => {
-        if (element) {
-          canvasRefs.current.set(pageNumber, element);
-        } else {
-          canvasRefs.current.delete(pageNumber);
-        }
-        setCanvasRevision((revision) => revision + 1);
-      };
-      canvasRefCallbacks.current.set(pageNumber, callback);
-      return callback;
-    },
-    [setCanvasRevision]
-  );
+  }, [canvasRefs, canvasRevision, readyDocument, renderer, shouldRenderPageOnMainThread, viewMode, zoom]);
 
   const totalPages = readyDocument?.pages.length ?? 0;
   const pageInfo = readyDocument ? `Pages: ${totalPages}` : 'No document loaded';
@@ -940,7 +939,7 @@ export default function App(): JSX.Element {
           disabled={state.status !== 'ready'}
           activeResultIndex={activeSemanticResultIndex}
           onNavigateResult={handleNavigateSemanticResult}
-          documentId={loadedFileName || 'document'}
+          documentId={loadedFileHash || loadedFileName || 'document'}
           extractState={extractState}
           geminiExtractionState={geminiExtractionState}
           aiDetectionSupport={aiDetectionSupport}
@@ -960,7 +959,7 @@ export default function App(): JSX.Element {
           viewMode={viewMode}
           state={state}
           readyDocument={readyDocument}
-          documentId={loadedFileName || 'document'}
+          documentId={loadedFileHash || loadedFileName || 'document'}
           getCanvasRef={getCanvasRef}
           layoutJson={layoutJson}
           htmlFriendlyJson={htmlFriendlyJson}

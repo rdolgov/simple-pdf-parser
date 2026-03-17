@@ -707,6 +707,23 @@ ET
     );
     expect(merged).toBeUndefined();
   });
+
+  it('removes zero-advance fake spaces inside NIPS prose and headings', () => {
+    const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const firstPage = document.getPage(1);
+    const conclusionPage = document.getPage(9);
+
+    expect(firstPage).toBeDefined();
+    expect(conclusionPage).toBeDefined();
+
+    expect(firstPage!.textItems.some((item) => item.text.includes('Equal contribution.'))).toBe(true);
+    expect(firstPage!.textItems.some((item) => item.text.includes('contri but i on'))).toBe(false);
+
+    expect(conclusionPage!.textItems.some((item) => item.text === '7 Conclusion')).toBe(true);
+    expect(conclusionPage!.textItems.some((item) => item.text.includes('Conclus i on'))).toBe(false);
+  });
 });
 
 function readPixel(

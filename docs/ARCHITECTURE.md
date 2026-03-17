@@ -104,6 +104,24 @@ compare against pdftocairo/ghostscript reference
   - wraps raw PDF `Type1C` font programs into minimal OpenType/CFF containers
   - assigns a private-use cmap keyed by original PDF glyph codes
   - lets the renderer draw exact embedded outlines glyph-by-glyph with PDF advances
+- `src/viewer/canvasEnvironment.ts`
+  - isolates environment-specific canvas/font helpers used by both the main thread and worker paths
+  - exposes scratch-canvas creation that can use either DOM canvases or `OffscreenCanvas`
+
+### Viewer scheduling
+
+- `testApp/src/hooks/useCanvasRenderCoordinator.ts`
+  - keeps the first five pages on the main thread for immediate paint
+  - hands later pages to a worker-backed queue when `OffscreenCanvas` is available
+- `testApp/src/workers/pageRenderWorker.ts`
+  - parses the PDF bytes once in a worker
+  - prepares embedded fonts in worker scope
+  - renders attached pages sequentially into transferred canvases
+
+```text
+page 1-5    -> main-thread CanvasRenderer
+page 6+     -> worker queue -> OffscreenCanvas -> visible canvas element
+```
 
 ### Public API
 

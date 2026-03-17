@@ -27,6 +27,7 @@ import {
 } from './embeddedFontRegistry.js';
 import { resolveCanvasFontFallback } from './fontFallback.js';
 import { resolveRenderableGlyphSpanRun } from './glyphSpanRenderer.js';
+import { createScratchCanvas } from './canvasEnvironment.js';
 import {
   resolveVectorStretchyDelimiterPlan,
   traceVectorStretchyDelimiter
@@ -436,17 +437,11 @@ export class CanvasRenderer {
           continue;
         }
 
-        if (typeof document === 'undefined') {
+        const scratch = createScratchCanvas(mask.width, mask.height);
+        if (!scratch) {
           continue;
         }
-
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = mask.width;
-        maskCanvas.height = mask.height;
-        const maskContext = maskCanvas.getContext('2d');
-        if (!maskContext) {
-          continue;
-        }
+        const { canvas: maskCanvas, context: maskContext } = scratch;
 
         const imageData = maskContext.createImageData(mask.width, mask.height);
         const pixels = imageData.data;
@@ -519,14 +514,12 @@ export class CanvasRenderer {
         continue;
       }
 
-      if (image.pixels && typeof document !== 'undefined') {
-        const bufferCanvas = document.createElement('canvas');
-        bufferCanvas.width = image.pixels.width;
-        bufferCanvas.height = image.pixels.height;
-        const bufferContext = bufferCanvas.getContext('2d');
-        if (!bufferContext) {
+      if (image.pixels) {
+        const scratch = createScratchCanvas(image.pixels.width, image.pixels.height);
+        if (!scratch) {
           continue;
         }
+        const { canvas: bufferCanvas, context: bufferContext } = scratch;
         const imageData = bufferContext.createImageData(image.pixels.width, image.pixels.height);
         imageData.data.set(image.pixels.data);
         bufferContext.putImageData(imageData, 0, 0);
@@ -935,56 +928,79 @@ export class CanvasRenderer {
       return;
     }
 
-    // The bounds height encodes the text matrix scale factor (e.g. 7.995 for this font).
-    // Glyph coordinates are in font units (em-square typically 0-1 range).
-    // The scale factor converts font units to page-space units.
+    const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
+    // Type3 glyph coordinates are already in glyph space. The rendered height reflects
+    // the page-space scale factor, so use that to convert glyph-space units to canvas units.
     const glyphScale = boundsHeight * options.scale;
-
-    // Each glyph advances by its share of the bounds width (from /Widths, not d0).
-    const advancePerGlyph = glyphs.length > 0
-      ? (boundsWidth * options.scale) / glyphs.length
-      : 0;
-
-    const originY = item.baselineStart?.y ?? ((item.bounds.minY + item.bounds.maxY) / 2);
-    const originLeft = projectPoint(item.bounds.minX, originY);
+    const slotAdvances = this.resolveType3SlotAdvances(
+      item,
+      glyphs,
+      glyphScale,
+      textPlacement.projectedWidth,
+      boundsWidth * options.scale
+    );
+    const totalSlotAdvance = slotAdvances.reduce((sum, value) => sum + value, 0);
+    const horizontalFit =
+      textPlacement.projectedWidth > 0 && totalSlotAdvance > 0
+        ? textPlacement.projectedWidth / totalSlotAdvance
+        : 1;
+    const needsRotation = Math.abs(textPlacement.rotation) > 0.001;
 
     context.save();
-    context.translate(originLeft.x, originLeft.y);
+    context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
+    if (needsRotation) {
+      context.rotate(textPlacement.rotation);
+    }
 
     let cursorX = 0;
 
-    for (const glyph of glyphs) {
+    for (let index = 0; index < glyphs.length; index += 1) {
+      const glyph = glyphs[index];
       if (glyph.pathCommands.length === 0 && (!glyph.imageLayers || glyph.imageLayers.length === 0)) {
-        cursorX += advancePerGlyph;
-        continue;
-      }
-
-      const glyphBounds = this.measureType3GlyphBounds(glyph);
-      if (!glyphBounds) {
-        cursorX += advancePerGlyph;
+        cursorX += slotAdvances[index] ?? 0;
         continue;
       }
 
       context.save();
-      if (advancePerGlyph > 0.01) {
-        const glyphCenterX = (glyphBounds.minX + glyphBounds.maxX) / 2;
-        const slotCenterX = advancePerGlyph / 2;
-        context.translate(cursorX + slotCenterX, 0);
-        context.scale(glyphScale, -glyphScale);
-        context.translate(-glyphCenterX, 0);
-      } else {
-        context.translate(cursorX, 0);
-        context.scale(glyphScale, -glyphScale);
-      }
+      context.translate(cursorX, 0);
+      context.scale(glyphScale * horizontalFit, -glyphScale);
 
       this.drawGlyphImageLayers(context, glyph.imageLayers);
       this.drawGlyphPaths(context, glyph);
 
       context.restore();
-      cursorX += advancePerGlyph;
+      cursorX += slotAdvances[index] ?? 0;
     }
 
     context.restore();
+  }
+
+  private resolveType3SlotAdvances(
+    item: PDFTextItem,
+    glyphs: Type3Glyph[],
+    glyphScale: number,
+    projectedWidth: number,
+    fallbackWidth: number
+  ): number[] {
+    if (glyphs.length === 0) {
+      return [];
+    }
+
+    const spanAdvances =
+      item.glyphSpans && item.glyphSpans.length === glyphs.length
+        ? item.glyphSpans.map((span) => Math.max(span.advance * glyphScale, 0))
+        : undefined;
+    if (spanAdvances && spanAdvances.some((value) => value > 0.01)) {
+      return spanAdvances;
+    }
+
+    const glyphWidthAdvances = glyphs.map((glyph) => Math.max(glyph.width * glyphScale, 0));
+    if (glyphWidthAdvances.some((value) => value > 0.01)) {
+      return glyphWidthAdvances;
+    }
+
+    const fallbackAdvance = projectedWidth > 0 ? projectedWidth / glyphs.length : fallbackWidth / glyphs.length;
+    return glyphs.map(() => Math.max(fallbackAdvance, 0));
   }
 
   private drawGlyphSpanTextItem(
@@ -1205,17 +1221,15 @@ export class CanvasRenderer {
           continue;
         }
 
-        if (solidMaskPaint === false || typeof document === 'undefined') {
+        if (solidMaskPaint === false) {
           continue;
         }
 
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = layer.mask.width;
-        maskCanvas.height = layer.mask.height;
-        const maskContext = maskCanvas.getContext('2d');
-        if (!maskContext) {
+        const scratch = createScratchCanvas(layer.mask.width, layer.mask.height);
+        if (!scratch) {
           continue;
         }
+        const { canvas: maskCanvas, context: maskContext } = scratch;
 
         const imageData = maskContext.createImageData(layer.mask.width, layer.mask.height);
         const pixels = imageData.data;
@@ -1235,14 +1249,12 @@ export class CanvasRenderer {
         continue;
       }
 
-      if (layer.pixels && typeof document !== 'undefined') {
-        const bufferCanvas = document.createElement('canvas');
-        bufferCanvas.width = layer.pixels.width;
-        bufferCanvas.height = layer.pixels.height;
-        const bufferContext = bufferCanvas.getContext('2d');
-        if (!bufferContext) {
+      if (layer.pixels) {
+        const scratch = createScratchCanvas(layer.pixels.width, layer.pixels.height);
+        if (!scratch) {
           continue;
         }
+        const { canvas: bufferCanvas, context: bufferContext } = scratch;
 
         const imageData = bufferContext.createImageData(layer.pixels.width, layer.pixels.height);
         imageData.data.set(layer.pixels.data);

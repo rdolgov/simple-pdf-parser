@@ -217,6 +217,89 @@ describe('PDF layout integration', () => {
     expect(sigmaDraw!.font).toContain('math');
   });
 
+  it('renders the NIPS conclusion heading without zero-advance fake spaces inside the word', () => {
+    const document = loadAttentionPaperDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 9);
+
+    expect(context.textDraws.some((draw) => draw.text === '7 Conclusion')).toBe(true);
+    expect(context.textDraws.some((draw) => draw.text.includes('Conclus i on'))).toBe(false);
+  });
+
+  it('repairs suspicious intra-word spacing across the NIPS paper body and references', () => {
+    const document = loadAttentionPaperDocument();
+    const expectations = [
+      { page: 2, contains: 'including reading comprehension' },
+      { page: 2, contains: 'sequential nature precludes parallelization within training examples' },
+      { page: 2, contains: 'a recurrent network' },
+      { page: 2, contains: 'a representation of the sequence' },
+      { page: 3, contains: 'a residual connection' },
+      { page: 3, contains: 'a weighted sum' },
+      { page: 4, contains: 'packed together' },
+      { page: 4, contains: 'theoretical complexity' },
+      { page: 4, contains: 'matrix multiplication code' },
+      { page: 5, contains: 'linear transformation' },
+      { page: 6, contains: 'Convolutional' },
+      { page: 6, contains: 'Learning long-range' },
+      { page: 6, contains: 'combination of positions in the input' },
+      { page: 6, contains: 'whereas a recurrent layer requires' },
+      { page: 6, contains: 'representation dimensionality' },
+      { page: 6, contains: 'performance for tasks involving' },
+      { page: 7, contains: 'respective output position' },
+      { page: 7, contains: 'This would increase the maximum' },
+      { page: 7, contains: 'forward layer' },
+      { page: 7, contains: 'interpretable models' },
+      { page: 7, contains: 'containing approximately' },
+      { page: 7, contains: 'throughout the paper' },
+      { page: 7, contains: 'thereafter proportionally' },
+      { page: 7, contains: '5.4 Regularization' },
+      { page: 8, contains: 'The Transformer' },
+      { page: 8, contains: 'minute intervals' },
+      { page: 8, contains: 'attention heads and the attention key' },
+      { page: 8, contains: 'attention is 0.9 BLEU worse' },
+      { page: 9, contains: 'to investigate local' },
+      { page: 9, contains: 'corrections and inspiration' },
+      { page: 10, contains: 'Recognition' },
+      { page: 10, contains: 'International Conference' },
+      { page: 10, contains: 'Alexander M. Rush' },
+      { page: 10, contains: 'replace attention' },
+      { page: 10, contains: 'Xception' },
+      { page: 11, contains: 'Christopher D Manning' },
+      { page: 11, contains: 'Dipanjan Das' },
+      { page: 11, contains: 'Krzysztof Maziarz' },
+      { page: 11, contains: 'Srivastava' },
+      { page: 11, contains: 'inception architecture' }
+    ];
+    const regressions = [
+      { page: 7, excludes: 'Regul arizati on' },
+      { page: 8, excludes: 'at tenti on' },
+      { page: 10, excludes: 'Reco gniti on' },
+      { page: 10, excludes: 'In terna tional Conference' },
+      { page: 10, excludes: 'Alex an derM. Rush' },
+      { page: 10, excludes: 'Xcepti on' },
+      { page: 11, excludes: 'Dipanj anD as' }
+    ];
+
+    for (const expectation of expectations) {
+      const page = document.getPage(expectation.page);
+      expect(page).toBeDefined();
+
+      const pageText = page!.textItems.map((item) => item.text).join(' ');
+      expect(pageText).toContain(expectation.contains);
+    }
+
+    for (const regression of regressions) {
+      const page = document.getPage(regression.page);
+      expect(page).toBeDefined();
+
+      const pageText = page!.textItems.map((item) => item.text).join(' ');
+      expect(pageText).not.toContain(regression.excludes);
+    }
+  });
+
   it('keeps MacKay binomial delimiters separate and assigns them tall bounds', () => {
     const document = loadMacKayDocument();
     const page = document.getPage(13);

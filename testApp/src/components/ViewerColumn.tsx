@@ -109,7 +109,7 @@ export function ViewerColumn({
                   .filter((page) => viewMode === 'canvas' || (viewMode === 'focus-pdf' && (focusState.status !== 'ready' || pagesWithMatches.has(page.number))))
                   .map((page) => (
                     <CanvasPageWithOverlay
-                      key={page.number}
+                      key={`${documentId}-${page.number}`}
                       page={page}
                       pageNumber={page.number}
                       documentId={documentId}

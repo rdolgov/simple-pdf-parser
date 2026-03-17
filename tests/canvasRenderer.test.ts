@@ -4,6 +4,7 @@ import { CanvasRenderer } from '../src/viewer/canvasRenderer.js';
 import type { CanvasLike } from '../src/viewer/canvasRenderer.js';
 import type { PDFLayout } from '../src/types.js';
 import { PDFDocument } from '../src/pdfDocument.js';
+import { RecordingCanvas, RecordingContext } from './support/recordingCanvas.js';
 
 class MockContext {
   fillStyle = '';
@@ -600,6 +601,54 @@ describe('CanvasRenderer', () => {
 
     expect(contextImpl.operations).toContain('translate:108,156');
     expect(contextImpl.operations).not.toContain('translate:108,153');
+  });
+
+  it('uses Type3 baseline advances instead of centering glyphs inside their bounds', () => {
+    const contextImpl = new RecordingContext();
+    const canvas = new RecordingCanvas(contextImpl);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: 'A',
+              bounds: { minX: 10, minY: 10, maxX: 14, maxY: 18 },
+              baselineStart: { x: 10, y: 10 },
+              baselineEnd: { x: 18, y: 10 },
+              glyphSpans: [{ text: 'A', advance: 1, glyphCode: 65 }],
+              type3Glyphs: [
+                {
+                  glyphName: 'A',
+                  width: 1,
+                  pathCommands: [
+                    { op: 'M', x: 0.1, y: 0 },
+                    { op: 'L', x: 0.4, y: 0.7 },
+                    { op: 'L', x: 0.7, y: 0 },
+                    { op: 'Z' },
+                    { op: 'f' }
+                  ]
+                }
+              ]
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+    renderer.render(canvas, document, 1);
+
+    const fillPaint = contextImpl.pathPaints.find((paint) => paint.kind === 'fill');
+    expect(fillPaint).toBeDefined();
+    expect(fillPaint!.translateX).toBeCloseTo(18, 5);
+    expect(fillPaint!.translateX).toBeLessThan(18.5);
   });
 
   it('renders CMEX product operators as vector strokes instead of raw text glyphs', () => {

@@ -1,5 +1,6 @@
 import type { PDFEmbeddedFontResource, PDFTextItem } from '../types.js';
 import { PDFDocument } from '../pdfDocument.js';
+import { canRegisterEmbeddedFontsInCurrentScope, getGlobalFontSet } from './canvasEnvironment.js';
 import { buildSyntheticOpenTypeFromType1C } from './type1COpenTypeBuilder.js';
 
 export interface RegisteredEmbeddedFont {
@@ -108,11 +109,7 @@ async function registerEmbeddedFont(
 }
 
 function canRegisterEmbeddedFonts(): boolean {
-  return (
-    typeof FontFace !== 'undefined' &&
-    typeof document !== 'undefined' &&
-    typeof getBrowserFontSet()?.add === 'function'
-  );
+  return canRegisterEmbeddedFontsInCurrentScope();
 }
 
 function createEmbeddedFamilyName(baseFontName: string, fontKey: string): string {
@@ -130,8 +127,5 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 function getBrowserFontSet(): { add?: (fontFace: FontFace) => unknown } | undefined {
-  if (typeof document === 'undefined') {
-    return undefined;
-  }
-  return document.fonts as unknown as { add?: (fontFace: FontFace) => unknown } | undefined;
+  return getGlobalFontSet() as { add?: (fontFace: FontFace) => unknown } | undefined;
 }
