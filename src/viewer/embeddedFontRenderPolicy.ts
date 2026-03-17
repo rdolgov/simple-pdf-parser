@@ -33,6 +33,7 @@ export function resolveVerticalScaleBounds(
   const exactEmbeddedGlyphs = embeddedFont?.renderMode === 'glyph-span';
   const stretchyDelimiter = isStretchyMathDelimiter(item);
   const displayOperator = isDisplayCmexOperator(item);
+  const fontSize = item.fontSize ?? 0;
 
   if (stretchyDelimiter || displayOperator) {
     return exactEmbeddedGlyphs
@@ -46,7 +47,33 @@ export function resolveVerticalScaleBounds(
       : { minScaleY: 0.85, maxScaleY: 1.15 };
   }
 
+  if (fontSize > 0 && fontSize <= 8.5) {
+    return exactEmbeddedGlyphs
+      ? { minScaleY: 0.7, maxScaleY: 1.12 }
+      : { minScaleY: 0.82, maxScaleY: 1.08 };
+  }
+
   return { minScaleY: 1, maxScaleY: 1 };
+}
+
+export function shouldUseParsedVerticalFit(
+  item: PDFTextItem,
+  embeddedFont: RegisteredEmbeddedFont | undefined
+): boolean {
+  if (isStretchyMathDelimiter(item) || isStretchyMathOperator(item)) {
+    return true;
+  }
+
+  if (isDisplayCmexOperator(item)) {
+    return true;
+  }
+
+  const fontSize = item.fontSize ?? 0;
+  if (fontSize > 0 && fontSize <= 8.5) {
+    return true;
+  }
+
+  return embeddedFont?.renderMode === 'glyph-span' && fontSize > 0 && fontSize <= 10;
 }
 
 export function resolveGlyphScaleX(

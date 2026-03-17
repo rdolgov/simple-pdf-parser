@@ -15,9 +15,8 @@ import {
   traceVectorDisplayOperator
 } from './displayOperatorRenderer.js';
 import {
-  isStretchyMathDelimiter,
-  isStretchyMathOperator,
   resolveGlyphScaleX,
+  shouldUseParsedVerticalFit,
   resolveVerticalScaleBounds
 } from './embeddedFontRenderPolicy.js';
 import {
@@ -1322,9 +1321,7 @@ export class CanvasRenderer {
       return { scaleY: 1, localYOffset: 0 };
     }
 
-    const stretchyDelimiter = isStretchyMathDelimiter(item);
-    const stretchyOperator = isStretchyMathOperator(item);
-    if (!stretchyDelimiter && !stretchyOperator) {
+    if (!shouldUseParsedVerticalFit(item, embeddedFont)) {
       return { scaleY: 1, localYOffset: 0 };
     }
 

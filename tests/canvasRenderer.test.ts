@@ -106,6 +106,23 @@ class MockCanvas implements CanvasLike {
   }
 }
 
+class ScriptMetricRecordingContext extends RecordingContext {
+  override measureText(text: string): TextMetrics {
+    const fontSize = readFontSizeForTest(this.font);
+    const width = Math.max(text.length * fontSize * 0.52, 1);
+    const isSmallScript = fontSize <= 7.5;
+    const actualBoundingBoxAscent = isSmallScript ? fontSize * 1.05 : fontSize * 0.8;
+    const actualBoundingBoxDescent = isSmallScript ? fontSize * 0.45 : fontSize * 0.2;
+    return {
+      width,
+      actualBoundingBoxAscent,
+      actualBoundingBoxDescent,
+      fontBoundingBoxAscent: actualBoundingBoxAscent,
+      fontBoundingBoxDescent: actualBoundingBoxDescent
+    } as TextMetrics;
+  }
+}
+
 describe('CanvasRenderer', () => {
   it('renders PDF text items onto a canvas context', () => {
     const contextImpl = new MockContext();
@@ -752,4 +769,56 @@ describe('CanvasRenderer', () => {
     expect(operations.some((entry) => entry.startsWith('fillText:N@'))).toBe(true);
     expect(operations.some((entry) => entry.startsWith('fillText:r=0@'))).toBe(true);
   });
+
+  it('uses parsed vertical bounds to shrink script-sized text when browser metrics are too tall', () => {
+    const contextImpl = new ScriptMetricRecordingContext();
+    const canvas = new RecordingCanvas(contextImpl);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: 'W',
+              bounds: { minX: 40, minY: 40, maxX: 49.5, maxY: 50 },
+              font: 'CMMI10',
+              fontSize: 10,
+              baselineStart: { x: 40, y: 42 },
+              baselineEnd: { x: 49.5, y: 42 }
+            },
+            {
+              text: 'i',
+              bounds: { minX: 49.8, minY: 42.8, maxX: 52.3, maxY: 49.8 },
+              font: 'Times New Roman',
+              fontSize: 7,
+              baselineStart: { x: 49.8, y: 44.2 },
+              baselineEnd: { x: 52.3, y: 44.2 }
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+    renderer.render(canvas, document, 1);
+
+    const mainDraw = contextImpl.textDraws.find((draw) => draw.text === 'W');
+    const scriptDraw = contextImpl.textDraws.find((draw) => draw.text === 'i');
+
+    expect(mainDraw).toBeDefined();
+    expect(scriptDraw).toBeDefined();
+    expect(mainDraw?.scaleY).toBe(1);
+    expect(scriptDraw!.scaleY).toBeLessThan(1);
+  });
 });
+
+function readFontSizeForTest(font: string): number {
+  const match = font.match(/(\d+(?:\.\d+)?)px/);
+  return match ? Number.parseFloat(match[1]) : 12;
+}
