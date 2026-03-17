@@ -56,6 +56,10 @@ interface ViewerColumnProps {
   semanticSearchResults: SemanticSearchResult[];
   activeSemanticResultIndex: number;
   geminiExtraction: GeminiDocumentExtraction | null;
+  lassoMode: boolean;
+  onLassoModeChange: (active: boolean) => void;
+  documentText: string;
+  totalPages: number;
   enableFormulaHighlight: boolean;
   enableTableHighlight: boolean;
   enableWebSearch: boolean;
@@ -97,6 +101,10 @@ export function ViewerColumn({
   semanticSearchResults,
   activeSemanticResultIndex,
   geminiExtraction,
+  lassoMode,
+  onLassoModeChange,
+  documentText,
+  totalPages,
   enableFormulaHighlight,
   enableTableHighlight,
   enableWebSearch,
@@ -142,6 +150,10 @@ export function ViewerColumn({
                       semanticSearchResults={semanticSearchResults.filter((r) => r.chunk.pageNumber === page.number)}
                       activeSemanticResultId={semanticSearchResults[activeSemanticResultIndex]?.chunk.id}
                       geminiExtraction={geminiExtraction}
+                      lassoMode={lassoMode}
+                      onLassoModeChange={onLassoModeChange}
+                      documentText={documentText}
+                      totalPages={totalPages}
                       enableFormulaHighlight={enableFormulaHighlight}
                       enableTableHighlight={enableTableHighlight}
                       enableWebSearch={enableWebSearch}

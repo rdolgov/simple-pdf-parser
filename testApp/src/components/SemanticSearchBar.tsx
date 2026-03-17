@@ -19,6 +19,8 @@ interface SemanticSearchBarProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onZoomReset: () => void;
+  isLassoMode: boolean;
+  onToggleLasso: () => void;
   onStartIndexing: () => void;
   onSearch: (query: string) => Promise<SemanticSearchResult[]>;
   onClearSearch: () => void;
@@ -44,6 +46,8 @@ export function SemanticSearchBar({
   onZoomIn,
   onZoomOut,
   onZoomReset,
+  isLassoMode,
+  onToggleLasso,
   onStartIndexing,
   onSearch,
   onClearSearch,
@@ -433,6 +437,18 @@ export function SemanticSearchBar({
 
         <button
           type="button"
+          className={`semantic-search-lasso-btn${isLassoMode ? ' semantic-search-lasso-btn--active' : ''}`}
+          onClick={onToggleLasso}
+          disabled={disabled}
+          aria-pressed={isLassoMode}
+          title={isLassoMode ? 'Lasso mode is on. Draw on a page to select a region.' : 'Turn on lasso mode'}
+        >
+          <LassoIcon />
+          <span>{isLassoMode ? 'Draw' : 'Lasso'}</span>
+        </button>
+
+        <button
+          type="button"
           className={`semantic-search-ai-btn${aiDetectionSupport.supported ? '' : ' semantic-search-ai-btn--unsupported'}`}
           onClick={() => {
             void onRunAiDetection();
@@ -526,6 +542,22 @@ function CheckIcon(): JSX.Element {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function LassoIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 18 18" width="14" height="14" aria-hidden="true">
+      <path
+        d="M6.1 3.2c-2 0-3.6 1.3-3.6 3.1 0 1.9 1.7 2.8 3.6 2.8h4.7c2 0 3.6 1 3.6 2.9 0 1.6-1.3 2.8-3 2.8-1.3 0-2.3-.7-2.3-1.8 0-.8.6-1.4 1.4-1.4.7 0 1.2.5 1.2 1.1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="11.1" cy="11.7" r="0.9" fill="currentColor" />
     </svg>
   );
 }

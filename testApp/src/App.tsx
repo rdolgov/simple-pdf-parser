@@ -111,6 +111,7 @@ export default function App(): JSX.Element {
     | { status: 'empty'; query: string }
     | { status: 'error'; message: string }
   >({ status: 'idle' });
+  const [lassoMode, setLassoMode] = useState(false);
 
   // Document loader hook with callback for canvas/zoom/focus reset
   const handleDocumentLoad = useCallback(() => {
@@ -118,6 +119,7 @@ export default function App(): JSX.Element {
     setZoom(renderer.resetZoom());
     setFocusState({ status: 'idle' });
     setFocusQuery('');
+    setLassoMode(false);
   }, [renderer, setViewMode, setZoom]);
 
   const {
@@ -247,6 +249,7 @@ export default function App(): JSX.Element {
   const totalPages = readyDocument?.pages.length ?? 0;
   const pageInfo = readyDocument ? `Pages: ${totalPages}` : 'No document loaded';
   const zoomIndicator = `${Math.round(zoom * 100)}%`;
+  const documentText = useMemo(() => readyDocument?.getText() ?? '', [readyDocument]);
 
   const pdfLayout = useMemo<PDFLayout | null>(() => {
     if (state.status !== 'ready') {
@@ -442,7 +445,6 @@ export default function App(): JSX.Element {
   const [enableFormulaHighlight, setEnableFormulaHighlight] = useState(true);
   const [enableTableHighlight, setEnableTableHighlight] = useState(true);
   const [enableWebSearch, setEnableWebSearch] = useState(false);
-
   const htmlPageLayouts = useMemo<Map<number, HtmlPageLayout>>(() => {
     if (!htmlLayout) {
       return new Map();
@@ -723,6 +725,17 @@ export default function App(): JSX.Element {
     setCanvasHighlight(selection);
   }, []);
 
+  const handleToggleLassoMode = useCallback(() => {
+    setCanvasHighlight(null);
+    setLassoMode((current) => !current);
+  }, []);
+
+  useEffect(() => {
+    if (viewMode !== 'canvas' && viewMode !== 'focus-pdf') {
+      setLassoMode(false);
+    }
+  }, [viewMode]);
+
   useEffect(() => {
     if (viewMode !== 'html-render') {
       return;
@@ -948,6 +961,8 @@ export default function App(): JSX.Element {
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
           onZoomReset={handleZoomReset}
+          isLassoMode={lassoMode}
+          onToggleLasso={handleToggleLassoMode}
           onStartIndexing={startIndexing}
           onSearch={semanticSearchFn}
           onClearSearch={clearSemanticResults}
@@ -1005,6 +1020,10 @@ export default function App(): JSX.Element {
           semanticSearchResults={sortedSemanticResults}
           activeSemanticResultIndex={activeSemanticResultIndex}
           geminiExtraction={geminiExtractionState.extraction}
+          lassoMode={lassoMode}
+          onLassoModeChange={setLassoMode}
+          documentText={documentText}
+          totalPages={totalPages}
           onRunAiDetection={handleRunAiDetection}
           enableFormulaHighlight={enableFormulaHighlight}
           enableTableHighlight={enableTableHighlight}

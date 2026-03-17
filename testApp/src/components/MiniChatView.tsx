@@ -25,6 +25,8 @@ interface MiniChatViewProps {
   onAnnotationChange?: () => void;
   /** If provided, this query will be auto-sent when the chat opens */
   initialQuery?: string;
+  /** If provided, seeds the chat when there is no saved history for these bounds */
+  initialMessages?: ChatMessage[];
   /** When enabled, allows Gemini to search the web for additional context */
   enableWebSearch?: boolean;
 }
@@ -49,6 +51,7 @@ export function MiniChatView({
   bounds,
   onAnnotationChange,
   initialQuery,
+  initialMessages,
   enableWebSearch = false
 }: MiniChatViewProps): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -56,6 +59,7 @@ export function MiniChatView({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [hasPersistedHistory, setHasPersistedHistory] = useState(false);
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -136,6 +140,10 @@ export function MiniChatView({
         if (existing) {
           const chatContent = existing.content as ChatAnnotationContent;
           setMessages(chatContent.messages);
+          setHasPersistedHistory(chatContent.messages.length > 0);
+        } else if (initialMessages && initialMessages.length > 0) {
+          setMessages(initialMessages);
+          setHasPersistedHistory(false);
         }
       } catch (err) {
         console.error('Failed to load chat history:', err);
@@ -145,7 +153,7 @@ export function MiniChatView({
     }
 
     void loadExistingChat();
-  }, [documentId, pageNumber, bounds]);
+  }, [documentId, pageNumber, bounds, initialMessages]);
 
   useEffect(() => {
     // Focus input without scrolling the page (after history loads)
@@ -323,7 +331,7 @@ export function MiniChatView({
             Ask a question about this paragraph...
           </div>
         )}
-        {!isLoadingHistory && messages.length > 0 && (
+        {!isLoadingHistory && messages.length > 0 && hasPersistedHistory && (
           <div className="mini-chat-history-badge">
             Previous conversation restored
           </div>

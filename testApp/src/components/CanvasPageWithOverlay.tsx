@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
-import type { MouseEvent } from 'react';
+import type { MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { HtmlPageLayout, PDFImageBounds, PDFPage } from 'pdf-layout-parser';
 import { GeminiAPI, OpenAiAPI } from 'pdf-layout-parser';
 import type { CanvasHighlightSelection, CanvasPageRenderState, FocusProvider, ExtractedTable } from '../types';
@@ -12,10 +12,12 @@ import { ImagePreviewPopup } from './ImagePreviewPopup';
 import { MathViewPopup } from './MathViewPopup';
 import { InteractiveWidgetPopup } from './InteractiveWidgetPopup';
 import { ImageExplanationPopup, type ImageExplanationData } from './ImageExplanationPopup';
+import { LassoActionMenu } from './LassoActionMenu';
 import { getCachedImageExplanation, setCachedImageExplanation, deleteCachedImageExplanation } from '../storage/imageExplanationCache';
 import {
   type AnnotationBounds,
   type AnnotationSummary,
+  type ChatMessage,
   type ChatAnnotationContent,
   type ImageAnnotationContent,
   type WidgetAnnotationContent,
@@ -66,6 +68,20 @@ import {
   parseInteractiveWidgetSpec
 } from '../utils/interactiveWidget';
 import { buildMathDetectionPrompt, parseMathDetectionResponse } from '../utils/mathDetection';
+import {
+  buildLassoChatContextText,
+  buildLassoExplainPrompt,
+  buildLassoInteractiveWidgetPrompt,
+  buildLassoPromptContext,
+  type LassoPromptContext
+} from '../utils/lassoPrompts';
+import {
+  canvasBoundsToPdfBounds,
+  captureLassoSelectionFromCanvas,
+  lassoPathToSvg,
+  type LassoBounds,
+  type LassoPoint
+} from '../utils/lassoSelection';
 import { parsePopupTextSegments } from '../utils/popupTextSegments';
 
 const HIGHLIGHT_PADDING = 12;
@@ -100,6 +116,23 @@ function getCanvasRenderStatusMessage(
   };
 }
 
+type MiniChatState = {
+  contextText: string;
+  position: { top: number; left: number };
+  bounds: AnnotationBounds;
+  initialMessages?: ChatMessage[];
+};
+
+type LassoSelectionState = {
+  points: LassoPoint[];
+  bounds: LassoBounds;
+  pdfBounds: AnnotationBounds;
+  previewDataUri: string;
+  compositeDataUri: string;
+  position: { top: number; left: number };
+  promptContext: LassoPromptContext;
+};
+
 interface CanvasPageWithOverlayProps {
   page: PDFPage;
   pageNumber: number;
@@ -118,6 +151,10 @@ interface CanvasPageWithOverlayProps {
   semanticSearchResults?: SemanticSearchResult[];
   activeSemanticResultId?: string;
   geminiExtraction?: GeminiDocumentExtraction | null;
+  lassoMode: boolean;
+  onLassoModeChange: (active: boolean) => void;
+  documentText: string;
+  totalPages: number;
   enableFormulaHighlight?: boolean;
   enableTableHighlight?: boolean;
   enableImageHighlight?: boolean;
@@ -145,6 +182,10 @@ export function CanvasPageWithOverlay({
   semanticSearchResults = [],
   activeSemanticResultId,
   geminiExtraction,
+  lassoMode,
+  onLassoModeChange,
+  documentText,
+  totalPages,
   enableFormulaHighlight = true,
   enableTableHighlight = true,
   enableImageHighlight = true,
@@ -156,6 +197,10 @@ export function CanvasPageWithOverlay({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const formulaSuggestionAttentionTimeoutRef = useRef<number | null>(null);
   const previousFormulaSuggestionSignatureRef = useRef<Record<string, string>>({});
+  const lassoPointerIdRef = useRef<number | null>(null);
+  const lassoIsDrawingRef = useRef(false);
+  const lassoDraftPointsRef = useRef<LassoPoint[]>([]);
+  const ignoreNextCanvasClickRef = useRef(false);
   const [highlightTextOverrides, setHighlightTextOverrides] = useState<Record<string, string>>({});
   const [rewriteLoading, setRewriteLoading] = useState<Record<string, boolean>>({});
   const [rewriteError, setRewriteError] = useState<Record<string, string>>({});
@@ -168,12 +213,7 @@ export function CanvasPageWithOverlay({
     model: ExtractedTable;
   } | null>(null);
   const [tableSortState, setTableSortState] = useState<Record<string, TableSortState>>({});
-  // Support multiple chat popups simultaneously - keyed by bounds string
-  const [miniChatStates, setMiniChatStates] = useState<Map<string, {
-    contextText: string;
-    position: { top: number; left: number };
-    bounds: AnnotationBounds;
-  }>>(new Map());
+  const [miniChatStates, setMiniChatStates] = useState<Map<string, MiniChatState>>(new Map());
   const [pageAnnotations, setPageAnnotations] = useState<AnnotationSummary[]>([]);
   const [annotationVersion, setAnnotationVersion] = useState(0);
   const [imagePreview, setImagePreview] = useState<{
@@ -220,6 +260,12 @@ export function CanvasPageWithOverlay({
     isLoading: boolean;
     error: string | null;
   } | null>(null);
+  const [lassoDraftPoints, setLassoDraftPoints] = useState<LassoPoint[]>([]);
+  const [lassoSelection, setLassoSelection] = useState<LassoSelectionState | null>(null);
+  const [lassoActionState, setLassoActionState] = useState<{
+    action: 'explain' | 'interactive';
+    error: string | null;
+  } | null>(null);
   const [formulaSuggestionAttentionKey, setFormulaSuggestionAttentionKey] = useState<string | null>(null);
   const [formulaSuggestionState, setFormulaSuggestionState] = useState<
     Record<string, { status: 'loading' | 'ready' | 'error'; hasMath: boolean }>
@@ -242,6 +288,12 @@ export function CanvasPageWithOverlay({
     setHoveredElement(null);
     setImageExplanationState(null);
     setInteractiveWidgetState(null);
+    lassoDraftPointsRef.current = [];
+    lassoIsDrawingRef.current = false;
+    lassoPointerIdRef.current = null;
+    setLassoDraftPoints([]);
+    setLassoSelection(null);
+    setLassoActionState(null);
     setFormulaSuggestionAttentionKey(null);
   }, [focusLayout, canvasHighlight]);
 
@@ -327,8 +379,40 @@ export function CanvasPageWithOverlay({
     getCanvasRef(page.number)(element);
   }, [getCanvasRef, page.number]);
 
+  const resetLassoDraft = useCallback(() => {
+    lassoDraftPointsRef.current = [];
+    lassoIsDrawingRef.current = false;
+    lassoPointerIdRef.current = null;
+    setLassoDraftPoints([]);
+  }, []);
+
+  const clearLassoSelection = useCallback(() => {
+    setLassoSelection(null);
+    setLassoActionState(null);
+    resetLassoDraft();
+  }, [resetLassoDraft]);
+
+  useEffect(() => {
+    if (!lassoMode) {
+      resetLassoDraft();
+      return;
+    }
+
+    onCanvasHighlight(null);
+    setTableOverlay(null);
+    setReferencePopup(null);
+    setMathViewState(null);
+  }, [lassoMode, onCanvasHighlight, resetLassoDraft]);
+
   const handleOpenMiniChat = useCallback(
-    (contextText: string, blockLeft: number, blockTop: number, blockWidth: number, bounds: AnnotationBounds) => {
+    (
+      contextText: string,
+      blockLeft: number,
+      blockTop: number,
+      blockWidth: number,
+      bounds: AnnotationBounds,
+      initialMessages?: ChatMessage[]
+    ) => {
       // Position the chat panel next to the toolbar (which is at top-right of block)
       // Toolbar is at: top: -10px, right: 8px relative to the highlight block
       // The highlight block has HIGHLIGHT_PADDING added, so account for that
@@ -340,7 +424,8 @@ export function CanvasPageWithOverlay({
         next.set(boundsKey, {
           contextText,
           position: { top: chatTop, left: chatLeft },
-          bounds
+          bounds,
+          initialMessages
         });
         return next;
       });
@@ -595,6 +680,46 @@ export function CanvasPageWithOverlay({
     }
     return null;
   }, []);
+
+  const runVisionPromptOnDataUri = useCallback(
+    async (imageDataUri: string, prompt: string): Promise<string> => {
+      const { mimeType, base64Data } = parseDataUri(imageDataUri);
+      const provider = getRewriteProvider();
+
+      if (provider === 'openai') {
+        const openAiKey = ensureOpenAiApiKey();
+        if (!openAiKey) {
+          throw new Error('OpenAI API key required.');
+        }
+        const configuredModel = getRewriteModel('openai')?.trim();
+        const textModel =
+          configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
+            ? configuredModel
+            : undefined;
+        const response = await new OpenAiAPI({
+          apiKey: openAiKey,
+          ...(textModel ? { model: textModel } : {})
+        }).generateFromImage(base64Data, mimeType, prompt);
+        return response.text.trim();
+      }
+
+      const geminiKey = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
+      if (!geminiKey) {
+        throw new Error('Gemini API key required.');
+      }
+      const configuredModel = getRewriteModel('gemini')?.trim();
+      const geminiModel =
+        configuredModel && !/^gpt-/i.test(configuredModel)
+          ? configuredModel
+          : 'gemini-3-pro-preview';
+      const response = await new GeminiAPI({
+        apiKey: geminiKey,
+        model: geminiModel
+      }).generateFromImage(base64Data, mimeType, prompt, { mediaResolution: 'high' });
+      return response.text.trim();
+    },
+    [ensureGeminiApiKey, ensureOpenAiApiKey]
+  );
 
   const handleRewriteHighlight = useCallback(
     async (blockKey: string, paragraphText: string) => {
@@ -1020,6 +1145,281 @@ export function CanvasPageWithOverlay({
     ]
   );
 
+  const handleRestartLasso = useCallback(() => {
+    clearLassoSelection();
+    onLassoModeChange(true);
+  }, [clearLassoSelection, onLassoModeChange]);
+
+  const handleCancelLassoSelection = useCallback(() => {
+    clearLassoSelection();
+    onLassoModeChange(false);
+  }, [clearLassoSelection, onLassoModeChange]);
+
+  const finalizeLassoSelection = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      resetLassoDraft();
+      return;
+    }
+
+    const selectionPoints = lassoDraftPointsRef.current.slice();
+    const captured = captureLassoSelectionFromCanvas({
+      canvas,
+      points: selectionPoints
+    });
+
+    resetLassoDraft();
+
+    if (!captured) {
+      return;
+    }
+
+    const pdfBounds = canvasBoundsToPdfBounds(captured.bounds, page.size.height, zoom, 16);
+    const promptContext = buildLassoPromptContext({
+      page,
+      pageNumber,
+      totalPages,
+      htmlPage,
+      documentTitle: documentTitle || documentId,
+      documentText,
+      selectionBounds: pdfBounds
+    });
+
+    setLassoSelection({
+      points: selectionPoints,
+      bounds: captured.bounds,
+      pdfBounds,
+      previewDataUri: captured.previewDataUri,
+      compositeDataUri: captured.compositeDataUri,
+      position: getWidgetPopupPosition(pdfBounds),
+      promptContext
+    });
+    setLassoActionState(null);
+    onCanvasHighlight(null);
+    setTableOverlay(null);
+    setReferencePopup(null);
+    setMathViewState(null);
+    onLassoModeChange(false);
+  }, [
+    documentId,
+    documentText,
+    documentTitle,
+    getWidgetPopupPosition,
+    htmlPage,
+    onCanvasHighlight,
+    onLassoModeChange,
+    page,
+    page.size.height,
+    pageNumber,
+    resetLassoDraft,
+    totalPages,
+    zoom
+  ]);
+
+  const handleLassoExplain = useCallback(async () => {
+    if (!lassoSelection) {
+      return;
+    }
+
+    setLassoActionState({ action: 'explain', error: null });
+
+    try {
+      const responseText = await runVisionPromptOnDataUri(
+        lassoSelection.compositeDataUri,
+        buildLassoExplainPrompt(lassoSelection.promptContext)
+      );
+      const boundsKey = `${lassoSelection.pdfBounds.minX}-${lassoSelection.pdfBounds.minY}-${lassoSelection.pdfBounds.maxX}-${lassoSelection.pdfBounds.maxY}`;
+      const timestamp = Date.now();
+      const initialMessages: ChatMessage[] = [
+        {
+          role: 'user',
+          content: 'Explain this selected region.',
+          timestamp
+        },
+        {
+          role: 'assistant',
+          content: responseText || 'No explanation was returned.',
+          timestamp: timestamp + 1
+        }
+      ];
+      const contextText = buildLassoChatContextText(lassoSelection.promptContext);
+      setMiniChatStates((current) => {
+        const next = new Map(current);
+        next.set(boundsKey, {
+          contextText,
+          position: lassoSelection.position,
+          bounds: lassoSelection.pdfBounds,
+          initialMessages
+        });
+        return next;
+      });
+      setLassoSelection(null);
+      setLassoActionState(null);
+    } catch (error) {
+      setLassoActionState({
+        action: 'explain',
+        error: error instanceof Error ? error.message : 'Failed to explain the selected region.'
+      });
+    }
+  }, [lassoSelection, runVisionPromptOnDataUri]);
+
+  const handleLassoInteractiveWidget = useCallback(async () => {
+    if (!lassoSelection) {
+      return;
+    }
+
+    const selection = lassoSelection;
+    const defaultTitle = selection.promptContext.sectionHeading?.trim() || 'Interactive explainer';
+    setLassoActionState({ action: 'interactive', error: null });
+    setInteractiveWidgetState({
+      title: defaultTitle,
+      srcDoc: '',
+      position: selection.position,
+      isLoading: true,
+      error: null
+    });
+    setLassoSelection(null);
+
+    let tracksInlineActivity = false;
+
+    try {
+      onInteractiveWidgetGenerationActivityChange?.(1);
+      tracksInlineActivity = true;
+      const responseText = await runVisionPromptOnDataUri(
+        selection.compositeDataUri,
+        buildLassoInteractiveWidgetPrompt(selection.promptContext)
+      );
+      const spec = parseInteractiveWidgetSpec(responseText);
+      setInteractiveWidgetState({
+        title: spec.title,
+        srcDoc: buildInteractiveWidgetSrcDoc(spec),
+        position: selection.position,
+        isLoading: false,
+        error: null
+      });
+      try {
+        await saveOrUpdateWidgetAnnotation(
+          documentId,
+          pageNumber,
+          selection.pdfBounds,
+          spec.title,
+          spec.html,
+          spec.css,
+          spec.js,
+          selection.promptContext.nearbyPageText
+        );
+        setAnnotationVersion((current) => current + 1);
+      } catch (saveError) {
+        console.error('Failed to save lasso widget annotation:', saveError);
+      }
+      setLassoActionState(null);
+    } catch (error) {
+      setInteractiveWidgetState({
+        title: defaultTitle,
+        srcDoc: '',
+        position: selection.position,
+        isLoading: false,
+        error: error instanceof Error ? error.message : 'Failed to generate interactive widget.'
+      });
+      setLassoActionState(null);
+    } finally {
+      if (tracksInlineActivity) {
+        onInteractiveWidgetGenerationActivityChange?.(-1);
+      }
+    }
+  }, [
+    documentId,
+    lassoSelection,
+    onInteractiveWidgetGenerationActivityChange,
+    pageNumber,
+    runVisionPromptOnDataUri
+  ]);
+
+  const resolveCanvasPointerPoint = useCallback((clientX: number, clientY: number): LassoPoint | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return null;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
+      return null;
+    }
+
+    return { x, y };
+  }, []);
+
+  const handleCanvasPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!lassoMode || renderState !== 'ready') {
+      return;
+    }
+
+    const target = event.target as HTMLElement | null;
+    if (
+      target?.closest('.lasso-action-menu, .mini-chat-view, .interactive-widget-popup, .image-explanation-popup, .reference-popup')
+    ) {
+      return;
+    }
+
+    const point = resolveCanvasPointerPoint(event.clientX, event.clientY);
+    if (!point) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    ignoreNextCanvasClickRef.current = true;
+    clearLassoSelection();
+    lassoIsDrawingRef.current = true;
+    lassoPointerIdRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    lassoDraftPointsRef.current = [point];
+    setLassoDraftPoints([point]);
+  }, [clearLassoSelection, lassoMode, renderState, resolveCanvasPointerPoint]);
+
+  const handleCanvasPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!lassoMode || !lassoIsDrawingRef.current || lassoPointerIdRef.current !== event.pointerId) {
+      return;
+    }
+
+    const point = resolveCanvasPointerPoint(event.clientX, event.clientY);
+    if (!point) {
+      return;
+    }
+
+    const previous = lassoDraftPointsRef.current[lassoDraftPointsRef.current.length - 1];
+    if (previous && Math.hypot(point.x - previous.x, point.y - previous.y) < 2) {
+      return;
+    }
+
+    const nextPoints = [...lassoDraftPointsRef.current, point];
+    lassoDraftPointsRef.current = nextPoints;
+    setLassoDraftPoints(nextPoints);
+  }, [lassoMode, resolveCanvasPointerPoint]);
+
+  const handleCanvasPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!lassoMode || !lassoIsDrawingRef.current || lassoPointerIdRef.current !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    finalizeLassoSelection();
+  }, [finalizeLassoSelection, lassoMode]);
+
+  const handleCanvasPointerCancel = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (lassoPointerIdRef.current === event.pointerId && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    resetLassoDraft();
+  }, [resetLassoDraft]);
+
   const overlayAiProvider = getRewriteProvider();
   const overlayAiModel = getRewriteModel(overlayAiProvider);
   const overlayAiKey = overlayAiProvider === 'openai'
@@ -1220,6 +1620,11 @@ export function CanvasPageWithOverlay({
 
   // Handle mouse move to detect hoverable elements
   const handleCanvasMouseMove = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (lassoMode) {
+      if (hoveredElement) setHoveredElement(null);
+      return;
+    }
+
     if (focusMode || !canvasRef.current || !geminiExtraction) {
       if (hoveredElement) setHoveredElement(null);
       return;
@@ -1323,7 +1728,7 @@ export function CanvasPageWithOverlay({
     if (hoveredElement) {
       setHoveredElement(null);
     }
-  }, [focusMode, geminiExtraction, alignedElements, pageNumber, page.size.width, page.size.height, zoom, hoveredElement]);
+  }, [focusMode, geminiExtraction, alignedElements, lassoMode, pageNumber, page.size.width, page.size.height, zoom, hoveredElement]);
 
   // Clear hover on mouse leave
   const handleCanvasMouseLeave = useCallback(() => {
@@ -1331,6 +1736,15 @@ export function CanvasPageWithOverlay({
   }, []);
 
   const handleCanvasClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (ignoreNextCanvasClickRef.current) {
+      ignoreNextCanvasClickRef.current = false;
+      return;
+    }
+
+    if (lassoMode) {
+      return;
+    }
+
     if (focusMode) {
       return;
     }
@@ -1559,7 +1973,7 @@ export function CanvasPageWithOverlay({
       bounds: refinedBlock.bounds
     });
     onCanvasHighlight({ kind: 'text', pageNumber: page.number, block: refinedBlock });
-  }, [focusMode, htmlPage, onCanvasHighlight, page.number, page.size.height, page.size.width, extractedTables, geminiExtraction, pageNumber, zoom, documentId, enableImageHighlight]);
+  }, [focusMode, htmlPage, lassoMode, onCanvasHighlight, page.number, page.size.height, page.size.width, extractedTables, geminiExtraction, pageNumber, zoom, documentId, enableImageHighlight]);
 
   const highlightBlocks: HighlightBlockData[] = [];
 
@@ -1595,6 +2009,12 @@ export function CanvasPageWithOverlay({
     renderState === 'ready' ? null : getCanvasRenderStatusMessage(pageNumber, renderState);
   const hasOverlayContent = highlightBlocks.length > 0 || Boolean(tableOverlay);
   const hasSemanticHighlights = semanticSearchResults.length > 0;
+  const hasLassoOverlay = lassoDraftPoints.length > 1 || Boolean(lassoSelection);
+  const activeLassoPoints = lassoDraftPoints.length > 1 ? lassoDraftPoints : lassoSelection?.points ?? [];
+  const activeLassoPath = activeLassoPoints.length > 1 ? lassoPathToSvg(activeLassoPoints) : '';
+  const activeLassoBounds = lassoSelection?.bounds ?? null;
+  const canvasOffsetLeft = canvasRef.current?.offsetLeft ?? 0;
+  const canvasOffsetTop = canvasRef.current?.offsetTop ?? 0;
   const overlayClassName = hasOverlayContent ? 'canvas-overlay canvas-overlay--interactive' : 'canvas-overlay';
   const overlayLayerClassName = hasOverlayContent
     ? 'canvas-overlay-layer canvas-overlay-layer--interactive'
@@ -1606,14 +2026,20 @@ export function CanvasPageWithOverlay({
       onClick={handleCanvasClick}
       onMouseMove={handleCanvasMouseMove}
       onMouseLeave={handleCanvasMouseLeave}
+      onPointerDown={handleCanvasPointerDown}
+      onPointerMove={handleCanvasPointerMove}
+      onPointerUp={handleCanvasPointerUp}
+      onPointerCancel={handleCanvasPointerCancel}
       data-page-number={pageNumber}
       style={{
-        cursor: hoveredElement && (
-          (hoveredElement.type === 'formula' && enableFormulaHighlight) ||
-          (hoveredElement.type === 'table' && enableTableHighlight) ||
-          (hoveredElement.type === 'image' && enableImageHighlight) ||
-          (hoveredElement.type === 'reference')
-        ) ? 'pointer' : undefined
+        cursor: lassoMode
+          ? 'crosshair'
+          : hoveredElement && (
+              (hoveredElement.type === 'formula' && enableFormulaHighlight) ||
+              (hoveredElement.type === 'table' && enableTableHighlight) ||
+              (hoveredElement.type === 'image' && enableImageHighlight) ||
+              (hoveredElement.type === 'reference')
+            ) ? 'pointer' : undefined
       }}
     >
       <canvas ref={handleCanvasRef} />
@@ -1652,6 +2078,42 @@ export function CanvasPageWithOverlay({
               />
             );
           })}
+        </div>
+      )}
+      {canvasRef.current && (lassoMode || hasLassoOverlay) && (
+        <div className="canvas-overlay-layer" aria-hidden="true">
+          {lassoMode && !hasLassoOverlay && renderState === 'ready' && (
+            <div className="canvas-lasso-hint">
+              Draw around any part of the page, then choose an action.
+            </div>
+          )}
+          {activeLassoPath && (
+            <div
+              className="canvas-lasso-overlay"
+              style={{
+                left: `${canvasOffsetLeft}px`,
+                top: `${canvasOffsetTop}px`,
+                width: `${canvasRef.current.clientWidth}px`,
+                height: `${canvasRef.current.clientHeight}px`
+              }}
+            >
+              <svg width="100%" height="100%" viewBox={`0 0 ${canvasRef.current.clientWidth} ${canvasRef.current.clientHeight}`}>
+                <path className="canvas-lasso-overlay__fill" d={activeLassoPath} />
+                <path className="canvas-lasso-overlay__stroke" d={activeLassoPath} />
+              </svg>
+            </div>
+          )}
+          {lassoSelection && activeLassoBounds && (
+            <div
+              className="canvas-lasso-bounds"
+              style={{
+                left: `${canvasOffsetLeft + activeLassoBounds.left}px`,
+                top: `${canvasOffsetTop + activeLassoBounds.top}px`,
+                width: `${activeLassoBounds.width}px`,
+                height: `${activeLassoBounds.height}px`
+              }}
+            />
+          )}
         </div>
       )}
       {canvasRef.current && (highlightBlocks.length > 0 || tableOverlay) && (
@@ -1887,9 +2349,27 @@ export function CanvasPageWithOverlay({
           pageNumber={pageNumber}
           bounds={chatState.bounds}
           onAnnotationChange={handleAnnotationChange}
+          initialMessages={chatState.initialMessages}
           enableWebSearch={enableWebSearch}
         />
       ))}
+
+      {lassoSelection && (
+        <LassoActionMenu
+          previewDataUri={lassoSelection.previewDataUri}
+          position={lassoSelection.position}
+          activeAction={lassoActionState?.action ?? null}
+          error={lassoActionState?.error ?? null}
+          onExplain={() => {
+            void handleLassoExplain();
+          }}
+          onMakeInteractive={() => {
+            void handleLassoInteractiveWidget();
+          }}
+          onReselect={handleRestartLasso}
+          onCancel={handleCancelLassoSelection}
+        />
+      )}
 
       {/* Annotation markers for saved chats, images, and widgets */}
       {pageAnnotations.length > 0 && canvasRef.current && (
@@ -2049,6 +2529,19 @@ export function CanvasPageWithOverlay({
       )}
     </div>
   );
+}
+
+function parseDataUri(dataUri: string): { mimeType: string; base64Data: string } {
+  const [header, base64Data] = dataUri.split(',', 2);
+  if (!header || !base64Data) {
+    throw new Error('Selection screenshot data was invalid.');
+  }
+
+  const mimeMatch = header.match(/^data:([^;]+);base64$/i);
+  return {
+    mimeType: mimeMatch?.[1] ?? 'image/png',
+    base64Data
+  };
 }
 
 function summarizeForLog(value: string, maxLength = 120): string {
