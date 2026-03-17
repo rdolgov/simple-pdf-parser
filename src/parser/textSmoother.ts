@@ -117,7 +117,7 @@ export function mergeTextRuns(
         : 0;
       if (last.glyphSpans) {
         if (insertedSpaceAdvance > 0) {
-          last.glyphSpans.push({ text: ' ', advance: insertedSpaceAdvance });
+          last.glyphSpans.push({ text: ' ', advance: insertedSpaceAdvance, synthetic: true });
         }
         last.glyphSpans = [...last.glyphSpans, ...current.glyphSpans.map(cloneGlyphSpan)];
       } else {

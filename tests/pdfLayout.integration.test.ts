@@ -472,6 +472,83 @@ describe('PDF layout integration', () => {
     expect(context.operations.some((operation) => operation.startsWith('bezierCurveTo:'))).toBe(true);
   });
 
+  it('renders the MacKay contents page without split intra-word spacing in chapter titles', () => {
+    const document = loadMacKayDocument();
+    const page = document.getPage(9);
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    expect(page).toBeDefined();
+
+    const pageText = page!.textItems.map((item) => item.text).join(' ');
+    expect(pageText).toContain('Exact Marginalization');
+    expect(pageText).toContain('Codes for Integers');
+    expect(pageText).toContain("Model Comparison and Occam's Razor");
+    expect(pageText).toContain('Bayesian Inference and Sampling Theory');
+    expect(pageText).toContain('Random Inference Topics');
+    expect(pageText).toContain('Neural networks');
+    expect(pageText).toContain('The Single Neuron as a Classifier');
+    expect(pageText).toContain('Digital Fountain Codes');
+    expect(pageText).not.toContain('Marg in a lizati on');
+    expect(pageText).not.toContain('Codes for In tegers');
+    expect(pageText).not.toContain('Model Compar is on');
+    expect(pageText).not.toContain('Bayes i an');
+    expect(pageText).not.toContain('To pics');
+    expect(pageText).not.toContain('SingleNeur on');
+    expect(pageText).not.toContain('Founta in');
+
+    renderer.render(canvas, document, 9);
+
+    expect(context.textDraws.some((draw) => draw.text.includes('Marg in a lizati on'))).toBe(false);
+    expect(context.textDraws.some((draw) => draw.text.includes('Codes for In tegers'))).toBe(false);
+    expect(context.textDraws.some((draw) => draw.text.includes('Model Compar is on'))).toBe(false);
+    expect(context.textDraws.some((draw) => draw.text.includes('Bayes i an'))).toBe(false);
+    expect(context.textDraws.some((draw) => draw.text.includes('To pics'))).toBe(false);
+    expect(context.textDraws.some((draw) => draw.text.includes('SingleNeur on'))).toBe(false);
+    expect(context.textDraws.some((draw) => draw.text.includes('Founta in'))).toBe(false);
+  });
+
+  it('renders the MacKay roadmap pages without split contents-page carryover words', () => {
+    const document = loadMacKayDocument();
+    const page3 = document.getPage(3);
+    const page4 = document.getPage(4);
+    const page5 = document.getPage(5);
+    const page6 = document.getPage(6);
+    const page7 = document.getPage(7);
+
+    expect(page3).toBeDefined();
+    expect(page4).toBeDefined();
+    expect(page5).toBeDefined();
+    expect(page6).toBeDefined();
+    expect(page7).toBeDefined();
+
+    const page3Text = page3!.textItems.map((item) => item.text).join(' ');
+    const page4Text = page4!.textItems.map((item) => item.text).join(' ');
+    const page5Text = page5!.textItems.map((item) => item.text).join(' ');
+    const page6Text = page6!.textItems.map((item) => item.text).join(' ');
+    const page7Text = page7!.textItems.map((item) => item.text).join(' ');
+
+    expect(page3Text).toContain('Introduction to Information Theory');
+    expect(page3Text).toContain('Further Topics in Information Theory');
+    expect(page4Text).toContain('Random Inference Topics');
+    expect(page4Text).toContain('The Single Neuron as a Classifier');
+    expect(page4Text).toContain('Digital Fountain Codes');
+    expect(page5Text).toContain('Bayesian data modelling');
+    expect(page5Text).toContain('I teach in Cambridge');
+    expect(page5Text).toContain('pattern recognition');
+    expect(page6Text).toContain('Random Inference Topics');
+    expect(page7Text).toContain('Further Topics in Information Theory');
+
+    expect(page3Text).not.toContain('I for mati on');
+    expect(page4Text).not.toContain('To pics');
+    expect(page4Text).not.toContain('SingleNeur on');
+    expect(page5Text).not.toContain('Bayes i and at a');
+    expect(page5Text).not.toContain('I each');
+    expect(page6Text).not.toContain('NeuralNetworks');
+    expect(page7Text).not.toContain('Founta in');
+  });
+
   it('renders repaired MacKay lexical boundaries on additional body pages', () => {
     const document = loadMacKayDocument();
     const page150 = document.getPage(150);

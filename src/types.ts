@@ -55,6 +55,8 @@ export interface PDFGlyphSpan {
   text: string;
   advance: number;
   glyphCode?: number;
+  /** True when the span was synthesized during text-run smoothing rather than decoded from the PDF. */
+  synthetic?: boolean;
 }
 
 export interface PDFEmbeddedFontDescriptor {
