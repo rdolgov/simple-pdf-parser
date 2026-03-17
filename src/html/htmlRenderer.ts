@@ -11,6 +11,10 @@ import type {
   HtmlTableRow,
   HtmlTextSpan
 } from './htmlLayoutConverter.js';
+import {
+  buildLinkifiedTextFromLines,
+  parseLinkifiedTextSegments
+} from './linkifiedTextSegments.js';
 
 export interface HtmlRendererOptions {
   scale?: number;
@@ -171,10 +175,11 @@ function createParagraphElement(
   doc: Document
 ): HTMLElement {
   const element = doc.createElement('p');
-  element.textContent = block.lines.map((line) => line.text.trimEnd()).join('\n');
+  appendLinkifiedText(element, buildLinkifiedTextFromLines(block.lines), doc);
   element.style.margin = '0';
   element.style.whiteSpace = 'pre-wrap';
   element.style.wordBreak = 'break-word';
+  element.style.overflowWrap = 'anywhere';
   element.style.color = '#111827';
   applyTextStyles(element, block.lines, block.spans, config);
   applyBlockClasses(element, block, config);
@@ -191,10 +196,11 @@ function createHeadingElement(
 ): HTMLElement {
   const level = Math.min(Math.max(block.level, 1), 6);
   const element = doc.createElement(`h${level}`) as HTMLHeadingElement;
-  element.textContent = block.lines.map((line) => line.text.trim()).join(' ');
+  appendLinkifiedText(element, buildLinkifiedTextFromLines(block.lines, ' '), doc);
   element.style.margin = '0';
   element.style.whiteSpace = 'pre-wrap';
   element.style.wordBreak = 'break-word';
+  element.style.overflowWrap = 'anywhere';
   element.style.fontWeight = '600';
   element.style.color = '#0f172a';
   applyTextStyles(element, block.lines, block.spans, config, 1.05);
@@ -238,11 +244,13 @@ function createTableElement(
 
     row.cells.forEach((cell, columnIndex) => {
       const cellElement = doc.createElement('td');
-      cellElement.textContent = cell.text.trim();
+      appendLinkifiedText(cellElement, cell.text.trim(), doc);
       cellElement.style.border = '1px solid rgba(148, 163, 184, 0.6)';
       cellElement.style.padding = `${Math.max(2 * config.scale, 2)}px`;
       cellElement.style.verticalAlign = 'top';
       cellElement.style.whiteSpace = 'pre-wrap';
+      cellElement.style.wordBreak = 'break-word';
+      cellElement.style.overflowWrap = 'anywhere';
       applyCellTypography(cellElement, cell, config);
       if (config.positioning === 'absolute' && columnWidths[columnIndex]) {
         cellElement.style.width = `${columnWidths[columnIndex] * config.scale}px`;
@@ -257,6 +265,36 @@ function createTableElement(
   applyBlockBounds(table, block.bounds, page, config);
   addDebugAttributes(table, block, config);
   return table;
+}
+
+function appendLinkifiedText(target: HTMLElement, text: string, doc: Document): void {
+  const segments = parseLinkifiedTextSegments(text);
+
+  if (segments.length === 0) {
+    target.textContent = text;
+    return;
+  }
+
+  target.replaceChildren();
+  segments.forEach((segment) => {
+    if (segment.type === 'text') {
+      target.append(doc.createTextNode(segment.content));
+      return;
+    }
+
+    const anchor = doc.createElement('a');
+    anchor.href = segment.href;
+    anchor.textContent = segment.content;
+    anchor.target = '_blank';
+    anchor.rel = 'noreferrer noopener';
+    anchor.style.color = '#1d4ed8';
+    anchor.style.textDecoration = 'underline';
+    anchor.style.textDecorationThickness = '0.08em';
+    anchor.style.whiteSpace = 'inherit';
+    anchor.style.wordBreak = 'break-word';
+    anchor.style.overflowWrap = 'anywhere';
+    target.append(anchor);
+  });
 }
 
 function createImageElement(

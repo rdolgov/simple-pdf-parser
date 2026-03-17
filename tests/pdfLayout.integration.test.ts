@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { convertLayoutToHtml } from '../src/html/htmlLayoutConverter.js';
+import {
+  buildLinkifiedTextFromLines,
+  parseLinkifiedTextSegments
+} from '../src/html/linkifiedTextSegments.js';
 import { PDFDocument } from '../src/pdfDocument.js';
 import { CanvasRenderer } from '../src/viewer/canvasRenderer.js';
 import type { PDFTextItem } from '../src/types.js';
@@ -227,6 +231,37 @@ describe('PDF layout integration', () => {
 
     expect(context.textDraws.some((draw) => draw.text === '7 Conclusion')).toBe(true);
     expect(context.textDraws.some((draw) => draw.text.includes('Conclus i on'))).toBe(false);
+  });
+
+  it('keeps the wrapped tensor2tensor GitHub URL contiguous for linkification', () => {
+    const document = loadAttentionPaperDocument();
+    const layout = convertLayoutToHtml({ pages: document.pages, fontResources: document.getFontResources() });
+    const page = layout.pages.find((entry) => entry.number === 9);
+
+    expect(page).toBeDefined();
+
+    const block = page!.content.find(
+      (entry) =>
+        (entry.type === 'paragraph' || entry.type === 'heading') &&
+        entry.text.includes('The code we used to train and evaluate our models is available at')
+    );
+
+    expect(block).toBeDefined();
+    expect(block?.type).toBe('paragraph');
+
+    const linkifiedText = buildLinkifiedTextFromLines(block!.lines);
+    const urlSegments = parseLinkifiedTextSegments(linkifiedText).filter((segment) => segment.type === 'url');
+
+    expect(linkifiedText).toContain('https://github.com/tensorflow/tensor2tensor.');
+    expect(urlSegments).toEqual(
+      expect.arrayContaining([
+        {
+          type: 'url',
+          content: 'https://github.com/tensorflow/tensor2tensor',
+          href: 'https://github.com/tensorflow/tensor2tensor'
+        }
+      ])
+    );
   });
 
   it('repairs suspicious intra-word spacing across the NIPS paper body and references', () => {
