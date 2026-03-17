@@ -311,6 +311,11 @@ describe('PDF layout integration', () => {
   it('repairs suspicious intra-word spacing across the NIPS paper body and references', () => {
     const document = loadAttentionPaperDocument();
     const expectations = [
+      { page: 1, contains: 'Equal contribution. Listing order is random.' },
+      { page: 1, contains: 'Jakob proposed replacing RNNs with self-attention and started' },
+      { page: 1, contains: 'replacing our earlier codebase' },
+      { page: 1, contains: 'Work performed while at Google Brain.' },
+      { page: 1, contains: 'Work performed while at Google Research.' },
       { page: 2, contains: 'including reading comprehension' },
       { page: 2, contains: 'sequential nature precludes parallelization within training examples' },
       { page: 2, contains: 'a recurrent network' },
@@ -353,6 +358,11 @@ describe('PDF layout integration', () => {
       { page: 11, contains: 'inception architecture' }
     ];
     const regressions = [
+      { page: 1, excludes: 'Equalcontr i but i on' },
+      { page: 1, excludes: 'Listingorder' },
+      { page: 1, excludes: 'JakobproposedreplacingRNNs' },
+      { page: 1, excludes: 'earliercodebase' },
+      { page: 1, excludes: 'Workperformed' },
       { page: 7, excludes: 'Regul arizati on' },
       { page: 8, excludes: 'at tenti on' },
       { page: 10, excludes: 'Reco gniti on' },

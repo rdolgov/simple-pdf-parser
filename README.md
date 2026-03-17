@@ -99,6 +99,19 @@ Server environment variables:
 - `GEMINI_API_KEY` configures the upstream Gemini key used by the proxy
 - `GEMINI_BASE_URL` defaults to `https://generativelanguage.googleapis.com`
 - `LLM_PROXY_CORS_ORIGIN` defaults to `*`
+- `LLM_PROXY_CACHE_ENABLED` defaults to `true`
+- `LLM_PROXY_CACHE_DIR` defaults to `.cache/llm-proxy`
+- `LLM_PROXY_CACHE_TTL_MS` is optional; unset means entries do not expire automatically
+- `LLM_PROXY_CACHE_MAX_BODY_BYTES` defaults to `20971520` (20 MB per cached response)
+
+The proxy now persists successful upstream responses on disk and reuses them when the same request is issued again. It first computes a SHA-256 digest of the POST body, then derives the final cache key from provider, upstream route, normalized query params, request headers relevant to content negotiation, and that body digest. Each proxied response also includes:
+
+- `X-LLM-Proxy-Cache: HIT|MISS|BYPASS`
+- `X-LLM-Proxy-Cache-Key: <sha256>`
+- `X-LLM-Proxy-Body-Hash: <sha256>`
+- `X-LLM-Proxy-Cached-At: <iso timestamp>` on cache hits
+
+For manual refresh/debugging, send `X-LLM-Proxy-Cache: bypass` or append `?cache=bypass` to skip the local cache for one request.
 
 Example:
 

@@ -15,3 +15,4 @@ coverage/
 .DS_Store
 .env.local
 .idea/
+.cache/llm-proxy/

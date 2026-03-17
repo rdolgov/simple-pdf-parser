@@ -724,6 +724,28 @@ ET
     expect(conclusionPage!.textItems.some((item) => item.text === '7 Conclusion')).toBe(true);
     expect(conclusionPage!.textItems.some((item) => item.text.includes('Conclus i on'))).toBe(false);
   });
+
+  it('repairs merged author-note prose on the NIPS title page', () => {
+    const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const firstPage = document.getPage(1);
+
+    expect(firstPage).toBeDefined();
+
+    const pageText = firstPage!.textItems.map((item) => item.text).join(' ');
+    expect(pageText).toContain('Equal contribution. Listing order is random.');
+    expect(pageText).toContain('Jakob proposed replacing RNNs with self-attention and started');
+    expect(pageText).toContain('replacing our earlier codebase');
+    expect(pageText).toContain('Work performed while at Google Brain.');
+    expect(pageText).toContain('Work performed while at Google Research.');
+
+    expect(pageText).not.toContain('Equalcontr i but i on');
+    expect(pageText).not.toContain('Listingorder');
+    expect(pageText).not.toContain('JakobproposedreplacingRNNs');
+    expect(pageText).not.toContain('earliercodebase');
+    expect(pageText).not.toContain('Workperformed');
+  });
 });
 
 function readPixel(

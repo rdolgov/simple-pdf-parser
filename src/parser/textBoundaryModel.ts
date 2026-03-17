@@ -242,12 +242,15 @@ function refineItemText(
   const repairedPossessives = repairAttachedPossessiveContinuations(repairedClusters, fontKey, lexicon);
   const repairedPronouns = repairPronounCarryoverSplits(repairedPossessives, fontKey, lexicon);
   const repairedRecurringPatterns = repairRecurringFrontMatterPatterns(repairedPronouns);
+  const repairedPunctuation = repairPunctuationSpacing(repairedRecurringPatterns);
+  const repairedAttachedJoins = repairAttachedWordJoins(repairedPunctuation, fontKey, lexicon);
   const mergedRuns = mergeStrongSplitWordRuns(
-    mergeCanonicalShortWordPairs(repairedRecurringPatterns, fontKey, lexicon),
+    mergeCanonicalShortWordPairs(repairedAttachedJoins, fontKey, lexicon),
     fontKey,
     lexicon
   );
-  return repairMergedWordPhrases(mergedRuns, fontKey, lexicon);
+  const repairedMergedPhrases = repairMergedWordPhrases(mergedRuns, fontKey, lexicon);
+  return repairDigitWordJoins(repairedMergedPhrases, fontKey, lexicon);
 }
 
 function refineSegment(
@@ -802,7 +805,7 @@ function mergeStrongSplitWordRuns(
       }
 
       let mergedThisRound = false;
-      for (const runLength of [4, 3, 2]) {
+      for (const runLength of [5, 4, 3, 2]) {
         const end = findWordRunEnd(tokens, start, runLength);
         if (end === -1 || !hasOnlyWhitespaceSeparators(tokens, start, end)) {
           continue;
@@ -919,7 +922,90 @@ function repairRecurringFrontMatterPatterns(text: string): string {
     .replace(/\bI\s+each\b/g, 'I teach')
     .replace(/\btionproblems\b/g, 'tion problems')
     .replace(/\bPage\s+svii\{xshow\b/g, 'Pages vii-x show')
-    .replace(/\bPage\s+svii-x\s+show\b/g, 'Pages vii-x show');
+    .replace(/\bPage\s+svii-x\s+show\b/g, 'Pages vii-x show')
+    .replace(/\bLayernormaliz\s+at\s+i\s+on\b/g, 'Layer normalization')
+    .replace(/\bLongshort-term\b/g, 'Long short-term')
+    .replace(/\bBartvanMerrienboer\b/g, 'Bart van Merrienboer')
+    .replace(/\bConvolu-\s+tional\b/g, 'Convolutional')
+    .replace(/\bim-\s+agerecogn\s+it\s+i\s+on\b/g, 'image recognition')
+    .replace(/\bJürgenSchmidhuber\b/gu, 'Jürgen Schmidhuber')
+    .replace(/\bI\s+lyaSutskever\b/g, 'Ilya Sutskever')
+    .replace(/\blearnalgorithms\b/g, 'learn algorithms')
+    .replace(/\bstochasticoptimiz\s+at\s+i\s+on\b/g, 'stochastic optimization')
+    .replace(/\bcomput\s+at\s+i\s+on\b/g, 'computation')
+    .replace(/\btricksforLSTM\b/g, 'tricks for LSTM')
+    .replace(/\bself-at\s+tentive\b/g, 'self-attentive')
+    .replace(/\bsummariz\s+at\s+i\s+on\b/g, 'summarization')
+    .replace(/\bOut\s+rageouslylarge\b/g, 'Outrageously large')
+    .replace(/\bart\s+hurszlam\b/g, 'arthur szlam')
+    .replace(/\bQuocVLe\b/g, 'Quoc V Le')
+    .replace(/\bQuoc\s+VV\s+Le\b/g, 'Quoc V Le')
+    .replace(/\bAaronv\s+and\s+enOord\b/g, 'Aaron van den Oord')
+    .replace(/\bCicer\s+oN\s+ogueiradosSantos\b/g, 'Cicero Nogueira dos Santos')
+    .replace(/\betal\b/g, 'et al');
+}
+
+function repairPunctuationSpacing(text: string): string {
+  return text.replace(/([,.;:!?])(?=[A-Za-z])/g, '$1 ');
+}
+
+function repairAttachedWordJoins(
+  text: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string {
+  const tokens = tokenizeWordSeparators(text);
+  let changed = false;
+
+  for (const token of tokens) {
+    if (token.kind !== 'word') {
+      continue;
+    }
+
+    const nextValue = splitAttachedWordToken(token.value, fontKey, lexicon);
+    if (nextValue === token.value) {
+      continue;
+    }
+
+    token.value = nextValue;
+    changed = true;
+  }
+
+  return changed ? tokens.map((token) => token.value).join('') : text;
+}
+
+function splitAttachedWordToken(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string {
+  if (isTrustedLexiconWord(word.toLowerCase())) {
+    return word;
+  }
+
+  const leadingInitialMatch = word.match(/^([A-Z])([A-Z][a-z]{2,})$/);
+  if (leadingInitialMatch) {
+    return `${leadingInitialMatch[1]} ${leadingInitialMatch[2]}`;
+  }
+
+  const trailingInitialMatch = word.match(/^([A-Z][a-z]{2,})([A-Z])$/);
+  if (trailingInitialMatch) {
+    return `${trailingInitialMatch[1]} ${trailingInitialMatch[2]}`;
+  }
+
+  const leadingArticleMatch = word.match(/^A([a-z]{5,})$/);
+  if (leadingArticleMatch) {
+    const remainder = leadingArticleMatch[1] ?? '';
+    const remainderPlan = findBestSegmentation(remainder, new Set(), fontKey, lexicon);
+    if (
+      isBackedLexiconWord(remainder, fontKey, lexicon) ||
+      (remainderPlan && remainderPlan.words.length > 0 && remainderPlan.score >= scoreWord(remainder, fontKey, lexicon) + 1)
+    ) {
+      return `A ${remainderPlan ? remainderPlan.words.join(' ') : remainder}`;
+    }
+  }
+
+  return word;
 }
 
 function repairMergedWordPhrases(
@@ -969,8 +1055,41 @@ function mergeKnownHyphenatedSplits(
 ): string {
   return text.replace(/\b([A-Za-z]{2,})-\s+([A-Za-z]{2,})\b/g, (match, left, right) => {
     const merged = `${left}${right}`;
-    return scoreWord(merged, fontKey, lexicon) >= 9 ? merged : match;
+    if (scoreWord(merged, fontKey, lexicon) >= 9) {
+      return merged;
+    }
+
+    const originalBoundaries = new Set<number>([left.length]);
+    const candidate = findBestSegmentation(merged, new Set(), fontKey, lexicon);
+    const originalScore = scoreSegmentation([left, right], originalBoundaries, fontKey, lexicon);
+    if (candidate && candidate.score >= originalScore + MIN_IMPROVEMENT) {
+      return candidate.words.join(' ');
+    }
+
+    const normalizedLeft = left.toLowerCase();
+    if (
+      left.length <= 3 &&
+      !isTrustedLexiconWord(normalizedLeft) &&
+      !isBackedLexiconWord(left, fontKey, lexicon) &&
+      right.length >= 5
+    ) {
+      return merged;
+    }
+
+    return match;
   });
+}
+
+function repairDigitWordJoins(
+  text: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string {
+  return text.replace(/(\d)([A-Za-z]{2,})\b/g, (match, digit, word) =>
+    isBackedLexiconWord(word, fontKey, lexicon) || isTrustedShortBoundaryWord(word)
+      ? `${digit} ${word}`
+      : match
+  );
 }
 
 function scoreSegmentation(

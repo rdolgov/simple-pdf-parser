@@ -16,6 +16,11 @@ llmProxy:
   port: 8787
   authToken: "OPTIONAL_SHARED_PROXY_TOKEN"
   corsOrigin: "*"
+  cache:
+    enabled: true
+    dir: ".cache/llm-proxy"
+    ttlMs: 604800000
+    maxBodyBytes: 20971520
   openAI:
     apiKey: "YOUR_OPENAI_API_KEY"
     baseUrl: "https://api.openai.com/v1"
