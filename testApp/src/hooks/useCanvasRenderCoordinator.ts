@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocument } from 'pdf-layout-parser';
 
-import type { ViewMode } from '../types';
+import type { BackgroundRenderProgress, CanvasPageRenderState, ViewMode } from '../types';
 import {
   computeCanvasDisplaySize,
   MAIN_THREAD_PAGE_RENDER_COUNT,
   supportsBackgroundCanvasRendering
 } from '../utils/backgroundCanvasRendering';
+import { buildViewportPriorityPageOrder } from '../utils/backgroundPageScheduling';
 import type { PageRenderWorkerRequest, PageRenderWorkerResponse } from '../workers/pageRenderProtocol';
 
 type BackgroundStatus = 'disabled' | 'loading' | 'ready';
+
+const BACKGROUND_PAGE_OBSERVER_ROOT_MARGIN = '1200px 0px 1200px 0px';
 
 export interface UseCanvasRenderCoordinatorOptions {
   document: PDFDocument | null;
@@ -23,7 +26,9 @@ export interface UseCanvasRenderCoordinatorOptions {
 export interface UseCanvasRenderCoordinatorResult {
   canvasRefs: React.MutableRefObject<Map<number, HTMLCanvasElement>>;
   canvasRevision: number;
+  backgroundRenderProgress: BackgroundRenderProgress;
   getCanvasRef: (pageNumber: number) => (element: HTMLCanvasElement | null) => void;
+  getPageRenderState: (pageNumber: number) => CanvasPageRenderState;
   shouldRenderPageOnMainThread: (pageNumber: number) => boolean;
 }
 
@@ -38,8 +43,12 @@ export function useCanvasRenderCoordinator({
   const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
   const canvasRefCallbacks = useRef<Map<number, (element: HTMLCanvasElement | null) => void>>(new Map());
   const backgroundCanvasElements = useRef<Map<number, HTMLCanvasElement>>(new Map());
+  const visibleBackgroundPages = useRef<Map<number, number>>(new Map());
   const transferredPages = useRef<Set<number>>(new Set());
   const workerRef = useRef<Worker | null>(null);
+  const intersectionObserverRef = useRef<IntersectionObserver | null>(null);
+  const lastPrioritySignatureRef = useRef('');
+  const lastWorkerZoomRef = useRef<number | null>(null);
   const activeGeneration = useRef(0);
   const readyGeneration = useRef<number | null>(null);
   const onRenderErrorRef = useRef(onRenderError);
@@ -47,6 +56,7 @@ export function useCanvasRenderCoordinator({
   const shouldUseBackgroundRenderingRef = useRef(false);
   const [canvasRevision, setCanvasRevision] = useState(0);
   const [backgroundStatus, setBackgroundStatus] = useState<BackgroundStatus>('disabled');
+  const [pageRenderStates, setPageRenderStates] = useState<Record<number, CanvasPageRenderState>>({});
 
   useEffect(() => {
     onRenderErrorRef.current = onRenderError;
@@ -63,6 +73,8 @@ export function useCanvasRenderCoordinator({
     });
     return sizes;
   }, [document]);
+
+  const totalPages = document?.pages.length ?? 0;
 
   const shouldUseBackgroundRendering = useMemo(() => {
     if (!document || !pdfData) {
@@ -83,6 +95,31 @@ export function useCanvasRenderCoordinator({
     [shouldUseBackgroundRendering]
   );
 
+  const setBackgroundPageRenderState = useCallback(
+    (pageNumber: number, nextState: CanvasPageRenderState | null) => {
+      setPageRenderStates((currentStates) => {
+        if (nextState === null) {
+          if (!(pageNumber in currentStates)) {
+            return currentStates;
+          }
+          const nextStates = { ...currentStates };
+          delete nextStates[pageNumber];
+          return nextStates;
+        }
+
+        if (currentStates[pageNumber] === nextState) {
+          return currentStates;
+        }
+
+        return {
+          ...currentStates,
+          [pageNumber]: nextState
+        };
+      });
+    },
+    []
+  );
+
   const applyCanvasDisplaySize = useCallback(
     (pageNumber: number, element: HTMLCanvasElement) => {
       const size = pageSizes.get(pageNumber);
@@ -100,9 +137,44 @@ export function useCanvasRenderCoordinator({
     workerRef.current?.postMessage(message, transfer);
   }, []);
 
+  const syncPriorityPages = useCallback(() => {
+    if (!shouldUseBackgroundRenderingRef.current || backgroundStatusRef.current !== 'ready') {
+      return;
+    }
+
+    const priorityPages = buildViewportPriorityPageOrder(visibleBackgroundPages.current.keys(), totalPages);
+    const signature = priorityPages.join(',');
+    if (signature === lastPrioritySignatureRef.current) {
+      return;
+    }
+
+    lastPrioritySignatureRef.current = signature;
+    postWorkerMessage({
+      type: 'set-priority-pages',
+      generation: activeGeneration.current,
+      pageNumbers: priorityPages
+    });
+  }, [postWorkerMessage, totalPages]);
+
+  const observeBackgroundCanvas = useCallback(
+    (pageNumber: number, element: HTMLCanvasElement | null) => {
+      const observer = intersectionObserverRef.current;
+
+      if (!element) {
+        visibleBackgroundPages.current.delete(pageNumber);
+        syncPriorityPages();
+        return;
+      }
+
+      observer?.observe(element);
+    },
+    [syncPriorityPages]
+  );
+
   const attachBackgroundCanvas = useCallback(
     (pageNumber: number, element: HTMLCanvasElement) => {
       if (readyGeneration.current !== activeGeneration.current || !shouldUseBackgroundRendering) {
+        setBackgroundPageRenderState(pageNumber, 'preparing');
         return;
       }
       if (transferredPages.current.has(pageNumber)) {
@@ -112,6 +184,7 @@ export function useCanvasRenderCoordinator({
       try {
         const canvas = element.transferControlToOffscreen();
         transferredPages.current.add(pageNumber);
+        setBackgroundPageRenderState(pageNumber, 'queued');
         postWorkerMessage(
           {
             type: 'attach-canvas',
@@ -121,13 +194,14 @@ export function useCanvasRenderCoordinator({
           },
           [canvas]
         );
+        syncPriorityPages();
       } catch (error) {
         onRenderErrorRef.current(
           error instanceof Error ? error.message : 'Unable to start background page rendering.'
         );
       }
     },
-    [postWorkerMessage, shouldUseBackgroundRendering]
+    [postWorkerMessage, setBackgroundPageRenderState, shouldUseBackgroundRendering, syncPriorityPages]
   );
 
   useEffect(() => {
@@ -135,6 +209,69 @@ export function useCanvasRenderCoordinator({
       applyCanvasDisplaySize(pageNumber, element);
     });
   }, [applyCanvasDisplaySize]);
+
+  useEffect(() => {
+    if (!shouldUseBackgroundRendering) {
+      intersectionObserverRef.current?.disconnect();
+      intersectionObserverRef.current = null;
+      visibleBackgroundPages.current.clear();
+      lastPrioritySignatureRef.current = '';
+      return;
+    }
+
+    if (typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let didChange = false;
+
+        entries.forEach((entry) => {
+          const pageNumber = Number(entry.target.getAttribute('data-page-number'));
+          if (!Number.isFinite(pageNumber) || pageNumber <= MAIN_THREAD_PAGE_RENDER_COUNT) {
+            return;
+          }
+
+          if (entry.isIntersecting) {
+            const nextRatio = entry.intersectionRatio;
+            if (visibleBackgroundPages.current.get(pageNumber) !== nextRatio) {
+              visibleBackgroundPages.current.set(pageNumber, nextRatio);
+              didChange = true;
+            }
+            return;
+          }
+
+          if (visibleBackgroundPages.current.delete(pageNumber)) {
+            didChange = true;
+          }
+        });
+
+        if (didChange) {
+          syncPriorityPages();
+        }
+      },
+      {
+        root: null,
+        rootMargin: BACKGROUND_PAGE_OBSERVER_ROOT_MARGIN,
+        threshold: [0, 0.01, 0.25, 0.5, 0.75, 1]
+      }
+    );
+
+    intersectionObserverRef.current = observer;
+    backgroundCanvasElements.current.forEach((element) => {
+      observer.observe(element);
+    });
+
+    return () => {
+      observer.disconnect();
+      if (intersectionObserverRef.current === observer) {
+        intersectionObserverRef.current = null;
+      }
+      visibleBackgroundPages.current.clear();
+      lastPrioritySignatureRef.current = '';
+    };
+  }, [shouldUseBackgroundRendering, syncPriorityPages]);
 
   useEffect(() => {
     if (!shouldUseBackgroundRendering || !pdfData) {
@@ -148,6 +285,10 @@ export function useCanvasRenderCoordinator({
       readyGeneration.current = null;
       activeGeneration.current += 1;
       transferredPages.current.clear();
+      lastPrioritySignatureRef.current = '';
+      lastWorkerZoomRef.current = null;
+      visibleBackgroundPages.current.clear();
+      setPageRenderStates({});
       if (hadActiveResources) {
         setBackgroundStatus('disabled');
         setCanvasRevision((revision) => revision + 1);
@@ -159,7 +300,17 @@ export function useCanvasRenderCoordinator({
     activeGeneration.current = generation;
     readyGeneration.current = null;
     transferredPages.current.clear();
+    lastPrioritySignatureRef.current = '';
+    lastWorkerZoomRef.current = zoom;
+    visibleBackgroundPages.current.clear();
     setBackgroundStatus('loading');
+    setPageRenderStates(() => {
+      const nextStates: Record<number, CanvasPageRenderState> = {};
+      backgroundCanvasElements.current.forEach((_element, pageNumber) => {
+        nextStates[pageNumber] = 'preparing';
+      });
+      return nextStates;
+    });
 
     const worker = new Worker(new URL('../workers/pageRenderWorker.ts', import.meta.url), {
       type: 'module'
@@ -178,6 +329,12 @@ export function useCanvasRenderCoordinator({
         backgroundCanvasElements.current.forEach((element, pageNumber) => {
           attachBackgroundCanvas(pageNumber, element);
         });
+        syncPriorityPages();
+        return;
+      }
+
+      if (message.type === 'page-render-status') {
+        setBackgroundPageRenderState(pageNumberFromMessage(message), message.status);
         return;
       }
 
@@ -214,13 +371,40 @@ export function useCanvasRenderCoordinator({
         workerRef.current = null;
       }
     };
-  }, [attachBackgroundCanvas, devicePixelRatio, pdfData, postWorkerMessage, shouldUseBackgroundRendering, zoom]);
+  }, [
+    attachBackgroundCanvas,
+    devicePixelRatio,
+    pdfData,
+    postWorkerMessage,
+    setBackgroundPageRenderState,
+    shouldUseBackgroundRendering,
+    syncPriorityPages
+  ]);
 
   useEffect(() => {
     if (backgroundStatus !== 'ready' || !shouldUseBackgroundRendering) {
       return;
     }
 
+    if (lastWorkerZoomRef.current === zoom) {
+      return;
+    }
+
+    setPageRenderStates((currentStates) => {
+      const nextStates: Record<number, CanvasPageRenderState> = {};
+      backgroundCanvasElements.current.forEach((_element, pageNumber) => {
+        nextStates[pageNumber] = 'queued';
+      });
+
+      const currentEntries = Object.entries(currentStates);
+      const isUnchanged =
+        currentEntries.length === Object.keys(nextStates).length &&
+        currentEntries.every(([pageNumber, state]) => nextStates[Number(pageNumber)] === state);
+
+      return isUnchanged ? currentStates : nextStates;
+    });
+
+    lastWorkerZoomRef.current = zoom;
     postWorkerMessage({
       type: 'update-zoom',
       generation: activeGeneration.current,
@@ -231,6 +415,7 @@ export function useCanvasRenderCoordinator({
   useEffect(() => {
     if (!shouldUseBackgroundRendering) {
       backgroundCanvasElements.current.clear();
+      setPageRenderStates({});
       return;
     }
 
@@ -240,9 +425,10 @@ export function useCanvasRenderCoordinator({
       }
       backgroundCanvasElements.current.set(pageNumber, element);
       applyCanvasDisplaySize(pageNumber, element);
+      observeBackgroundCanvas(pageNumber, element);
       attachBackgroundCanvas(pageNumber, element);
     });
-  }, [applyCanvasDisplaySize, attachBackgroundCanvas, shouldUseBackgroundRendering]);
+  }, [applyCanvasDisplaySize, attachBackgroundCanvas, observeBackgroundCanvas, shouldUseBackgroundRendering]);
 
   const getCanvasRef = useCallback(
     (pageNumber: number) => {
@@ -254,6 +440,7 @@ export function useCanvasRenderCoordinator({
       const callback = (element: HTMLCanvasElement | null) => {
         if (element) {
           canvasRefs.current.set(pageNumber, element);
+          element.dataset.pageNumber = String(pageNumber);
         } else {
           canvasRefs.current.delete(pageNumber);
         }
@@ -261,10 +448,21 @@ export function useCanvasRenderCoordinator({
         if (shouldUseBackgroundRenderingRef.current && pageNumber > MAIN_THREAD_PAGE_RENDER_COUNT) {
           if (element) {
             backgroundCanvasElements.current.set(pageNumber, element);
+            setBackgroundPageRenderState(
+              pageNumber,
+              readyGeneration.current === activeGeneration.current ? 'queued' : 'preparing'
+            );
             applyCanvasDisplaySize(pageNumber, element);
+            observeBackgroundCanvas(pageNumber, element);
             attachBackgroundCanvas(pageNumber, element);
           } else {
+            const existingElement = backgroundCanvasElements.current.get(pageNumber);
+            if (existingElement) {
+              intersectionObserverRef.current?.unobserve(existingElement);
+            }
             backgroundCanvasElements.current.delete(pageNumber);
+            visibleBackgroundPages.current.delete(pageNumber);
+            setBackgroundPageRenderState(pageNumber, null);
             if (transferredPages.current.has(pageNumber)) {
               postWorkerMessage({
                 type: 'detach-canvas',
@@ -273,9 +471,17 @@ export function useCanvasRenderCoordinator({
               });
               transferredPages.current.delete(pageNumber);
             }
+            syncPriorityPages();
           }
         } else {
+          const existingElement = backgroundCanvasElements.current.get(pageNumber);
+          if (existingElement) {
+            intersectionObserverRef.current?.unobserve(existingElement);
+          }
           backgroundCanvasElements.current.delete(pageNumber);
+          visibleBackgroundPages.current.delete(pageNumber);
+          setBackgroundPageRenderState(pageNumber, null);
+          syncPriorityPages();
         }
 
         setCanvasRevision((revision) => revision + 1);
@@ -284,13 +490,67 @@ export function useCanvasRenderCoordinator({
       canvasRefCallbacks.current.set(pageNumber, callback);
       return callback;
     },
-    [applyCanvasDisplaySize, attachBackgroundCanvas, postWorkerMessage]
+    [
+      applyCanvasDisplaySize,
+      attachBackgroundCanvas,
+      observeBackgroundCanvas,
+      postWorkerMessage,
+      setBackgroundPageRenderState,
+      syncPriorityPages
+    ]
   );
+
+  const getPageRenderState = useCallback(
+    (pageNumber: number): CanvasPageRenderState => {
+      if (!shouldUseBackgroundRendering || pageNumber <= MAIN_THREAD_PAGE_RENDER_COUNT) {
+        return 'ready';
+      }
+
+      return pageRenderStates[pageNumber] ?? (backgroundStatus === 'loading' ? 'preparing' : 'queued');
+    },
+    [backgroundStatus, pageRenderStates, shouldUseBackgroundRendering]
+  );
+
+  const backgroundRenderProgress = useMemo<BackgroundRenderProgress>(() => {
+    if (!shouldUseBackgroundRendering) {
+      return {
+        active: false,
+        isPreparing: false,
+        pendingPageCount: 0,
+        renderingPageCount: 0,
+        totalBackgroundPages: 0
+      };
+    }
+
+    const states = Object.values(pageRenderStates);
+    const totalBackgroundPages = states.length;
+    const renderingPageCount = states.filter((state) => state === 'rendering').length;
+    const readyPageCount = states.filter((state) => state === 'ready').length;
+    const pendingPageCount = Math.max(0, totalBackgroundPages - readyPageCount);
+    const isPreparing =
+      backgroundStatus === 'loading' || states.some((state) => state === 'preparing');
+
+    return {
+      active: pendingPageCount > 0 || isPreparing,
+      isPreparing,
+      pendingPageCount,
+      renderingPageCount,
+      totalBackgroundPages
+    };
+  }, [backgroundStatus, pageRenderStates, shouldUseBackgroundRendering]);
 
   return {
     canvasRefs,
     canvasRevision,
+    backgroundRenderProgress,
     getCanvasRef,
+    getPageRenderState,
     shouldRenderPageOnMainThread
   };
+}
+
+function pageNumberFromMessage(
+  message: Extract<PageRenderWorkerResponse, { type: 'page-render-status' }>
+): number {
+  return message.pageNumber;
 }

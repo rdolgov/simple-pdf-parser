@@ -2,6 +2,7 @@
 
 import { CanvasRenderer, PDFDocument } from 'pdf-layout-parser';
 
+import { selectNextPendingBackgroundPage } from '../utils/backgroundPageScheduling';
 import type { PageRenderWorkerRequest, PageRenderWorkerResponse } from './pageRenderProtocol';
 
 const workerScope = self as DedicatedWorkerGlobalScope;
@@ -11,6 +12,7 @@ let documentModel: PDFDocument | null = null;
 let renderer: CanvasRenderer | null = null;
 const attachedCanvases = new Map<number, OffscreenCanvas>();
 const pendingPages = new Set<number>();
+let priorityPages: number[] = [];
 let isRendering = false;
 
 workerScope.onmessage = (event: MessageEvent<PageRenderWorkerRequest>) => {
@@ -44,6 +46,13 @@ workerScope.onmessage = (event: MessageEvent<PageRenderWorkerRequest>) => {
       }
       void flushPendingPages(message.generation);
       break;
+    case 'set-priority-pages':
+      if (message.generation !== activeGeneration) {
+        return;
+      }
+      priorityPages = message.pageNumbers.slice();
+      void flushPendingPages(message.generation);
+      break;
   }
 };
 
@@ -52,6 +61,7 @@ async function handleLoadDocument(
 ): Promise<void> {
   activeGeneration = message.generation;
   pendingPages.clear();
+  priorityPages = [];
 
   try {
     documentModel = PDFDocument.from(message.pdfData);
@@ -59,7 +69,6 @@ async function handleLoadDocument(
       scale: message.zoom,
       devicePixelRatio: message.devicePixelRatio
     });
-    await renderer.prepareDocumentFonts(documentModel);
 
     if (message.generation !== activeGeneration) {
       return;
@@ -95,7 +104,7 @@ async function flushPendingPages(generation: number): Promise<void> {
   isRendering = true;
   try {
     while (pendingPages.size > 0 && generation === activeGeneration) {
-      const nextPageNumber = pendingPages.values().next().value as number | undefined;
+      const nextPageNumber = selectNextPendingBackgroundPage(pendingPages, priorityPages);
       if (nextPageNumber === undefined) {
         break;
       }
@@ -106,7 +115,20 @@ async function flushPendingPages(generation: number): Promise<void> {
         continue;
       }
 
+      postWorkerMessage({
+        type: 'page-render-status',
+        generation,
+        pageNumber: nextPageNumber,
+        status: 'rendering'
+      });
       renderer.render(canvas, documentModel, nextPageNumber);
+      void refinePageFonts(generation, nextPageNumber, canvas);
+      postWorkerMessage({
+        type: 'page-render-status',
+        generation,
+        pageNumber: nextPageNumber,
+        status: 'ready'
+      });
       await yieldToWorkerQueue();
     }
   } catch (error) {
@@ -128,4 +150,31 @@ function yieldToWorkerQueue(): Promise<void> {
   return new Promise((resolve) => {
     workerScope.setTimeout(() => resolve(), 0);
   });
+}
+
+async function refinePageFonts(
+  generation: number,
+  pageNumber: number,
+  canvas: OffscreenCanvas
+): Promise<void> {
+  if (!documentModel || !renderer) {
+    return;
+  }
+
+  try {
+    const didLoadEmbeddedFonts = await renderer.preparePageFonts(documentModel, pageNumber);
+    if (
+      !didLoadEmbeddedFonts ||
+      generation !== activeGeneration ||
+      attachedCanvases.get(pageNumber) !== canvas ||
+      !documentModel ||
+      !renderer
+    ) {
+      return;
+    }
+
+    renderer.render(canvas, documentModel, pageNumber);
+  } catch {
+    // Ignore font refinement failures and keep the immediate fallback render.
+  }
 }

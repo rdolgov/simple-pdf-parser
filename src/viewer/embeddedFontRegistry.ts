@@ -10,10 +10,17 @@ export interface RegisteredEmbeddedFont {
 }
 
 const readyCache = new WeakMap<PDFDocument, Map<string, RegisteredEmbeddedFont>>();
-const loadingCache = new WeakMap<PDFDocument, Promise<Map<string, RegisteredEmbeddedFont>>>();
+const loadingCache = new WeakMap<PDFDocument, Map<string, Promise<RegisteredEmbeddedFont | undefined>>>();
 
-export async function prepareEmbeddedFontsForDocument(documentModel: PDFDocument): Promise<void> {
-  await ensureEmbeddedFonts(documentModel);
+export async function prepareEmbeddedFontsForDocument(documentModel: PDFDocument): Promise<boolean> {
+  return prepareEmbeddedFontsForKeys(documentModel, Object.keys(documentModel.getFontResources()));
+}
+
+export async function prepareEmbeddedFontsForPages(
+  documentModel: PDFDocument,
+  pageNumbers: Iterable<number>
+): Promise<boolean> {
+  return prepareEmbeddedFontsForKeys(documentModel, collectEmbeddedFontKeysForPages(documentModel, pageNumbers));
 }
 
 export function resolveRegisteredEmbeddedFont(
@@ -25,51 +32,113 @@ export function resolveRegisteredEmbeddedFont(
     return undefined;
   }
 
-  return readyCache.get(documentModel)?.get(fontKey);
+  return getReadyFonts(documentModel).get(fontKey);
 }
 
-async function ensureEmbeddedFonts(documentModel: PDFDocument): Promise<Map<string, RegisteredEmbeddedFont>> {
+async function prepareEmbeddedFontsForKeys(
+  documentModel: PDFDocument,
+  fontKeys: Iterable<string>
+): Promise<boolean> {
+  if (!canRegisterEmbeddedFonts()) {
+    return false;
+  }
+
+  const requestedFontKeys = [...new Set(fontKeys)].filter((fontKey) => Boolean(documentModel.getFontResource(fontKey)));
+  if (requestedFontKeys.length === 0) {
+    return false;
+  }
+
+  const readyFonts = getReadyFonts(documentModel);
+  const readyCountBefore = readyFonts.size;
+
+  await Promise.all(requestedFontKeys.map((fontKey) => ensureEmbeddedFont(documentModel, fontKey)));
+
+  return readyFonts.size > readyCountBefore;
+}
+
+function collectEmbeddedFontKeysForPages(
+  documentModel: PDFDocument,
+  pageNumbers: Iterable<number>
+): string[] {
+  const fontKeys = new Set<string>();
+
+  for (const pageNumber of pageNumbers) {
+    const page = documentModel.getPage(pageNumber);
+    if (!page) {
+      continue;
+    }
+
+    for (const item of page.textItems) {
+      if (!item.fontResourceKey || fontKeys.has(item.fontResourceKey)) {
+        continue;
+      }
+      if (!documentModel.getFontResource(item.fontResourceKey)) {
+        continue;
+      }
+      fontKeys.add(item.fontResourceKey);
+    }
+  }
+
+  return [...fontKeys];
+}
+
+function getReadyFonts(documentModel: PDFDocument): Map<string, RegisteredEmbeddedFont> {
   const cached = readyCache.get(documentModel);
   if (cached) {
     return cached;
   }
 
-  const pending = loadingCache.get(documentModel);
+  const created = new Map<string, RegisteredEmbeddedFont>();
+  readyCache.set(documentModel, created);
+  return created;
+}
+
+function getLoadingFonts(documentModel: PDFDocument): Map<string, Promise<RegisteredEmbeddedFont | undefined>> {
+  const cached = loadingCache.get(documentModel);
+  if (cached) {
+    return cached;
+  }
+
+  const created = new Map<string, Promise<RegisteredEmbeddedFont | undefined>>();
+  loadingCache.set(documentModel, created);
+  return created;
+}
+
+async function ensureEmbeddedFont(
+  documentModel: PDFDocument,
+  fontKey: string
+): Promise<RegisteredEmbeddedFont | undefined> {
+  const readyFonts = getReadyFonts(documentModel);
+  const cached = readyFonts.get(fontKey);
+  if (cached) {
+    return cached;
+  }
+
+  const loadingFonts = getLoadingFonts(documentModel);
+  const pending = loadingFonts.get(fontKey);
   if (pending) {
     return pending;
   }
 
-  const loadPromise = loadEmbeddedFonts(documentModel);
-  loadingCache.set(documentModel, loadPromise);
-
-  try {
-    const loaded = await loadPromise;
-    readyCache.set(documentModel, loaded);
-    return loaded;
-  } finally {
-    loadingCache.delete(documentModel);
-  }
-}
-
-async function loadEmbeddedFonts(documentModel: PDFDocument): Promise<Map<string, RegisteredEmbeddedFont>> {
-  const registrations = new Map<string, RegisteredEmbeddedFont>();
-  if (!canRegisterEmbeddedFonts()) {
-    return registrations;
+  const resource = documentModel.getFontResource(fontKey);
+  if (!resource) {
+    return undefined;
   }
 
-  const resources = documentModel.getFontResources();
-  for (const [fontKey, resource] of Object.entries(resources)) {
-    try {
-      const registration = await registerEmbeddedFont(fontKey, resource);
+  const loadPromise = registerEmbeddedFont(fontKey, resource)
+    .then((registration) => {
       if (registration) {
-        registrations.set(fontKey, registration);
+        readyFonts.set(fontKey, registration);
       }
-    } catch {
-      // Ignore unsupported embedded fonts and fall back to the renderer's normal font path.
-    }
-  }
+      return registration;
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      loadingFonts.delete(fontKey);
+    });
 
-  return registrations;
+  loadingFonts.set(fontKey, loadPromise);
+  return loadPromise;
 }
 
 async function registerEmbeddedFont(

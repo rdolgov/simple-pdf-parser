@@ -45,6 +45,18 @@ export async function computeFileHash(file: File): Promise<string> {
   return computeBufferHash(buffer);
 }
 
+export async function computeBufferHash(buffer: ArrayBuffer): Promise<string> {
+  if (crypto?.subtle?.digest) {
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', buffer);
+      return toHex(digest);
+    } catch (error) {
+      console.warn('Failed to compute SHA-256 hash, falling back to ad-hoc hash', error);
+    }
+  }
+  return fallbackHash(buffer);
+}
+
 export async function loadCachedExtract(fileHash: string): Promise<CachedFileRecord | null> {
   const db = await openDb();
   if (!db) {
@@ -225,18 +237,6 @@ async function openDb(): Promise<IDBDatabase | null> {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => resolve(null);
   });
-}
-
-async function computeBufferHash(buffer: ArrayBuffer): Promise<string> {
-  if (crypto?.subtle?.digest) {
-    try {
-      const digest = await crypto.subtle.digest('SHA-256', buffer);
-      return toHex(digest);
-    } catch (error) {
-      console.warn('Failed to compute SHA-256 hash, falling back to ad-hoc hash', error);
-    }
-  }
-  return fallbackHash(buffer);
 }
 
 function toHex(buffer: ArrayBuffer): string {

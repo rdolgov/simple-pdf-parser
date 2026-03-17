@@ -1,5 +1,6 @@
 import type {
   ParseOptions,
+  ParseProgressUpdate,
   ParseSource,
   PDFImageItem,
   PDFLayout,
@@ -649,6 +650,11 @@ export class PDFParser {
         pathItems: extracted.pathItems,
         size: this.defaultPageSize()
       });
+      this.emitParsedPage({
+        page: pages[0],
+        pageNumber: 1,
+        totalPages: 1
+      });
 
       return { pages };
     }
@@ -657,7 +663,7 @@ export class PDFParser {
     for (const pageObject of pageObjects) {
       const contentRefs = this.extractContentRefs(pageObject.dictionarySource);
       const resourceContext = this.extractResourceContext(pageObject, objects, rawContent);
-      this.collectEmbeddedFontResources(fontResources, resourceContext.fonts);
+      const pageFontResources = this.collectEmbeddedFontResources(fontResources, resourceContext.fonts);
       const textItems: PDFTextItem[] = [];
       const imageItems: PDFImageItem[] = [];
       const lineItems: PDFLineItem[] = [];
@@ -685,7 +691,7 @@ export class PDFParser {
         pathItems.push(...extracted.pathItems);
       }
 
-      pages.push({
+      const finalizedPage: PDFPage = {
         number: pageNumber,
         textItems: this.finalizeTextItems(textItems),
         imageItems,
@@ -693,6 +699,13 @@ export class PDFParser {
         rectItems,
         pathItems,
         size: pageSize
+      };
+      pages.push(finalizedPage);
+      this.emitParsedPage({
+        page: finalizedPage,
+        pageNumber,
+        totalPages: pageObjects.length,
+        fontResources: Object.keys(pageFontResources).length > 0 ? pageFontResources : undefined
       });
 
       pageNumber += 1;
@@ -4002,16 +4015,23 @@ export class PDFParser {
     });
   }
 
+  private emitParsedPage(update: ParseProgressUpdate): void {
+    this.options.onPageParsed?.(update);
+  }
+
   private collectEmbeddedFontResources(
     target: NonNullable<PDFLayout['fontResources']>,
     fonts: FontMap
-  ): void {
+  ): NonNullable<PDFLayout['fontResources']> {
+    const addedResources: NonNullable<PDFLayout['fontResources']> = {};
     for (const [fontKey, resource] of fonts.entries()) {
       if (!resource.embeddedFont || target[fontKey]) {
         continue;
       }
       target[fontKey] = resource.embeddedFont;
+      addedResources[fontKey] = resource.embeddedFont;
     }
+    return addedResources;
   }
 
   private renderImageResource(

@@ -2,7 +2,7 @@ import { useRef, useCallback, useEffect, useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { HtmlPageLayout, PDFImageBounds, PDFPage } from 'pdf-layout-parser';
 import { GeminiAPI, OpenAiAPI } from 'pdf-layout-parser';
-import type { CanvasHighlightSelection, FocusProvider, ExtractedTable } from '../types';
+import type { CanvasHighlightSelection, CanvasPageRenderState, FocusProvider, ExtractedTable } from '../types';
 import type { SemanticSearchResult } from '../search';
 import { TableViewer, type TableSortState } from './TableViewer';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
@@ -76,12 +76,37 @@ const DEFAULT_PAGE_WIDTH = 612;
 const DEFAULT_PAGE_HEIGHT = 792;
 const FORMULA_SUGGESTION_LOG_PREFIX = '[FormulaSuggestion]';
 
+function getCanvasRenderStatusMessage(
+  pageNumber: number,
+  renderState: Exclude<CanvasPageRenderState, 'ready'>
+): { title: string; detail: string } {
+  if (renderState === 'preparing') {
+    return {
+      title: 'Preparing background pages',
+      detail: `Page ${pageNumber} will render as soon as the remaining pages are ready to draw.`
+    };
+  }
+
+  if (renderState === 'rendering') {
+    return {
+      title: `Rendering page ${pageNumber}`,
+      detail: 'The canvas will fill in automatically when drawing finishes.'
+    };
+  }
+
+  return {
+    title: `Page ${pageNumber} is queued`,
+    detail: 'This page is still rendering in the background.'
+  };
+}
+
 interface CanvasPageWithOverlayProps {
   page: PDFPage;
   pageNumber: number;
   documentId: string;
   documentTitle?: string;
   getCanvasRef: (pageNumber: number) => (element: HTMLCanvasElement | null) => void;
+  renderState: CanvasPageRenderState;
   zoom: number;
   htmlPage: HtmlPageLayout | null;
   canvasHighlight: CanvasHighlightSelection | null;
@@ -108,6 +133,7 @@ export function CanvasPageWithOverlay({
   documentId,
   documentTitle,
   getCanvasRef,
+  renderState,
   zoom,
   htmlPage,
   canvasHighlight,
@@ -1564,6 +1590,9 @@ export function CanvasPageWithOverlay({
   // The overlay is positioned in CSS coordinates, so we use the zoom factor directly
   const scaleX = zoom;
   const scaleY = zoom;
+  const showRenderStatusMessage = renderState !== 'ready';
+  const renderStatusMessage =
+    renderState === 'ready' ? null : getCanvasRenderStatusMessage(pageNumber, renderState);
   const hasOverlayContent = highlightBlocks.length > 0 || Boolean(tableOverlay);
   const hasSemanticHighlights = semanticSearchResults.length > 0;
   const overlayClassName = hasOverlayContent ? 'canvas-overlay canvas-overlay--interactive' : 'canvas-overlay';
@@ -1573,7 +1602,7 @@ export function CanvasPageWithOverlay({
 
   return (
     <div
-      className="canvas-page"
+      className={`canvas-page${showRenderStatusMessage ? ' canvas-page--pending-render' : ''}`}
       onClick={handleCanvasClick}
       onMouseMove={handleCanvasMouseMove}
       onMouseLeave={handleCanvasMouseLeave}
@@ -1588,6 +1617,14 @@ export function CanvasPageWithOverlay({
       }}
     >
       <canvas ref={handleCanvasRef} />
+      {showRenderStatusMessage && (
+        <div className="canvas-page-render-message" aria-live="polite">
+          <div className="canvas-page-render-message-card">
+            <div className="canvas-page-render-message-title">{renderStatusMessage?.title}</div>
+            <div className="canvas-page-render-message-detail">{renderStatusMessage?.detail}</div>
+          </div>
+        </div>
+      )}
       {/* Semantic search highlights (non-interactive, always visible when present) */}
       {canvasRef.current && hasSemanticHighlights && (
         <div className="canvas-overlay-layer" aria-hidden="true">

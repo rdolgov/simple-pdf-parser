@@ -1,13 +1,16 @@
 import { useState, useCallback, useEffect } from 'react';
 import {
   PDFDocument,
+  type PDFEmbeddedFontResource,
   StructuredExtractAPI,
+  type PDFLayout,
+  type PDFPage,
   type StructuredDataDocument
 } from 'pdf-layout-parser';
 import type { LoadState, ExtractedTable, TableBounds } from '../types';
 import { SUPPORTED_TYPES } from '../types';
 import {
-  computeFileHash,
+  computeBufferHash,
   loadCachedExtractPayload,
   saveCachedExtractPayload,
   saveCachedExtract,
@@ -23,6 +26,7 @@ import {
   setStructuredExtractApiKey
 } from '../utils/structuredExtractSettings';
 import { analyzeAiDetectionSupport, type AiDetectionSupport } from '../utils/aiDetectionSupport';
+import type { PdfParseWorkerResponse } from '../workers/pdfParseProtocol';
 
 const EXTRACT_CACHE_SCHEMA_VERSION = 4;
 
@@ -281,25 +285,45 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
 
       setIsOpeningFile(true);
       try {
-        const [bytes, fileHash] = await Promise.all([file.arrayBuffer(), computeFileHash(file)]);
-        const document = PDFDocument.from(bytes);
-        const nextAiDetectionSupport = analyzeAiDetectionSupport(document);
-        setState({ status: 'ready', document });
+        const bytes = await file.arrayBuffer();
         setLoadedFile(file);
         setLoadedFileName(file.name);
-        setLoadedFileHash(fileHash);
         setLoadedPdfData(bytes);
-        setAiDetectionSupport(nextAiDetectionSupport);
         resetExtractResults();
-        onDocumentLoad?.(document);
+        setLoadedFileHash('');
 
-        if (!nextAiDetectionSupport.supported) {
-          return;
+        let didRevealPreview = false;
+        const fileHashPromise = computeBufferHash(bytes);
+        const document = await parsePdfDocument(bytes, {
+          onBatch: (partialDocument) => {
+            setState({ status: 'ready', document: partialDocument });
+            setAiDetectionSupport(analyzeAiDetectionSupport(partialDocument));
+            if (didRevealPreview || partialDocument.pages.length === 0) {
+              return;
+            }
+            didRevealPreview = true;
+            setIsOpeningFile(false);
+            onDocumentLoad?.(partialDocument);
+          }
+        });
+
+        const nextAiDetectionSupport = analyzeAiDetectionSupport(document);
+        setState({ status: 'ready', document });
+        setAiDetectionSupport(nextAiDetectionSupport);
+
+        if (!didRevealPreview) {
+          setIsOpeningFile(false);
+          onDocumentLoad?.(document);
         }
 
-        const loadedFromCache = await loadCachedExtractForFile(fileHash);
-        if (autoExtract && !loadedFromCache) {
-          void runExtract(file, fileHash);
+        const fileHash = await fileHashPromise;
+        setLoadedFileHash(fileHash);
+
+        if (nextAiDetectionSupport.supported) {
+          const loadedFromCache = await loadCachedExtractForFile(fileHash);
+          if (autoExtract && !loadedFromCache) {
+            void runExtract(file, fileHash);
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unable to parse PDF.';
@@ -373,6 +397,74 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     handleDeleteCachedFile,
     refreshCachedFiles
   };
+}
+
+async function parsePdfDocument(
+  bytes: ArrayBuffer,
+  options: {
+    onBatch?: (document: PDFDocument) => void;
+  } = {}
+): Promise<PDFDocument> {
+  if (typeof Worker === 'undefined') {
+    return PDFDocument.from(bytes);
+  }
+
+  return parsePdfDocumentInWorker(bytes, options.onBatch);
+}
+
+async function parsePdfDocumentInWorker(
+  pdfData: ArrayBuffer,
+  onBatch?: (document: PDFDocument) => void
+): Promise<PDFDocument> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('../workers/pdfParseWorker.ts', import.meta.url), {
+      type: 'module'
+    });
+    const parsedPages: PDFPage[] = [];
+    const parsedFontResources: Record<string, PDFEmbeddedFontResource> = {};
+
+    const buildDocument = (): PDFDocument =>
+      new PDFDocument({
+        pages: parsedPages.slice(),
+        fontResources:
+          Object.keys(parsedFontResources).length > 0
+            ? { ...parsedFontResources }
+            : undefined
+      } satisfies PDFLayout);
+
+    worker.onmessage = (event: MessageEvent<PdfParseWorkerResponse>) => {
+      const message = event.data;
+
+      if (message.type === 'parsed-page-batch') {
+        parsedPages.push(...message.pages);
+        if (message.fontResources) {
+          Object.assign(parsedFontResources, message.fontResources);
+        }
+
+        const document = buildDocument();
+        onBatch?.(document);
+
+        if (message.complete) {
+          worker.terminate();
+          resolve(document);
+        }
+        return;
+      }
+
+      worker.terminate();
+      reject(new Error(message.message));
+    };
+
+    worker.onerror = () => {
+      worker.terminate();
+      reject(new Error('Unable to parse PDF.'));
+    };
+
+    worker.postMessage({
+      type: 'parse-document',
+      pdfData
+    });
+  });
 }
 
 function resolveApiKeyForExtract(provider: 'gemini' | 'openai'): string | null {

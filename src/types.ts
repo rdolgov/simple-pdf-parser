@@ -196,9 +196,17 @@ export interface PDFLayout {
   fontResources?: Record<string, PDFEmbeddedFontResource>;
 }
 
+export interface ParseProgressUpdate {
+  page: PDFPage;
+  pageNumber: number;
+  totalPages: number;
+  fontResources?: Record<string, PDFEmbeddedFontResource>;
+}
+
 export interface ParseOptions {
   strict?: boolean;
   smoothText?: boolean;
+  onPageParsed?: (update: ParseProgressUpdate) => void;
 }
 
 export type ParseSource = ArrayBuffer | Uint8Array | string;

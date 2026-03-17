@@ -1,5 +1,7 @@
 import type { HtmlPageLayout, PDFDocument } from 'pdf-layout-parser';
 import type {
+  BackgroundRenderProgress,
+  CanvasPageRenderState,
   CanvasHighlightSelection,
   LoadState,
   ViewMode,
@@ -26,7 +28,9 @@ interface ViewerColumnProps {
   state: LoadState;
   readyDocument: PDFDocument | null;
   documentId: string;
+  backgroundRenderProgress: BackgroundRenderProgress;
   getCanvasRef: (pageNumber: number) => (element: HTMLCanvasElement | null) => void;
+  getPageRenderState: (pageNumber: number) => CanvasPageRenderState;
   layoutJson: string;
   htmlFriendlyJson: string;
   htmlPageLayouts: Map<number, HtmlPageLayout>;
@@ -65,7 +69,9 @@ export function ViewerColumn({
   state,
   readyDocument,
   documentId,
+  backgroundRenderProgress,
   getCanvasRef,
+  getPageRenderState,
   layoutJson,
   htmlFriendlyJson,
   htmlPageLayouts,
@@ -104,6 +110,15 @@ export function ViewerColumn({
         <section className="viewer-pane">
           {viewMode === 'canvas' || viewMode === 'focus-pdf' ? (
             <div className="canvas-wrapper">
+              {backgroundRenderProgress.active && (
+                <div className="canvas-render-status-banner" role="status" aria-live="polite">
+                  {backgroundRenderProgress.isPreparing
+                    ? 'Preparing remaining pages...'
+                    : `Rendering ${backgroundRenderProgress.pendingPageCount} remaining page${
+                        backgroundRenderProgress.pendingPageCount === 1 ? '' : 's'
+                      }...`}
+                </div>
+              )}
               {readyDocument ? (
                 readyDocument.pages
                   .filter((page) => viewMode === 'canvas' || (viewMode === 'focus-pdf' && (focusState.status !== 'ready' || pagesWithMatches.has(page.number))))
@@ -115,6 +130,7 @@ export function ViewerColumn({
                       documentId={documentId}
                       documentTitle={geminiExtraction?.document_title}
                       getCanvasRef={getCanvasRef}
+                      renderState={getPageRenderState(page.number)}
                       zoom={zoom}
                       htmlPage={htmlPageLayouts.get(page.number) ?? null}
                       canvasHighlight={canvasHighlight}

@@ -179,7 +179,14 @@ export default function App(): JSX.Element {
   }, [setState]);
 
   const readyDocument = state.status === 'ready' ? state.document : null;
-  const { canvasRefs, canvasRevision, getCanvasRef, shouldRenderPageOnMainThread } = useCanvasRenderCoordinator({
+  const {
+    canvasRefs,
+    canvasRevision,
+    backgroundRenderProgress,
+    getCanvasRef,
+    getPageRenderState,
+    shouldRenderPageOnMainThread
+  } = useCanvasRenderCoordinator({
     document: readyDocument,
     pdfData: loadedPdfData,
     zoom,
@@ -204,21 +211,26 @@ export default function App(): JSX.Element {
     let cancelled = false;
     void (async () => {
       try {
-        await renderer.prepareDocumentFonts(readyDocument);
-        if (cancelled) {
+        const mainThreadPageNumbers = readyDocument.pages
+          .filter((page) => shouldRenderPageOnMainThread(page.number))
+          .map((page) => page.number);
+        const renderMainThreadPages = () => {
+          renderer.setScale(zoom);
+          for (const pageNumber of mainThreadPageNumbers) {
+            const canvas = canvasRefs.current.get(pageNumber);
+            if (!canvas) {
+              continue;
+            }
+            renderer.render(canvas, readyDocument, pageNumber);
+          }
+        };
+
+        renderMainThreadPages();
+        const didLoadEmbeddedFonts = await renderer.preparePageRangeFonts(readyDocument, mainThreadPageNumbers);
+        if (cancelled || !didLoadEmbeddedFonts) {
           return;
         }
-        renderer.setScale(zoom);
-        for (const page of readyDocument.pages) {
-          if (!shouldRenderPageOnMainThread(page.number)) {
-            continue;
-          }
-          const canvas = canvasRefs.current.get(page.number);
-          if (!canvas) {
-            continue;
-          }
-          renderer.render(canvas, readyDocument, page.number);
-        }
+        renderMainThreadPages();
       } catch (error) {
         if (cancelled) {
           return;
@@ -960,7 +972,9 @@ export default function App(): JSX.Element {
           state={state}
           readyDocument={readyDocument}
           documentId={loadedFileHash || loadedFileName || 'document'}
+          backgroundRenderProgress={backgroundRenderProgress}
           getCanvasRef={getCanvasRef}
+          getPageRenderState={getPageRenderState}
           layoutJson={layoutJson}
           htmlFriendlyJson={htmlFriendlyJson}
           htmlPageLayouts={htmlPageLayouts}

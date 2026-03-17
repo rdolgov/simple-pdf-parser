@@ -22,6 +22,7 @@ import {
 } from './embeddedFontRenderPolicy.js';
 import {
   prepareEmbeddedFontsForDocument,
+  prepareEmbeddedFontsForPages,
   resolveRegisteredEmbeddedFont,
   type RegisteredEmbeddedFont
 } from './embeddedFontRegistry.js';
@@ -128,6 +129,14 @@ export class CanvasRenderer {
 
   async prepareDocumentFonts(document: PDFDocument): Promise<void> {
     await prepareEmbeddedFontsForDocument(document);
+  }
+
+  async preparePageFonts(document: PDFDocument, pageNumber: number): Promise<boolean> {
+    return prepareEmbeddedFontsForPages(document, [pageNumber]);
+  }
+
+  async preparePageRangeFonts(document: PDFDocument, pageNumbers: Iterable<number>): Promise<boolean> {
+    return prepareEmbeddedFontsForPages(document, pageNumbers);
   }
 
   render(canvas: CanvasLike, document: PDFDocument, pageNumber = 1): void {

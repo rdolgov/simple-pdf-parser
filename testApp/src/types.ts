@@ -120,3 +120,13 @@ export type StructuredSelection =
       table?: TableModel | null;
       elementId?: number | null;
     };
+
+export type CanvasPageRenderState = 'preparing' | 'queued' | 'rendering' | 'ready';
+
+export type BackgroundRenderProgress = {
+  active: boolean;
+  isPreparing: boolean;
+  pendingPageCount: number;
+  renderingPageCount: number;
+  totalBackgroundPages: number;
+};
