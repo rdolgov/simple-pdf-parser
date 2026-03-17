@@ -1,7 +1,6 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
 import type { MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { HtmlPageLayout, PDFImageBounds, PDFPage } from 'pdf-layout-parser';
-import { GeminiAPI, OpenAiAPI } from 'pdf-layout-parser';
 import type { CanvasHighlightSelection, CanvasPageRenderState, FocusProvider, ExtractedTable } from '../types';
 import type { SemanticSearchResult } from '../search';
 import { TableViewer, type TableSortState } from './TableViewer';
@@ -61,6 +60,12 @@ import {
   getRewriteProvider,
   setRewriteApiKey
 } from '../utils/rewriteProviderSettings';
+import {
+  createTransportedGeminiApi,
+  createTransportedOpenAiApi,
+  hasRuntimeProviderAccess,
+  resolveRuntimeProviderApiKey
+} from '../utils/llmClients';
 import { buildSectionContext } from '../utils/sectionContext';
 import {
   buildInteractiveWidgetPrompt,
@@ -83,6 +88,7 @@ import {
   type LassoPoint
 } from '../utils/lassoSelection';
 import { parsePopupTextSegments } from '../utils/popupTextSegments';
+import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
 
 const HIGHLIGHT_PADDING = 12;
 const TABLE_HIT_TOLERANCE = 6;
@@ -645,12 +651,15 @@ export function CanvasPageWithOverlay({
   const ensureGeminiApiKey = useCallback((): string | null => {
     const trimmed = geminiApiKey.trim();
     if (trimmed.length > 0) {
-      return trimmed;
+      return resolveRuntimeProviderApiKey('gemini', trimmed);
     }
     const storedRewriteKey = getRewriteApiKey('gemini');
     if (storedRewriteKey && storedRewriteKey.trim().length > 0) {
       setGeminiApiKey(storedRewriteKey.trim());
-      return storedRewriteKey.trim();
+      return resolveRuntimeProviderApiKey('gemini', storedRewriteKey.trim());
+    }
+    if (isProxyTransportEnabled()) {
+      return resolveRuntimeProviderApiKey('gemini');
     }
     const entered = window.prompt('Enter your Gemini API key to use Gemini features on this PDF:');
     if (entered && entered.trim().length > 0) {
@@ -662,7 +671,7 @@ export function CanvasPageWithOverlay({
         console.warn('Unable to persist Gemini API key', error);
       }
       setRewriteApiKey('gemini', value);
-      return value;
+      return resolveRuntimeProviderApiKey('gemini', value);
     }
     return null;
   }, [geminiApiKey]);
@@ -670,13 +679,16 @@ export function CanvasPageWithOverlay({
   const ensureOpenAiApiKey = useCallback((): string | null => {
     const stored = getRewriteApiKey('openai');
     if (stored && stored.trim().length > 0) {
-      return stored.trim();
+      return resolveRuntimeProviderApiKey('openai', stored.trim());
+    }
+    if (isProxyTransportEnabled()) {
+      return resolveRuntimeProviderApiKey('openai');
     }
     const entered = window.prompt('Enter your OpenAI API key to use OpenAI features on this PDF:');
     if (entered && entered.trim().length > 0) {
       const value = entered.trim();
       setRewriteApiKey('openai', value);
-      return value;
+      return resolveRuntimeProviderApiKey('openai', value);
     }
     return null;
   }, []);
@@ -696,7 +708,7 @@ export function CanvasPageWithOverlay({
           configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
             ? configuredModel
             : undefined;
-        const response = await new OpenAiAPI({
+        const response = await createTransportedOpenAiApi({
           apiKey: openAiKey,
           ...(textModel ? { model: textModel } : {})
         }).generateFromImage(base64Data, mimeType, prompt);
@@ -712,7 +724,7 @@ export function CanvasPageWithOverlay({
         configuredModel && !/^gpt-/i.test(configuredModel)
           ? configuredModel
           : 'gemini-3-pro-preview';
-      const response = await new GeminiAPI({
+      const response = await createTransportedGeminiApi({
         apiKey: geminiKey,
         model: geminiModel
       }).generateFromImage(base64Data, mimeType, prompt, { mediaResolution: 'high' });
@@ -755,7 +767,7 @@ export function CanvasPageWithOverlay({
                   configuredModel && !/^gemini-/i.test(configuredModel)
                     ? configuredModel
                     : undefined;
-                const client = new OpenAiAPI({
+                const client = createTransportedOpenAiApi({
                   apiKey: openAiKey,
                   ...(openAiModel ? { model: openAiModel } : {})
                 });
@@ -771,7 +783,7 @@ export function CanvasPageWithOverlay({
                   configuredModel && !/^gpt-/i.test(configuredModel)
                     ? configuredModel
                     : 'gemini-3-pro-preview';
-                const client = new GeminiAPI({ apiKey: key, model: geminiModel });
+                const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel });
                 return client.generateText(prompt);
               })();
         const rewritten = response.text.trim();
@@ -827,7 +839,7 @@ export function CanvasPageWithOverlay({
               const imageModel = configuredModel && /^(gpt-image-|dall-e-)/i.test(configuredModel)
                 ? configuredModel
                 : undefined;
-              const client = new OpenAiAPI({
+              const client = createTransportedOpenAiApi({
                 apiKey: openAiKey,
                 ...(imageModel ? { model: imageModel } : {})
               });
@@ -840,7 +852,7 @@ export function CanvasPageWithOverlay({
               }
               const configuredModel = getRewriteModel('gemini')?.trim();
               const geminiModel = configuredModel && !/^gpt-/i.test(configuredModel) ? configuredModel : undefined;
-              const client = new GeminiAPI({ apiKey: key, ...(geminiModel ? { model: geminiModel } : {}) });
+              const client = createTransportedGeminiApi({ apiKey: key, ...(geminiModel ? { model: geminiModel } : {}) });
               return client.generateImage(trimmedPrompt);
             })();
 
@@ -910,7 +922,7 @@ export function CanvasPageWithOverlay({
             const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
               ? configuredModel
               : undefined;
-            const client = new OpenAiAPI({
+            const client = createTransportedOpenAiApi({
               apiKey: openAiKey,
               ...(textModel ? { model: textModel } : {})
             });
@@ -926,7 +938,7 @@ export function CanvasPageWithOverlay({
               configuredModel && !/^gpt-/i.test(configuredModel)
                 ? configuredModel
                 : 'gemini-3-pro-preview';
-            const client = new GeminiAPI({ apiKey: key, model: geminiModel });
+            const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel });
             return client.generateText(prompt);
           })();
       const latex = parseMathDetectionResponse(response.text);
@@ -1076,7 +1088,7 @@ export function CanvasPageWithOverlay({
               const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
                 ? configuredModel
                 : undefined;
-              const client = new OpenAiAPI({
+              const client = createTransportedOpenAiApi({
                 apiKey: openAiKey,
                 ...(textModel ? { model: textModel } : {})
               });
@@ -1092,7 +1104,7 @@ export function CanvasPageWithOverlay({
                 configuredModel && !/^gpt-/i.test(configuredModel)
                   ? configuredModel
                   : 'gemini-3-pro-preview';
-              const client = new GeminiAPI({ apiKey: key, model: geminiModel });
+              const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel });
               return client.generateText(prompt);
             })();
 
@@ -1423,8 +1435,8 @@ export function CanvasPageWithOverlay({
   const overlayAiProvider = getRewriteProvider();
   const overlayAiModel = getRewriteModel(overlayAiProvider);
   const overlayAiKey = overlayAiProvider === 'openai'
-    ? (getRewriteApiKey('openai') ?? '')
-    : (getRewriteApiKey('gemini') ?? geminiApiKey ?? '');
+    ? resolveRuntimeProviderApiKey('openai', getRewriteApiKey('openai') ?? '')
+    : resolveRuntimeProviderApiKey('gemini', getRewriteApiKey('gemini') ?? geminiApiKey ?? '');
   const activeTextSelection =
     !focusMode &&
     canvasHighlight?.pageNumber === page.number &&
@@ -2447,9 +2459,9 @@ export function CanvasPageWithOverlay({
               type="button"
               className="reference-popup-explain-btn"
               onClick={handleExplainConnection}
-              disabled={!overlayAiKey.trim()}
+              disabled={!hasRuntimeProviderAccess(overlayAiProvider, overlayAiKey)}
               title={
-                overlayAiKey.trim()
+                hasRuntimeProviderAccess(overlayAiProvider, overlayAiKey)
                   ? 'Explain how this reference connects to the paragraph'
                   : `${overlayAiProvider === 'openai' ? 'OpenAI' : 'Gemini'} API key required`
               }

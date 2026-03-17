@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { GeminiAPI, type GeminiGeneratedImage } from 'pdf-layout-parser';
+import type { GeminiGeneratedImage } from 'pdf-layout-parser';
 import { canUseLocalStorage } from '../utils/storage';
+import { createTransportedGeminiApi, hasRuntimeProviderAccess } from '../utils/llmClients';
 
 type GeminiMode = 'text' | 'image';
 
@@ -81,7 +82,7 @@ export function GeminiPlayground(): JSX.Element {
     const key = apiKey.trim();
     const trimmedPrompt = prompt.trim();
 
-    if (key.length === 0) {
+    if (!hasRuntimeProviderAccess('gemini', key)) {
       setResult({ status: 'error', message: 'Provide a Gemini API key to continue.' });
       return;
     }
@@ -95,7 +96,7 @@ export function GeminiPlayground(): JSX.Element {
     setResult({ status: 'loading' });
 
     try {
-      const client = new GeminiAPI({
+      const client = createTransportedGeminiApi({
         apiKey: key,
         model: textModel.trim() || undefined,
         imageModel: imageModel.trim() || undefined
@@ -136,7 +137,7 @@ export function GeminiPlayground(): JSX.Element {
     }
   }, [apiKey, prompt, mode, textModel, imageModel]);
 
-  const canSubmit = apiKey.trim().length > 0 && prompt.trim().length > 0 && result.status !== 'loading';
+  const canSubmit = hasRuntimeProviderAccess('gemini', apiKey) && prompt.trim().length > 0 && result.status !== 'loading';
   const submitLabel = mode === 'image' ? 'Generate Image' : 'Generate Text';
 
   return (
@@ -144,9 +145,9 @@ export function GeminiPlayground(): JSX.Element {
       <div className="gemini-header">
         <div className="gemini-title">
           <p className="gemini-kicker">Gemini API Sandbox</p>
-          <h2>Send prompts directly to Gemini</h2>
+          <h2>Send prompts to Gemini</h2>
           <p className="gemini-subtitle">
-            Choose text or image mode, supply your API key, and see the raw responses from the new Gemini helper.
+            Choose text or image mode and see raw responses from the shared Gemini helper with the current direct/proxy transport.
           </p>
         </div>
         <div className="gemini-mode-toggle" role="group" aria-label="Gemini mode">

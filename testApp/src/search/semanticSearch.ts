@@ -12,6 +12,7 @@ import {
   getSemanticSearchProvider,
   type SemanticSearchProvider
 } from '../utils/semanticSearchSettings';
+import { applyTransportToEmbeddingConfig } from '../utils/llmClients';
 
 // ============================================================================
 // Types
@@ -480,14 +481,14 @@ function resolveSemanticEmbeddingConfig(config?: SemanticSearchConfig): Resolved
 
 function toEmbeddingApiConfig(config?: SemanticSearchConfig): EmbeddingApiConfig {
   const resolved = resolveSemanticEmbeddingConfig(config);
-  return {
+  return applyTransportToEmbeddingConfig({
     provider: resolved.provider,
     apiKey: resolved.apiKey,
     model: resolved.model,
     endpoint: resolved.endpoint,
     apiVersion: resolved.apiVersion,
     lmStudio: resolved.lmStudio
-  };
+  });
 }
 
 export function isEmbeddingsCompatibleWithConfig(

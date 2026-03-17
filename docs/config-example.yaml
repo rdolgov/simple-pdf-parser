@@ -12,6 +12,23 @@ openAI:
   model: "gpt-4.1"
   endpoint: "https://api.openai.com/v1/responses"
 
+llmProxy:
+  port: 8787
+  authToken: "OPTIONAL_SHARED_PROXY_TOKEN"
+  corsOrigin: "*"
+  openAI:
+    apiKey: "YOUR_OPENAI_API_KEY"
+    baseUrl: "https://api.openai.com/v1"
+  gemini:
+    apiKey: "YOUR_GEMINI_API_KEY"
+    baseUrl: "https://generativelanguage.googleapis.com"
+
+testApp:
+  llmTransport:
+    mode: "proxy" # or "direct"
+    proxyBaseUrl: "/api/llm"
+    proxyAuthToken: "OPTIONAL_SHARED_PROXY_TOKEN"
+
 structuredExtract:
   provider: "gemini" # or "openai"
   apiKey: "YOUR_API_KEY"

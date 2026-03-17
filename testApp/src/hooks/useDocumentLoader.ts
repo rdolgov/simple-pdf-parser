@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from 'react';
 import {
   PDFDocument,
   type PDFEmbeddedFontResource,
-  StructuredExtractAPI,
   type PDFLayout,
   type PDFPage,
   type StructuredDataDocument
@@ -28,6 +27,8 @@ import {
 import { analyzeAiDetectionSupport, type AiDetectionSupport } from '../utils/aiDetectionSupport';
 import type { PdfParseWorkerResponse } from '../workers/pdfParseProtocol';
 import { deserializePdfPage } from '../workers/pdfPageTransfer';
+import { createTransportedStructuredExtractApi } from '../utils/llmClients';
+import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
 
 const EXTRACT_CACHE_SCHEMA_VERSION = 4;
 
@@ -234,13 +235,13 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         const provider = getStructuredExtractProvider();
         const model = getStructuredExtractModel(provider);
         const apiKey = resolveApiKeyForExtract(provider);
-        if (!apiKey) {
+        if (!apiKey && !isProxyTransportEnabled()) {
           throw new Error(
             `${provider === 'openai' ? 'OpenAI' : 'Gemini'} API key is required to extract structured table and image metadata.`
           );
         }
 
-        const client = new StructuredExtractAPI({ provider, apiKey, model: model ?? undefined });
+        const client = createTransportedStructuredExtractApi({ provider, apiKey: apiKey ?? undefined, model: model ?? undefined });
         const response = await client.extractStructuredData(file, { fileName: file.name });
         handleExtractResponse({
           document: response.document,
@@ -472,6 +473,9 @@ function resolveApiKeyForExtract(provider: 'gemini' | 'openai'): string | null {
   const existing = getStructuredExtractApiKey(provider);
   if (existing) {
     return existing;
+  }
+  if (isProxyTransportEnabled()) {
+    return null;
   }
   const providerName = provider === 'openai' ? 'OpenAI' : 'Gemini';
   const prompted = window.prompt(`Enter your ${providerName} API key to extract tables and images from this PDF:`);

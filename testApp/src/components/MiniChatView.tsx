@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
-import { GeminiAPI, OpenAiAPI, createGoogleSearchTool } from 'pdf-layout-parser';
+import { createGoogleSearchTool } from 'pdf-layout-parser';
 import {
   type ChatMessage,
   type ChatAnnotationContent,
@@ -10,6 +10,7 @@ import {
   deleteAnnotation,
   findAnnotationAtBounds
 } from '../storage/annotationStorage';
+import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
 
 
 interface MiniChatViewProps {
@@ -215,11 +216,11 @@ export function MiniChatView({
         `User: ${trimmed}`;
 
       const result = provider === 'openai'
-        ? await new OpenAiAPI({
+        ? await createTransportedOpenAiApi({
             apiKey,
             ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
           }).generateText(fullPrompt)
-        : await new GeminiAPI({
+        : await createTransportedGeminiApi({
             apiKey,
             tools: enableWebSearch ? [createGoogleSearchTool()] : undefined,
             ...(model && model.trim().length > 0 ? { model: model.trim() } : {})

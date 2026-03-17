@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { StructuredExtractAPI } from 'pdf-layout-parser';
 import { canUseLocalStorage } from '../utils/storage';
+import { createTransportedStructuredExtractApi, hasRuntimeProviderAccess } from '../utils/llmClients';
 
 type ExtractResultState =
   | { status: 'idle' }
@@ -67,7 +67,7 @@ export function StructuredExtractPlayground(): JSX.Element {
     setFile(next);
   }, []);
 
-  const canSubmit = !!file && result.status !== 'loading' && apiKey.trim().length > 0;
+  const canSubmit = !!file && result.status !== 'loading' && hasRuntimeProviderAccess('gemini', apiKey);
 
   const handleExtract = useCallback(async () => {
     if (!file) {
@@ -75,7 +75,7 @@ export function StructuredExtractPlayground(): JSX.Element {
       return;
     }
     const trimmedApiKey = apiKey.trim();
-    if (!trimmedApiKey) {
+    if (!hasRuntimeProviderAccess('gemini', trimmedApiKey)) {
       setResult({ status: 'error', message: 'Provide a Gemini API key.' });
       return;
     }
@@ -85,7 +85,8 @@ export function StructuredExtractPlayground(): JSX.Element {
     setResult({ status: 'loading' });
 
     try {
-      const client = new StructuredExtractAPI({
+      const client = createTransportedStructuredExtractApi({
+        provider: 'gemini',
         apiKey: trimmedApiKey,
         model: model.trim() || DEFAULT_MODEL
       });
@@ -124,7 +125,7 @@ export function StructuredExtractPlayground(): JSX.Element {
           <p className="structured-extract-kicker">Single Provider Extract</p>
           <h2>Upload a PDF and inspect extracted JSON</h2>
           <p className="structured-extract-subtitle">
-            Uses Gemini to extract structured text, tables, and figure metadata in the same shape used by the
+            Uses Gemini plus the currently configured direct/proxy transport to extract structured text, tables, and figure metadata in the same shape used by the
             structured-data viewer.
           </p>
         </div>
@@ -178,14 +179,14 @@ export function StructuredExtractPlayground(): JSX.Element {
             <button type="button" onClick={handleExtract} disabled={!canSubmit}>
               {result.status === 'loading' ? 'Extracting…' : 'Run Extract'}
             </button>
-            <p className="structured-extract-footnote">Provider: Gemini only (no external extract endpoint required).</p>
+            <p className="structured-extract-footnote">Provider: Gemini only. Transport follows the global direct/proxy setting.</p>
           </div>
         </div>
 
         <div className="structured-extract-card structured-extract-response">
           {result.status === 'idle' && (
             <div className="structured-extract-placeholder">
-              Enter your Gemini key, choose a PDF, and click "Run Extract" to view the JSON response here.
+              Choose a PDF and run extract to inspect the JSON response here.
             </div>
           )}
           {result.status === 'loading' && <div className="structured-extract-placeholder">Calling Gemini…</div>}

@@ -2,12 +2,12 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
-import { GeminiAPI, OpenAiAPI } from 'pdf-layout-parser';
 import {
   type FormulaExplanation,
   getCachedExplanation,
   setCachedExplanation
 } from '../storage/mathCache';
+import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
 
 
 interface MathViewPopupProps {
@@ -166,15 +166,15 @@ Important:
 - Only include parameters that appear in the formula
 - Keep explanations accessible but accurate
 - If it's a well-known formula, mention its name
-- For the behavior section, describe the mathematical relationship
-- Only return the JSON, no markdown code blocks`;
+      - For the behavior section, describe the mathematical relationship
+      - Only return the JSON, no markdown code blocks`;
 
       const response = provider === 'openai'
-        ? await new OpenAiAPI({
+        ? await createTransportedOpenAiApi({
             apiKey,
             ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
           }).generateText(prompt)
-        : await new GeminiAPI({
+        : await createTransportedGeminiApi({
             apiKey,
             model: model && model.trim().length > 0 ? model.trim() : 'gemini-3-pro-preview'
           }).generateText(prompt);

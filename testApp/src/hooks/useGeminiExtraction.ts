@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { GeminiAPI, OpenAiAPI, type StructuredExtractProvider } from 'pdf-layout-parser';
+import type { StructuredExtractProvider } from 'pdf-layout-parser';
 import {
   type GeminiDocumentExtraction,
   type GeminiExtractionRecord,
@@ -9,6 +9,8 @@ import {
 } from '../storage/geminiExtractionStorage';
 import { getRewriteApiKey, getRewriteModel, getRewriteProvider, setRewriteApiKey } from '../utils/rewriteProviderSettings';
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
+import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
+import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
 
 const EXTRACTION_PROMPT = `Convert this PDF to JSON format with the following structure:
 {
@@ -134,7 +136,7 @@ export function useGeminiExtraction({
     const provider = getRewriteProvider();
     let apiKey = getRewriteApiKey(provider);
 
-    if (!apiKey) {
+    if (!apiKey && !isProxyTransportEnabled()) {
       apiKey = window.prompt(
         `Enter your ${provider === 'openai' ? 'OpenAI' : 'Gemini'} API key to extract document structure:`
       );
@@ -159,7 +161,7 @@ export function useGeminiExtraction({
               configuredModel && !/^(gemini-|models\/gemini|gpt-image-|dall-e-)/i.test(configuredModel)
                 ? configuredModel
                 : undefined;
-            const client = new OpenAiAPI({
+            const client = createTransportedOpenAiApi({
               apiKey,
               ...(openAiModel ? { model: openAiModel } : {})
             });
@@ -182,7 +184,7 @@ export function useGeminiExtraction({
               configuredModel && !/^gpt-/i.test(configuredModel)
                 ? configuredModel
                 : 'gemini-3-pro-image-preview';
-            const client = new GeminiAPI({ apiKey, model: geminiModel });
+            const client = createTransportedGeminiApi({ apiKey, model: geminiModel });
             return client.generateContent({
               contents: [
                 {

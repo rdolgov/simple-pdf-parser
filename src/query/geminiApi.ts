@@ -37,6 +37,8 @@ export interface GeminiApiConfig {
   model?: string;
   imageModel?: string;
   apiVersion?: string;
+  imageApiVersion?: string;
+  endpoint?: string;
   generationConfig?: Record<string, unknown>;
   safetySettings?: Array<Record<string, unknown>>;
   tools?: GeminiToolConfig[];
@@ -74,6 +76,11 @@ export interface GeminiGenerateContentResponse {
   candidates?: GeminiCandidate[];
 }
 
+const DEFAULT_GEMINI_MODEL = 'gemini-3-pro-preview';
+const DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3-pro-image-preview';
+const DEFAULT_GEMINI_API_VERSION = 'v1beta';
+const DEFAULT_GEMINI_IMAGE_API_VERSION = 'v1alpha';
+
 interface GeminiInnerResponse {
   text?: string;
   candidates?: GeminiCandidate[];
@@ -110,8 +117,13 @@ interface GeminiGenerateContentRequest {
 }
 
 export class GeminiAPI {
-  private readonly client: GoogleGenAiClient;
-  private readonly clientAlpha: GoogleGenAiClient;
+  private readonly client?: GoogleGenAiClient;
+  private readonly clientAlpha?: GoogleGenAiClient;
+  private readonly apiKey: string;
+  private readonly endpoint?: string;
+  private readonly defaultApiVersion: string;
+  private readonly defaultImageApiVersion: string;
+  private readonly useRestTransport: boolean;
   private readonly defaultModel: string;
   private readonly defaultImageModel: string;
   private readonly defaultGenerationConfig?: Record<string, unknown>;
@@ -122,15 +134,30 @@ export class GeminiAPI {
     if (!config.apiKey) {
       throw new Error('GeminiAPI requires an apiKey');
     }
-    // Standard client for text generation
-    this.client = new GoogleGenAI({ apiKey: config.apiKey }) as unknown as GoogleGenAiClient;
-    // Alpha client for image generation and high-res image input
-    this.clientAlpha = new GoogleGenAI({
-      apiKey: config.apiKey,
-      apiVersion: 'v1alpha'
-    }) as unknown as GoogleGenAiClient;
-    this.defaultModel = config.model ?? 'gemini-3-pro-preview';
-    this.defaultImageModel = config.imageModel ?? 'gemini-3-pro-image-preview';
+    this.apiKey = config.apiKey;
+    this.endpoint = normalizeOptionalGeminiEndpointBase(config.endpoint);
+    this.defaultApiVersion = normalizeGeminiApiVersion(config.apiVersion, DEFAULT_GEMINI_API_VERSION);
+    this.defaultImageApiVersion = normalizeGeminiApiVersion(
+      config.imageApiVersion,
+      DEFAULT_GEMINI_IMAGE_API_VERSION
+    );
+    this.useRestTransport = Boolean(this.endpoint);
+
+    if (!this.useRestTransport) {
+      // Standard client for text generation
+      this.client = new GoogleGenAI({
+        apiKey: config.apiKey,
+        ...(config.apiVersion ? { apiVersion: config.apiVersion } : {})
+      }) as unknown as GoogleGenAiClient;
+      // Alpha client for image generation and high-res image input
+      this.clientAlpha = new GoogleGenAI({
+        apiKey: config.apiKey,
+        apiVersion: config.imageApiVersion ?? DEFAULT_GEMINI_IMAGE_API_VERSION
+      }) as unknown as GoogleGenAiClient;
+    }
+
+    this.defaultModel = config.model ?? DEFAULT_GEMINI_MODEL;
+    this.defaultImageModel = config.imageModel ?? DEFAULT_GEMINI_IMAGE_MODEL;
     this.defaultGenerationConfig = config.generationConfig;
     this.defaultSafetySettings = config.safetySettings;
     this.defaultTools = config.tools;
@@ -204,10 +231,20 @@ export class GeminiAPI {
     useAlphaClient = false
   ): Promise<GeminiGenerateResult> {
     const payload = this.buildRequest(request);
-    const client = useAlphaClient ? this.clientAlpha : this.client;
     let response: GeminiGenerateContentResponse;
     try {
-      response = await client.models.generateContent(payload);
+      if (this.useRestTransport) {
+        response = await this.sendRestGenerateContent(
+          payload,
+          useAlphaClient ? this.defaultImageApiVersion : this.defaultApiVersion
+        );
+      } else {
+        const client = useAlphaClient ? this.clientAlpha : this.client;
+        if (!client) {
+          throw new Error('Gemini client is not initialized');
+        }
+        response = await client.models.generateContent(payload);
+      }
     } catch (error) {
       throw normalizeProviderApiError('Gemini', error);
     }
@@ -250,9 +287,19 @@ export class GeminiAPI {
     // Use alpha client for image generation
     let response: GeminiGenerateContentResponse;
     try {
-      response = await this.clientAlpha.models.generateContent(
-        payload as unknown as GeminiGenerateContentRequest
-      );
+      if (this.useRestTransport) {
+        response = await this.sendRestGenerateContent(
+          payload as unknown as GeminiGenerateContentRequest,
+          this.defaultImageApiVersion
+        );
+      } else {
+        if (!this.clientAlpha) {
+          throw new Error('Gemini image client is not initialized');
+        }
+        response = await this.clientAlpha.models.generateContent(
+          payload as unknown as GeminiGenerateContentRequest
+        );
+      }
     } catch (error) {
       throw normalizeProviderApiError('Gemini', error);
     }
@@ -262,6 +309,32 @@ export class GeminiAPI {
     }
 
     return { images, text: extractText(response), raw: response, model };
+  }
+
+  private async sendRestGenerateContent(
+    payload: GeminiGenerateContentRequest,
+    apiVersion: string
+  ): Promise<GeminiGenerateContentResponse> {
+    const fetchImpl = resolveFetch();
+    let response: Response;
+    try {
+      response = await fetchImpl(buildGeminiGenerateContentUrl(this.endpoint, apiVersion, payload.model, this.apiKey), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(toGeminiRestGenerateContentRequest(payload))
+      });
+    } catch (error) {
+      throw normalizeProviderApiError('Gemini', error);
+    }
+
+    if (!response.ok) {
+      const message = normalizeProviderApiError('Gemini', await safeReadText(response)).message;
+      throw new Error(`Gemini request failed with status ${response.status}: ${message}`);
+    }
+
+    return (await response.json()) as GeminiGenerateContentResponse;
   }
 
   private buildRequest(request: GeminiGenerateRequest): GeminiGenerateContentRequest {
@@ -341,4 +414,150 @@ function normalizeText(value?: string): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function buildGeminiGenerateContentUrl(
+  endpoint: string | undefined,
+  apiVersion: string,
+  model: string,
+  apiKey: string
+): string {
+  const base = normalizeGeminiEndpointBase(endpoint);
+  const normalizedVersion = normalizeGeminiApiVersion(apiVersion, DEFAULT_GEMINI_API_VERSION);
+  const normalizedModel = normalizeGeminiModelId(model);
+  const url = new URL(`${base}/${normalizedVersion}/models/${encodeURIComponent(normalizedModel)}:generateContent`);
+  if (apiKey.trim().length > 0) {
+    url.searchParams.set('key', apiKey.trim());
+  }
+  return url.toString();
+}
+
+function normalizeGeminiEndpointBase(endpoint?: string): string {
+  return normalizeOptionalGeminiEndpointBase(endpoint) ?? 'https://generativelanguage.googleapis.com';
+}
+
+function normalizeOptionalGeminiEndpointBase(endpoint?: string): string | undefined {
+  const trimmed = endpoint?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/\/+$/, '');
+}
+
+function normalizeGeminiApiVersion(apiVersion: string | undefined, fallback: string): string {
+  const trimmed = apiVersion?.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  return trimmed.replace(/^\/+|\/+$/g, '');
+}
+
+function normalizeGeminiModelId(model: string): string {
+  const trimmed = model.trim();
+  if (trimmed.startsWith('models/')) {
+    return trimmed.slice('models/'.length);
+  }
+  return trimmed;
+}
+
+async function safeReadText(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch {
+    return '';
+  }
+}
+
+function toGeminiRestGenerateContentRequest(payload: GeminiGenerateContentRequest): Record<string, unknown> {
+  const request: Record<string, unknown> = {
+    contents: normalizeGeminiRestContents(payload.contents)
+  };
+
+  if (payload.config) {
+    request.generationConfig = payload.config;
+  }
+  if (payload.safetySettings && payload.safetySettings.length > 0) {
+    request.safetySettings = payload.safetySettings;
+  }
+  if (payload.tools && payload.tools.length > 0) {
+    request.tools = payload.tools;
+  }
+
+  return request;
+}
+
+function normalizeGeminiRestContents(contents: GeminiContent): Array<Record<string, unknown>> {
+  if (typeof contents === 'string') {
+    return [
+      {
+        role: 'user',
+        parts: [{ text: contents }]
+      }
+    ];
+  }
+
+  if (Array.isArray(contents)) {
+    return contents.map((content) => normalizeGeminiRestContent(content));
+  }
+
+  return [normalizeGeminiRestContent(contents)];
+}
+
+function normalizeGeminiRestContent(content: unknown): Record<string, unknown> {
+  if (typeof content === 'string') {
+    return {
+      role: 'user',
+      parts: [{ text: content }]
+    };
+  }
+
+  if (!isRecord(content)) {
+    throw new Error('Gemini REST transport received an unsupported content payload.');
+  }
+
+  const rawParts = Array.isArray(content.parts) ? content.parts : [];
+  if (rawParts.length === 0) {
+    throw new Error('Gemini REST transport requires each content item to include at least one part.');
+  }
+
+  return {
+    role: typeof content.role === 'string' ? content.role : 'user',
+    parts: rawParts.map((part) => normalizeGeminiRestPart(part))
+  };
+}
+
+function normalizeGeminiRestPart(part: unknown): Record<string, unknown> {
+  if (!isRecord(part)) {
+    throw new Error('Gemini REST transport received an invalid content part.');
+  }
+
+  const normalized: Record<string, unknown> = {};
+  if (typeof part.text === 'string') {
+    normalized.text = part.text;
+  }
+  if (isRecord(part.inlineData)) {
+    normalized.inlineData = {
+      ...part.inlineData
+    };
+  }
+
+  if (Object.keys(normalized).length === 0) {
+    throw new Error('Gemini REST transport requires each part to include text or inlineData.');
+  }
+
+  return normalized;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function resolveFetch(): typeof fetch {
+  if (typeof fetch === 'function') {
+    return fetch;
+  }
+  if (typeof globalThis !== 'undefined' && typeof globalThis.fetch === 'function') {
+    return globalThis.fetch;
+  }
+  throw new Error('A global fetch implementation is required to call the Gemini API.');
 }

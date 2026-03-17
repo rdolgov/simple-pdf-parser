@@ -17,6 +17,7 @@ export interface StructuredExtractApiConfig {
   apiKey?: string;
   model?: string;
   endpoint?: string;
+  apiVersion?: string;
   generationConfig?: Record<string, unknown>;
   safetySettings?: Array<Record<string, unknown>>;
   prompt?: string;
@@ -79,6 +80,8 @@ export class StructuredExtractAPI {
         : new GeminiStructuredExtract({
             apiKey,
             model: this.config.model,
+            endpoint: this.config.endpoint,
+            apiVersion: this.config.apiVersion,
             generationConfig: this.config.generationConfig,
             safetySettings: this.config.safetySettings,
             prompt: this.config.prompt

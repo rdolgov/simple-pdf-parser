@@ -187,7 +187,7 @@ function parseAnnotations(jsonText: string) {
 
 function createFetchResponsesClient(apiKey: string, endpoint?: string): OpenAiLikeClient {
   const fetchImpl = resolveFetch();
-  const targetEndpoint = endpoint ?? 'https://api.openai.com/v1/responses';
+  const targetEndpoint = normalizeResponsesEndpoint(endpoint);
   return {
     responses: {
       async create(input: Record<string, unknown>) {
@@ -212,6 +212,20 @@ function createFetchResponsesClient(apiKey: string, endpoint?: string): OpenAiLi
       }
     }
   };
+}
+
+function normalizeResponsesEndpoint(endpoint?: string): string {
+  if (!endpoint) {
+    return 'https://api.openai.com/v1/responses';
+  }
+  const trimmed = endpoint.trim();
+  if (trimmed.length === 0) {
+    return 'https://api.openai.com/v1/responses';
+  }
+  if (trimmed.endsWith('/responses')) {
+    return trimmed;
+  }
+  return `${trimmed.replace(/\/+$/, '')}/responses`;
 }
 
 function resolveFetch(): typeof fetch {

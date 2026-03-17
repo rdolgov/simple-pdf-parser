@@ -20,6 +20,12 @@ export default defineConfig({
   },
   assetsInclude: ['**/*.xlsx'],
   server: {
-    port: 5174
+    port: 5174,
+    proxy: {
+      '/api/llm': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      }
+    }
   }
 });

@@ -60,6 +60,8 @@ export interface GeminiStructuredExtractOptions {
 export interface GeminiStructuredExtractConfig {
   apiKey: string;
   model?: string;
+  endpoint?: string;
+  apiVersion?: string;
   generationConfig?: GeminiApiConfig['generationConfig'];
   safetySettings?: GeminiApiConfig['safetySettings'];
   prompt?: string;
@@ -176,6 +178,8 @@ export class GeminiStructuredExtract {
       new GeminiAPI({
         apiKey: config.apiKey,
         model: config.model,
+        endpoint: config.endpoint,
+        apiVersion: config.apiVersion,
         generationConfig: config.generationConfig,
         safetySettings: config.safetySettings
       });

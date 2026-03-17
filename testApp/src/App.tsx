@@ -57,6 +57,7 @@ import {
   shouldAutoRunLayoutDetection,
   shouldAutoRunStructuredExtract
 } from './utils/aiDetectionActivation';
+import { applyTransportToRelevanceConfig, hasRuntimeProviderAccess } from './utils/llmClients';
 
 export default function App(): JSX.Element {
   const aiDetectionMode = useMemo(
@@ -459,20 +460,23 @@ export default function App(): JSX.Element {
   const createFocusService = useCallback(
     (provider: FocusProvider, config: RelevanceServiceConfig) => {
       if (provider === 'openai') {
-        if (!config.apiKey || config.apiKey.length === 0) {
+        if (!hasRuntimeProviderAccess('openai', config.apiKey)) {
           throw new Error('OpenAI API key is required');
         }
+        const transportedConfig = applyTransportToRelevanceConfig({
+          ...config,
+          provider: 'openai',
+          model: config.model && config.model.length > 0 ? config.model : 'gpt-5.2'
+        });
         const clientFactory = () =>
           new OpenAI({
-            apiKey: config.apiKey!,
-            baseURL: config.endpoint,
+            apiKey: transportedConfig.apiKey!,
+            baseURL: transportedConfig.endpoint,
             dangerouslyAllowBrowser: true
           });
         return new OpenAiRelevanceService(
           {
-            ...config,
-            provider: 'openai',
-            model: config.model && config.model.length > 0 ? config.model : 'gpt-5.2',
+            ...transportedConfig,
             dangerouslyAllowBrowser: true
           },
           clientFactory
@@ -600,7 +604,7 @@ export default function App(): JSX.Element {
       return;
     }
 
-    if (!useRecordingPlayback && focusProvider === 'openai' && (!openAiConfig.apiKey || openAiConfig.apiKey.length === 0)) {
+    if (!useRecordingPlayback && focusProvider === 'openai' && !hasRuntimeProviderAccess('openai', openAiConfig.apiKey)) {
       setFocusState({ status: 'error', message: 'Provide an OpenAI API key to use GPT focus mode.' });
       return;
     }

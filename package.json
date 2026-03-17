@@ -10,8 +10,11 @@
   ],
   "scripts": {
     "build": "npm run build:all",
-    "build:all": "npm install && npm --prefix testApp install && npm run build:lib && npm --prefix testApp run build",
+    "build:all": "npm install && npm --prefix testApp install && npm run build:lib && npm run build:server && npm --prefix testApp run build",
     "build:lib": "tsc -p tsconfig.json",
+    "build:server": "tsc -p server/tsconfig.json",
+    "dev:server": "tsc -p server/tsconfig.json --watch",
+    "start:server": "npm run build:server && node dist-server/index.js",
     "pages:build": "bash ./scripts/github-pages-build.sh",
     "pages:publish": "bash ./scripts/github-pages-publish.sh",
     "clean": "rimraf dist",

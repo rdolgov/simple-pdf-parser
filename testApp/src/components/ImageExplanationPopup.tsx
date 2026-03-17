@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { GeminiAPI, OpenAiAPI } from 'pdf-layout-parser';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
+import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
 
 
 export interface ImageExplanationData {
@@ -124,13 +124,13 @@ export function ImageExplanationPopup({
 3. **Purpose**: What is this image trying to illustrate or communicate?
 4. **Context**: How might this relate to the surrounding document content?
 
-Keep the explanation concise but thorough, suitable for someone trying to understand the document.`;
+      Keep the explanation concise but thorough, suitable for someone trying to understand the document.`;
       const result = provider === 'openai'
-        ? await new OpenAiAPI({
+        ? await createTransportedOpenAiApi({
             apiKey,
             ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
           }).generateFromImage(base64Data, mimeType, prompt)
-        : await new GeminiAPI({
+        : await createTransportedGeminiApi({
             apiKey,
             ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
           }).generateFromImage(base64Data, mimeType, prompt, { mediaResolution: 'high' });

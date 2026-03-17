@@ -69,8 +69,47 @@ renderStructuredData(container, document, { assetMap });
 
 - `npm run build` – install deps and build both the library and `testApp`.
 - `npm run build:lib` – compile TypeScript library to `dist/`.
+- `npm run build:server` – compile the optional Node LLM proxy to `dist-server/`.
+- `npm run start:server` – build and run the proxy server on `http://localhost:8787`.
 - `npm test` – execute the Vitest suite.
 - `npm run lint` – run type-checking.
+
+### Optional LLM Proxy Backend
+
+This repo now includes a separate TypeScript backend under [server/src/index.ts](/Users/rdolgov/code/simple-pdf-parser/server/src/index.ts). It is meant to sit between the browser UI and upstream LLM providers so the app can either:
+
+- call Gemini/OpenAI directly from the client, or
+- call your own backend proxy first and let that server forward upstream.
+
+Supported proxy routes:
+
+- `POST /api/llm/openai/responses`
+- `POST /api/llm/openai/embeddings`
+- `POST /api/llm/openai/images/generations`
+- `POST /api/llm/gemini/v1beta/models/<model>:generateContent`
+- `POST /api/llm/gemini/v1beta/models/<model>:batchEmbedContents`
+- `POST /api/llm/gemini/v1beta/models/<model>:embedContent`
+
+Server environment variables:
+
+- `PORT` defaults to `8787`
+- `LLM_PROXY_AUTH_TOKEN` is optional shared auth checked against `Authorization: Bearer ...` or Gemini `?key=...`
+- `OPENAI_API_KEY` configures the upstream OpenAI key used by the proxy
+- `OPENAI_BASE_URL` defaults to `https://api.openai.com/v1`
+- `GEMINI_API_KEY` configures the upstream Gemini key used by the proxy
+- `GEMINI_BASE_URL` defaults to `https://generativelanguage.googleapis.com`
+- `LLM_PROXY_CORS_ORIGIN` defaults to `*`
+
+Example:
+
+```bash
+OPENAI_API_KEY=... \
+GEMINI_API_KEY=... \
+LLM_PROXY_AUTH_TOKEN=dev-shared-token \
+npm run start:server
+```
+
+In the React app sidebar, switch `LLM Transport` to `Proxy server` and set the proxy base URL to `/api/llm` for local Vite development or to your deployed backend URL if it lives elsewhere.
 
 ### Debug Web App
 

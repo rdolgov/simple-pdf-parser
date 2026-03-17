@@ -1,6 +1,7 @@
 import type { ChartConfiguration } from 'chart.js';
-import { GeminiAPI, type GeminiGenerateContentResponse } from 'pdf-layout-parser';
+import type { GeminiGenerateContentResponse } from 'pdf-layout-parser';
 import type { ExtractedTable } from '../types';
+import { createTransportedGeminiApi } from './llmClients';
 
 export type AiChartResult = {
   config: ChartConfiguration;
@@ -17,7 +18,7 @@ export async function generateAiChartFromTable(params: {
   const rows = tableToRows(table);
   const prompt = buildChartPrompt(rows);
 
-  const client = new GeminiAPI({ apiKey, model });
+  const client = createTransportedGeminiApi({ apiKey, model });
   const response = await client.generateText(prompt);
   const chartConfig = parseChartConfig(response.text);
 
