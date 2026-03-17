@@ -34,10 +34,6 @@ import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 interface ControlsSidebarProps {
   state: LoadState;
   pageInfo: string;
-  zoomIndicator: string;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  onZoomReset: () => void;
   includeImageData: boolean;
   setIncludeImageData: (value: boolean) => void;
   focusQuery: string;
@@ -60,7 +56,6 @@ interface ControlsSidebarProps {
   viewMode: ViewMode;
   setViewMode: (mode: ViewMode) => void;
   showFocusView: (mode: 'focus-render' | 'focus-pdf') => void;
-  canUseZoom: boolean;
   extractState: ExtractState;
   geminiExtractionState: GeminiExtractionState;
   aiDetectionSupport: AiDetectionSupport;
@@ -76,10 +71,6 @@ interface ControlsSidebarProps {
 export function ControlsSidebar({
   state,
   pageInfo,
-  zoomIndicator,
-  onZoomIn,
-  onZoomOut,
-  onZoomReset,
   includeImageData,
   setIncludeImageData,
   focusQuery,
@@ -102,7 +93,6 @@ export function ControlsSidebar({
   viewMode,
   setViewMode,
   showFocusView,
-  canUseZoom,
   extractState,
   geminiExtractionState,
   aiDetectionSupport,
@@ -306,18 +296,6 @@ export function ControlsSidebar({
 
         <div className="control-groups">
           <span className="document-meta">{pageInfo}</span>
-          <div className="zoom-controls">
-            <button type="button" onClick={onZoomOut} disabled={!canUseZoom}>
-              Zoom Out
-            </button>
-            <button type="button" onClick={onZoomReset} disabled={!canUseZoom}>
-              Reset
-            </button>
-            <button type="button" onClick={onZoomIn} disabled={!canUseZoom}>
-              Zoom In
-            </button>
-            <span>{zoomIndicator}</span>
-          </div>
         </div>
 
         <div className="control-groups">

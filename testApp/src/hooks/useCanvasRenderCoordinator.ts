@@ -73,6 +73,16 @@ export function useCanvasRenderCoordinator({
     });
     return sizes;
   }, [document]);
+  const pageSizesRef = useRef(pageSizes);
+  const zoomRef = useRef(zoom);
+
+  useEffect(() => {
+    pageSizesRef.current = pageSizes;
+  }, [pageSizes]);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
 
   const totalPages = document?.pages.length ?? 0;
 
@@ -122,15 +132,15 @@ export function useCanvasRenderCoordinator({
 
   const applyCanvasDisplaySize = useCallback(
     (pageNumber: number, element: HTMLCanvasElement) => {
-      const size = pageSizes.get(pageNumber);
+      const size = pageSizesRef.current.get(pageNumber);
       if (!size) {
         return;
       }
-      const displaySize = computeCanvasDisplaySize(size.width, size.height, zoom);
+      const displaySize = computeCanvasDisplaySize(size.width, size.height, zoomRef.current);
       element.style.width = `${displaySize.width}px`;
       element.style.height = `${displaySize.height}px`;
     },
-    [pageSizes, zoom]
+    []
   );
 
   const postWorkerMessage = useCallback((message: PageRenderWorkerRequest, transfer: Transferable[] = []) => {
@@ -208,7 +218,7 @@ export function useCanvasRenderCoordinator({
     backgroundCanvasElements.current.forEach((element, pageNumber) => {
       applyCanvasDisplaySize(pageNumber, element);
     });
-  }, [applyCanvasDisplaySize]);
+  }, [applyCanvasDisplaySize, pageSizes, zoom]);
 
   useEffect(() => {
     if (!shouldUseBackgroundRendering) {

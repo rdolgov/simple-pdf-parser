@@ -14,6 +14,11 @@ interface SemanticSearchBarProps {
   isIndexed: boolean;
   isIndexing: boolean;
   indexingProgress: IndexingProgress;
+  zoomIndicator: string;
+  canUseZoom: boolean;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onZoomReset: () => void;
   onStartIndexing: () => void;
   onSearch: (query: string) => Promise<SemanticSearchResult[]>;
   onClearSearch: () => void;
@@ -34,6 +39,11 @@ export function SemanticSearchBar({
   isIndexed,
   isIndexing,
   indexingProgress,
+  zoomIndicator,
+  canUseZoom,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
   onStartIndexing,
   onSearch,
   onClearSearch,
@@ -387,6 +397,39 @@ export function SemanticSearchBar({
             <span>Indexed</span>
           </div>
         )}
+
+        <div className="semantic-search-zoom" role="group" aria-label="Zoom controls">
+          <button
+            type="button"
+            className="semantic-search-zoom-btn"
+            onClick={onZoomOut}
+            disabled={!canUseZoom}
+            aria-label="Zoom out"
+            title="Zoom out"
+          >
+            -
+          </button>
+          <button
+            type="button"
+            className="semantic-search-zoom-indicator"
+            onClick={onZoomReset}
+            disabled={!canUseZoom}
+            aria-label={`Reset zoom to default, current zoom ${zoomIndicator}`}
+            title="Reset zoom"
+          >
+            {zoomIndicator}
+          </button>
+          <button
+            type="button"
+            className="semantic-search-zoom-btn"
+            onClick={onZoomIn}
+            disabled={!canUseZoom}
+            aria-label="Zoom in"
+            title="Zoom in"
+          >
+            +
+          </button>
+        </div>
 
         <button
           type="button"

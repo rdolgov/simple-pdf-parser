@@ -9,6 +9,7 @@ import {
 import { PDFDocument } from '../src/pdfDocument.js';
 import { CanvasRenderer } from '../src/viewer/canvasRenderer.js';
 import type { PDFTextItem } from '../src/types.js';
+import { deserializePdfPage, serializePdfPage } from '../testApp/src/workers/pdfPageTransfer.js';
 import { RecordingCanvas, RecordingContext } from './support/recordingCanvas.js';
 
 function loadPlatonicSpacesDocument(): PDFDocument {
@@ -219,6 +220,29 @@ describe('PDF layout integration', () => {
     expect(radicalDraw!.font).toContain('math');
     expect(sigmaDraw!.font).toContain("'CMEX9'");
     expect(sigmaDraw!.font).toContain('math');
+  });
+
+  it('preserves the Figure 1 page image across worker-style page transfers', () => {
+    const document = loadAttentionPaperDocument();
+    const page = document.getPage(3);
+
+    expect(page).toBeDefined();
+
+    const figureImage = page!.imageItems.find((item) => item.name === 'Im1');
+
+    expect(figureImage).toBeDefined();
+    expect(figureImage!.dataUri).toBeUndefined();
+    expect(figureImage!.pixels).toBeDefined();
+
+    const transferred = structuredClone(serializePdfPage(page!));
+    const restoredPage = deserializePdfPage(transferred);
+    const restoredImage = restoredPage.imageItems.find((item) => item.name === figureImage!.name);
+
+    expect(restoredImage).toBeDefined();
+    expect(restoredImage!.pixels).toBeDefined();
+    expect(restoredImage!.pixels!.width).toBe(figureImage!.pixels!.width);
+    expect(restoredImage!.pixels!.height).toBe(figureImage!.pixels!.height);
+    expect(restoredImage!.bounds).toEqual(figureImage!.bounds);
   });
 
   it('renders the NIPS conclusion heading without zero-advance fake spaces inside the word', () => {

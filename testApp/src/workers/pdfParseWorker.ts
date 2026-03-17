@@ -2,11 +2,11 @@
 
 import {
   PDFParser,
-  type PDFEmbeddedFontResource,
-  type PDFPage
+  type PDFEmbeddedFontResource
 } from 'pdf-layout-parser';
 
 import type { PdfParseWorkerRequest, PdfParseWorkerResponse } from './pdfParseProtocol';
+import { serializePdfPage, type SerializedPdfPage } from './pdfPageTransfer';
 
 const workerScope = self as DedicatedWorkerGlobalScope;
 const INITIAL_PAGE_BATCH_SIZE = 5;
@@ -22,7 +22,7 @@ workerScope.onmessage = (event: MessageEvent<PdfParseWorkerRequest>) => {
     let totalPages = 0;
     let pagesSinceFlush = 0;
     let didSendCompleteBatch = false;
-    const pendingPages: PDFPage[] = [];
+    const pendingPages: SerializedPdfPage[] = [];
     let pendingFontResources: Record<string, PDFEmbeddedFontResource> = {};
 
     const flushBatch = (complete: boolean) => {
@@ -49,7 +49,7 @@ workerScope.onmessage = (event: MessageEvent<PdfParseWorkerRequest>) => {
     const parser = new PDFParser({
       onPageParsed: ({ page, pageNumber, totalPages: reportedTotalPages, fontResources }) => {
         totalPages = reportedTotalPages;
-        pendingPages.push(page);
+        pendingPages.push(serializePdfPage(page));
         pagesSinceFlush += 1;
 
         if (fontResources) {

@@ -1,4 +1,6 @@
-import type { PDFEmbeddedFontResource, PDFPage } from 'pdf-layout-parser';
+import type { PDFEmbeddedFontResource } from 'pdf-layout-parser';
+
+import type { SerializedPdfPage } from './pdfPageTransfer';
 
 export type PdfParseWorkerRequest = {
   type: 'parse-document';
@@ -8,7 +10,7 @@ export type PdfParseWorkerRequest = {
 export type PdfParseWorkerResponse =
   | {
       type: 'parsed-page-batch';
-      pages: PDFPage[];
+      pages: SerializedPdfPage[];
       fontResources?: Record<string, PDFEmbeddedFontResource>;
       totalPages: number;
       complete: boolean;

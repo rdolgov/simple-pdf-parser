@@ -943,6 +943,11 @@ export default function App(): JSX.Element {
           isIndexed={isIndexed}
           isIndexing={isIndexing}
           indexingProgress={indexingProgress}
+          zoomIndicator={zoomIndicator}
+          canUseZoom={canUseZoom}
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          onZoomReset={handleZoomReset}
           onStartIndexing={startIndexing}
           onSearch={semanticSearchFn}
           onClearSearch={clearSemanticResults}
@@ -1021,10 +1026,6 @@ export default function App(): JSX.Element {
         <ControlsSidebar
           state={state}
           pageInfo={pageInfo}
-          zoomIndicator={zoomIndicator}
-          onZoomIn={handleZoomIn}
-          onZoomOut={handleZoomOut}
-          onZoomReset={handleZoomReset}
           includeImageData={includeImageData}
           setIncludeImageData={setIncludeImageData}
           focusQuery={focusQuery}
@@ -1047,7 +1048,6 @@ export default function App(): JSX.Element {
           viewMode={viewMode}
           setViewMode={setViewMode}
           showFocusView={showFocusView}
-          canUseZoom={canUseZoom}
           extractState={extractState}
           geminiExtractionState={geminiExtractionState}
           aiDetectionSupport={aiDetectionSupport}

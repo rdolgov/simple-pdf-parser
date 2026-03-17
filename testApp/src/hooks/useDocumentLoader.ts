@@ -27,6 +27,7 @@ import {
 } from '../utils/structuredExtractSettings';
 import { analyzeAiDetectionSupport, type AiDetectionSupport } from '../utils/aiDetectionSupport';
 import type { PdfParseWorkerResponse } from '../workers/pdfParseProtocol';
+import { deserializePdfPage } from '../workers/pdfPageTransfer';
 
 const EXTRACT_CACHE_SCHEMA_VERSION = 4;
 
@@ -436,7 +437,7 @@ async function parsePdfDocumentInWorker(
       const message = event.data;
 
       if (message.type === 'parsed-page-batch') {
-        parsedPages.push(...message.pages);
+        parsedPages.push(...message.pages.map((page) => deserializePdfPage(page)));
         if (message.fontResources) {
           Object.assign(parsedFontResources, message.fontResources);
         }

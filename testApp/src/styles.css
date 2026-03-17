@@ -686,31 +686,6 @@ header p {
   font-weight: 500;
 }
 
-.zoom-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.zoom-controls button {
-  padding: 6px 12px;
-  border: none;
-  border-radius: 4px;
-  background: #e4e7eb;
-  color: #1f2933;
-  cursor: pointer;
-  font-weight: 600;
-}
-
-.zoom-controls button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.zoom-controls span {
-  font-weight: 600;
-}
-
 .canvas-wrapper {
   background: #ffffff;
   border-radius: 8px;
@@ -1341,13 +1316,17 @@ header p {
   transform: translateX(-50%);
   z-index: 1000;
   pointer-events: auto;
+  max-width: calc(100vw - 24px);
 }
 
 .semantic-search-bar-inner {
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
+  max-width: min(calc(100vw - 24px), 920px);
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.97), rgba(241, 245, 249, 0.95));
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -1530,6 +1509,55 @@ header p {
   font-size: 12px;
   font-weight: 500;
   border-radius: 6px;
+}
+
+.semantic-search-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.semantic-search-zoom-btn,
+.semantic-search-zoom-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #334155;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  transition: all 0.15s ease;
+}
+
+.semantic-search-zoom-btn {
+  width: 30px;
+  padding: 0;
+}
+
+.semantic-search-zoom-indicator {
+  min-width: 58px;
+  padding: 0 10px;
+  color: #0f172a;
+}
+
+.semantic-search-zoom-btn:hover:not(:disabled),
+.semantic-search-zoom-indicator:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.1);
+  color: #1d4ed8;
+}
+
+.semantic-search-zoom-btn:disabled,
+.semantic-search-zoom-indicator:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .semantic-search-ai-btn {
