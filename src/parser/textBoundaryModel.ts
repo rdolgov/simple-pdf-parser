@@ -60,6 +60,10 @@ const COMMON_BIGRAMS = new Set([
   'theorem again'
 ]);
 
+const TITLE_CASE_CONNECTOR_WORDS = new Set([
+  'a', 'an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'of', 'on', 'or', 'the', 'to', 'via', 'vs', 'with'
+]);
+
 const MATH_FONT_PATTERN = /(cmex|cmsy|cmmi|line10|msam|msbm|symbol|wasy|stmary)/i;
 const MAX_WORD_LENGTH = 28;
 const MIN_IMPROVEMENT = 2.5;
@@ -254,6 +258,7 @@ function refineSegment(
 ): string {
   const trailingWhitespace = segment.match(/\s+$/)?.[0] ?? '';
   const core = segment.slice(0, segment.length - trailingWhitespace.length);
+  const originalWords = core.split(/\s+/).filter(Boolean);
 
   if (!core.includes(' ') && core.length < 8) {
     return segment;
@@ -263,12 +268,19 @@ function refineSegment(
     return segment;
   }
 
+  // Proper-name and title-case phrases are already strong lexical signals.
+  // The boundary model is mainly for repairing suspicious prose splits, and
+  // these phrases are often harmed by document-specific lexicon noise
+  // (for example, merged email local-parts like "kaichen").
+  if (isLikelyProtectedTitleCasePhrase(originalWords)) {
+    return segment;
+  }
+
   const collapsed = collapseSegment(core, suspiciousSpaceIndices);
   if (collapsed.joined.length < 4) {
     return segment;
   }
 
-  const originalWords = core.split(/\s+/).filter(Boolean);
   if (!shouldAttemptRefinement(originalWords, fontKey, lexicon)) {
     return segment;
   }
@@ -1625,4 +1637,38 @@ function hasAllCapsAcronymWords(segment: string): boolean {
   }
 
   return false;
+}
+
+function isLikelyProtectedTitleCasePhrase(words: string[]): boolean {
+  if (words.length < 2 || words.length > 10) {
+    return false;
+  }
+
+  let titleLikeCount = 0;
+
+  for (const word of words) {
+    const normalized = word.replace(/[^A-Za-z]/g, '');
+    if (normalized.length === 0) {
+      continue;
+    }
+
+    if (TITLE_CASE_CONNECTOR_WORDS.has(normalized.toLowerCase())) {
+      titleLikeCount += 1;
+      continue;
+    }
+
+    if (/^[A-Z][a-z]+(?:['’][A-Z]?[a-z]+)?$/.test(normalized)) {
+      titleLikeCount += 1;
+      continue;
+    }
+
+    if (/^[A-Z]{2,4}$/.test(normalized)) {
+      titleLikeCount += 1;
+      continue;
+    }
+
+    return false;
+  }
+
+  return titleLikeCount >= 2;
 }

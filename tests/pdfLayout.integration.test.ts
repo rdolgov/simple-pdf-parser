@@ -142,6 +142,26 @@ describe('PDF layout integration', () => {
     expect(equationItems.some((item) => item.text === 'fi')).toBe(false);
   });
 
+  it('keeps word2vec page-1 title-case names and title words intact', () => {
+    const document = loadWordEmbeddingsDocument();
+    const page = document.getPage(1);
+
+    expect(page).toBeDefined();
+
+    const pageText = page!.textItems.map((item) => item.text).join('\n');
+
+    expect(pageText).toContain('Vector Space');
+    expect(pageText).toContain('Tomas Mikolov');
+    expect(pageText).toContain('Kai Chen');
+    expect(pageText).toContain('Greg Corrado');
+    expect(pageText).toContain('Jeffrey Dean');
+    expect(pageText).not.toContain('VectorS pace');
+    expect(pageText).not.toContain('To masMikolov');
+    expect(pageText).not.toContain('KaiChen');
+    expect(pageText).not.toContain('GregCorr a do');
+    expect(pageText).not.toContain('JeffreyDe an');
+  });
+
   it('assigns deeper bounds to TeX radical glyphs before rendering', () => {
     const document = loadAttentionPaperDocument();
     const page = document.getPage(4);
