@@ -20,6 +20,7 @@ import { MathViewPopup } from './MathViewPopup';
 import { InteractiveWidgetPopup } from './InteractiveWidgetPopup';
 import { ImageExplanationPopup, type ImageExplanationData } from './ImageExplanationPopup';
 import { LassoActionMenu } from './LassoActionMenu';
+import { InterestingTextOverlay } from './InterestingTextOverlay';
 import { getCachedImageExplanation, setCachedImageExplanation, deleteCachedImageExplanation } from '../storage/imageExplanationCache';
 import {
   type AnnotationBounds,
@@ -43,7 +44,6 @@ import {
   buildHighlightBlockKey,
   findParagraphBlockAtPoint,
   detectExtractedTableAtPoint,
-  getOverrideLineHeight,
   isParagraphBlock
 } from '../utils/highlightUtils';
 import { refineTextBlockForSelection } from '../utils/textBlockSelection';
@@ -96,7 +96,6 @@ import {
   type LassoBounds,
   type LassoPoint
 } from '../utils/lassoSelection';
-import { parsePopupTextSegments } from '../utils/popupTextSegments';
 import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
 import {
   buildChatContextText,
@@ -1893,7 +1892,7 @@ export function CanvasPageWithOverlay({
       return;
     }
     const target = event.target as HTMLElement | null;
-    if (target?.closest('.canvas-overlay-toolbar-button')) {
+    if (target?.closest('.canvas-overlay-toolbar-button, .overlay-toolbar, .interesting-text-overlay')) {
       return;
     }
 
@@ -2359,7 +2358,17 @@ export function CanvasPageWithOverlay({
                           disabled={isGeneratingInteractiveWidget}
                         />
                       </OverlayToolbar>
-                      <div className="canvas-overlay-highlight-inner canvas-overlay-highlight-inner--secondary" />
+                      <div className="canvas-overlay-highlight-inner canvas-overlay-highlight-inner--interactive-text">
+                        <InterestingTextOverlay
+                          blockBounds={bounds}
+                          lines={block.lines}
+                          paragraphText={highlightText}
+                          scaleX={scaleX}
+                          scaleY={scaleY}
+                          hasReferenceExtraction={Boolean(geminiExtraction)}
+                          onCitationClick={handleCitationClick}
+                        />
+                      </div>
                     </>
                   ) : (
                     <div className="canvas-overlay-highlight-inner canvas-overlay-highlight-inner--secondary" />
@@ -2672,66 +2681,6 @@ function ConnectionIcon(): JSX.Element {
       <circle cx="12" cy="8" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
       <path d="M6.5 8h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
-  );
-}
-
-/**
- * Renders paragraph popup text with clickable citations and URLs.
- */
-interface CitationTextProps {
-  text: string;
-  onCitationClick: (citationNumber: string, event: React.MouseEvent, paragraphText: string, bounds: AnnotationBounds) => void;
-  hasExtraction: boolean;
-  paragraphText: string;
-  bounds: AnnotationBounds;
-}
-
-function CitationText({ text, onCitationClick, hasExtraction, paragraphText, bounds }: CitationTextProps): JSX.Element {
-  const parts = parsePopupTextSegments(text);
-
-  if (parts.length === 0) {
-    return <>{text}</>;
-  }
-
-  return (
-    <>
-      {parts.map((part, index) => {
-        if (part.type === 'text') {
-          return <span key={index}>{part.content}</span>;
-        }
-        if (part.type === 'url') {
-          return (
-            <a
-              key={index}
-              className="popup-url-link"
-              href={part.href}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(event) => event.stopPropagation()}
-              title={part.href}
-            >
-              {part.content}
-            </a>
-          );
-        }
-        // For citations, make them clickable
-        // If multiple numbers, clicking shows the first one for now
-        const firstNumber = part.numbers[0] ?? '';
-        return (
-          <span
-            key={index}
-            className="citation-link"
-            onClick={(e) => {
-              e.stopPropagation();
-              onCitationClick(firstNumber, e, paragraphText, bounds);
-            }}
-            title={hasExtraction ? `View reference ${part.content}` : `View citation ${part.content} (run extraction for reference details)`}
-          >
-            {part.content}
-          </span>
-        );
-      })}
-    </>
   );
 }
 

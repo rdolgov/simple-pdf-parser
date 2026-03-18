@@ -13,6 +13,7 @@ export interface HighlightLineData {
   text: string;
   bounds?: PDFImageBounds;
   lineHeight?: number;
+  spans?: HighlightSpanData[];
 }
 
 export interface HighlightBlockData {
@@ -20,6 +21,11 @@ export interface HighlightBlockData {
   lines: HighlightLineData[];
   fontFamily?: string;
   fontSize?: number;
+}
+
+export interface HighlightSpanData {
+  text: string;
+  bounds?: PDFImageBounds;
 }
 
 export type TableDetectionSource = 'layout-bounds' | 'cell-bounds' | 'ai';
@@ -295,7 +301,13 @@ function extractHighlightLines(block: any): HighlightLineData[] {
     return block.lines.map((line: any) => ({
       text: deriveLineText(line),
       bounds: hasBounds(line.bounds) ? line.bounds : undefined,
-      lineHeight: typeof line.lineHeight === 'number' ? line.lineHeight : undefined
+      lineHeight: typeof line.lineHeight === 'number' ? line.lineHeight : undefined,
+      spans: Array.isArray(line.spans)
+        ? line.spans.map((span: any) => ({
+            text: typeof span?.text === 'string' ? span.text : '',
+            bounds: hasBounds(span?.bounds) ? span.bounds : undefined
+          }))
+        : undefined
     }));
   }
   if (typeof block.text === 'string' && block.text.length > 0) {
