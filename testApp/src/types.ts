@@ -83,7 +83,11 @@ export type CanvasHighlightSelection =
   | {
       kind: 'text';
       pageNumber: number;
+      blockIndex: number;
       block: HtmlParagraphBlock | HtmlHeadingBlock;
+      selectionScope: 'block' | 'topic' | 'section';
+      logicalUnitId?: string;
+      sectionUnitId?: string;
     }
   | {
       kind: 'table';

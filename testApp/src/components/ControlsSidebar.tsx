@@ -607,7 +607,7 @@ export function ControlsSidebar({
               onChange={(event) => handleExtractModelChange(event.target.value)}
             />
             <span className="structured-extract-settings-note">
-              Used for PDF table/image structured extraction. Cache is per file checksum and provider/model.
+              Used for PDF table/image structured extraction and LLM-based logical unit grouping. Cache is per file checksum and provider/model.
             </span>
           </div>
           <span className="structured-extract-settings-note">{aiDetectionModeDescription}</span>

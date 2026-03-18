@@ -2,6 +2,7 @@ import type { StructuredExtractProvider } from 'pdf-layout-parser';
 import { canUseLocalStorage } from './storage';
 
 export const STRUCTURED_EXTRACT_PROVIDER_STORAGE_KEY = 'structured-extract-provider';
+export const STRUCTURED_EXTRACT_SETTINGS_CHANGED_EVENT = 'structured-extract-settings-changed';
 
 export const STRUCTURED_EXTRACT_PROVIDER_API_KEY_STORAGE_KEYS: Record<StructuredExtractProvider, readonly string[]> = {
   gemini: ['gemini-overlay-api-key', 'gemini-api-key'],
@@ -49,6 +50,7 @@ export function setStructuredExtractProvider(provider: StructuredExtractProvider
   }
   try {
     window.localStorage.setItem(STRUCTURED_EXTRACT_PROVIDER_STORAGE_KEY, provider);
+    dispatchStructuredExtractSettingsChanged();
   } catch {
     // Ignore storage access issues.
   }
@@ -83,6 +85,7 @@ export function setStructuredExtractApiKey(provider: StructuredExtractProvider, 
     } else {
       window.localStorage.removeItem(primaryKey);
     }
+    dispatchStructuredExtractSettingsChanged();
   } catch {
     // Ignore storage access issues.
   }
@@ -112,7 +115,15 @@ export function setStructuredExtractModel(provider: StructuredExtractProvider, v
     } else {
       window.localStorage.removeItem(key);
     }
+    dispatchStructuredExtractSettingsChanged();
   } catch {
     // Ignore storage access issues.
   }
+}
+
+function dispatchStructuredExtractSettingsChanged(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(STRUCTURED_EXTRACT_SETTINGS_CHANGED_EVENT));
 }

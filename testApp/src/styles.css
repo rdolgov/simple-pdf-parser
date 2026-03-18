@@ -1082,6 +1082,32 @@ header p {
   mix-blend-mode: normal;
 }
 
+.canvas-overlay-highlight-block--secondary {
+  background: rgba(255, 255, 255, 0.24);
+  border-style: dashed;
+  border-color: rgba(245, 158, 11, 0.7);
+  box-shadow:
+    0 4px 14px rgba(245, 158, 11, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.canvas-overlay-highlight-block--logical-hover-primary {
+  background: rgba(255, 251, 235, 0.08);
+  border-color: rgba(245, 158, 11, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(251, 191, 36, 0.2),
+    0 10px 24px rgba(245, 158, 11, 0.1);
+}
+
+.canvas-overlay-highlight-block--logical-hover-secondary {
+  background: rgba(255, 255, 255, 0.03);
+  border-style: dashed;
+  border-color: rgba(245, 158, 11, 0.28);
+  box-shadow: none;
+}
+
 .canvas-overlay-highlight-inner {
   position: relative;
   width: 100%;
@@ -1090,6 +1116,10 @@ header p {
   color: inherit;
   border-radius: inherit;
   pointer-events: none;
+}
+
+.canvas-overlay-highlight-inner--secondary {
+  background: transparent;
 }
 
 /* Legacy toolbar styles - kept for backwards compatibility */
@@ -1997,6 +2027,46 @@ header p {
 
 .canvas-overlay-highlight-text {
   position: relative;
+}
+
+.canvas-overlay-selection-badge {
+  position: absolute;
+  top: -12px;
+  left: 8px;
+  transform: translateY(-100%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: min(420px, calc(100% - 32px));
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 252, 235, 0.96);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+  color: #7c2d12;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.canvas-overlay-selection-badge-scope {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.canvas-overlay-selection-badge-meta,
+.canvas-overlay-selection-badge-title {
+  font-size: 12px;
+  color: #92400e;
+}
+
+.canvas-overlay-selection-badge-title {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .canvas-overlay-image-panel {

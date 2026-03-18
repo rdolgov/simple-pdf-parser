@@ -48,7 +48,8 @@ import {
   useRecordings,
   useDocumentLoader,
   useGeminiExtraction,
-  useCanvasRenderCoordinator
+  useCanvasRenderCoordinator,
+  useLogicalStructure
 } from './hooks';
 import { useGlobalFetchActivity } from './hooks/useGlobalFetchActivity';
 import { useProxyAuthSession } from './hooks/useProxyAuthSession';
@@ -285,6 +286,10 @@ export default function App(): JSX.Element {
     }
     return convertLayoutToHtml(pdfLayout);
   }, [pdfLayout]);
+  const logicalStructure = useLogicalStructure({
+    fileHash: loadedFileHash,
+    htmlLayout
+  });
 
   // Semantic search document data - prefer htmlLayout for block-level chunking
   const semanticDocumentData = useMemo(() => {
@@ -1032,6 +1037,7 @@ export default function App(): JSX.Element {
           layoutJson={layoutJson}
           htmlFriendlyJson={htmlFriendlyJson}
           htmlPageLayouts={htmlPageLayouts}
+          logicalStructure={logicalStructure}
           canvasHighlight={canvasHighlight}
           onCanvasHighlight={handleCanvasHighlight}
           focusState={focusState}

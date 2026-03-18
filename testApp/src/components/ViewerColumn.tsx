@@ -1,4 +1,4 @@
-import type { HtmlPageLayout, PDFDocument } from 'pdf-layout-parser';
+import type { HtmlDocumentLogicalStructure, HtmlPageLayout, PDFDocument } from 'pdf-layout-parser';
 import type {
   BackgroundRenderProgress,
   CanvasPageRenderState,
@@ -34,6 +34,7 @@ interface ViewerColumnProps {
   layoutJson: string;
   htmlFriendlyJson: string;
   htmlPageLayouts: Map<number, HtmlPageLayout>;
+  logicalStructure: HtmlDocumentLogicalStructure | null;
   canvasHighlight: CanvasHighlightSelection | null;
   onCanvasHighlight: (selection: CanvasHighlightSelection | null) => void;
   focusState: FocusRenderState;
@@ -79,6 +80,7 @@ export function ViewerColumn({
   layoutJson,
   htmlFriendlyJson,
   htmlPageLayouts,
+  logicalStructure,
   canvasHighlight,
   onCanvasHighlight,
   focusState,
@@ -141,6 +143,7 @@ export function ViewerColumn({
                       renderState={getPageRenderState(page.number)}
                       zoom={zoom}
                       htmlPage={htmlPageLayouts.get(page.number) ?? null}
+                      logicalStructure={logicalStructure}
                       canvasHighlight={canvasHighlight}
                       onCanvasHighlight={onCanvasHighlight}
                       focusMode={viewMode === 'focus-pdf' && focusState.status === 'ready'}

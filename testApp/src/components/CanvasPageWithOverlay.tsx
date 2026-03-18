@@ -1,6 +1,14 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
 import type { MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
-import type { HtmlPageLayout, PDFImageBounds, PDFPage } from 'pdf-layout-parser';
+import {
+  findHtmlLogicalUnitById,
+  getHtmlLogicalUnitPageSegment,
+  resolveHtmlLogicalUnitForSelection,
+  type HtmlDocumentLogicalStructure,
+  type HtmlPageLayout,
+  type PDFImageBounds,
+  type PDFPage
+} from 'pdf-layout-parser';
 import type { CanvasHighlightSelection, CanvasPageRenderState, FocusProvider, ExtractedTable } from '../types';
 import type { SemanticSearchResult } from '../search';
 import { TableViewer, type TableSortState } from './TableViewer';
@@ -35,7 +43,8 @@ import {
   buildHighlightBlockKey,
   findParagraphBlockAtPoint,
   detectExtractedTableAtPoint,
-  getOverrideLineHeight
+  getOverrideLineHeight,
+  isParagraphBlock
 } from '../utils/highlightUtils';
 import { refineTextBlockForSelection } from '../utils/textBlockSelection';
 import {
@@ -89,6 +98,12 @@ import {
 } from '../utils/lassoSelection';
 import { parsePopupTextSegments } from '../utils/popupTextSegments';
 import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
+import {
+  buildChatContextText,
+  describeSelectionScope,
+  resolveTextSelectionContext,
+  trimSelectionContextText
+} from '../utils/logicalUnitContext';
 
 const HIGHLIGHT_PADDING = 12;
 const TABLE_HIT_TOLERANCE = 6;
@@ -139,6 +154,12 @@ type LassoSelectionState = {
   promptContext: LassoPromptContext;
 };
 
+type OverlayHighlightEntry = {
+  highlight: HighlightBlockData;
+  blockIndex?: number;
+  isPrimary: boolean;
+};
+
 interface CanvasPageWithOverlayProps {
   page: PDFPage;
   pageNumber: number;
@@ -148,6 +169,7 @@ interface CanvasPageWithOverlayProps {
   renderState: CanvasPageRenderState;
   zoom: number;
   htmlPage: HtmlPageLayout | null;
+  logicalStructure: HtmlDocumentLogicalStructure | null;
   canvasHighlight: CanvasHighlightSelection | null;
   onCanvasHighlight: (selection: CanvasHighlightSelection | null) => void;
   focusMode: boolean;
@@ -179,6 +201,7 @@ export function CanvasPageWithOverlay({
   renderState,
   zoom,
   htmlPage,
+  logicalStructure,
   canvasHighlight,
   onCanvasHighlight,
   focusMode,
@@ -301,7 +324,7 @@ export function CanvasPageWithOverlay({
     setLassoSelection(null);
     setLassoActionState(null);
     setFormulaSuggestionAttentionKey(null);
-  }, [focusLayout, canvasHighlight]);
+  }, [focusLayout]);
 
   useEffect(() => {
     return () => {
@@ -867,10 +890,21 @@ export function CanvasPageWithOverlay({
         setImageMap((current) => ({ ...current, [blockKey]: { dataUri, mimeType, text: response.text } }));
         // Save to storage
         try {
-          await saveOrUpdateImageAnnotation(documentId, pageNumber, bounds, dataUri, mimeType, trimmedPrompt);
+          const annotation = await saveOrUpdateImageAnnotation(documentId, pageNumber, bounds, dataUri, mimeType, trimmedPrompt);
           setAnnotationVersion((v) => v + 1);
+          setImagePreview({
+            dataUri,
+            prompt: trimmedPrompt,
+            position: getWidgetPopupPosition(bounds),
+            annotationId: annotation.id
+          });
         } catch (err) {
           console.error('Failed to save image annotation:', err);
+          setImagePreview({
+            dataUri,
+            prompt: trimmedPrompt,
+            position: getWidgetPopupPosition(bounds)
+          });
         }
       } catch (error) {
         setImageError((current) => ({
@@ -887,7 +921,14 @@ export function CanvasPageWithOverlay({
         });
       }
     },
-    [ensureGeminiApiKey, ensureOpenAiApiKey, documentId, pageNumber, onInlineImageGenerationActivityChange]
+    [
+      ensureGeminiApiKey,
+      ensureOpenAiApiKey,
+      documentId,
+      getWidgetPopupPosition,
+      pageNumber,
+      onInlineImageGenerationActivityChange
+    ]
   );
 
   const getCachedMathResult = useCallback(async (trimmedText: string): Promise<{ found: boolean; latex: string | null }> => {
@@ -1050,12 +1091,16 @@ export function CanvasPageWithOverlay({
         return;
       }
 
-      const textSelection =
-        selectedBlock && selectedBlock.kind === 'text'
-          ? selectedBlock.block
-          : null;
-      const sectionContext = buildSectionContext(htmlPage, textSelection);
-      const defaultTitle = sectionContext.sectionHeading?.trim() || 'Interactive explainer';
+      const textSelection = selectedBlock?.kind === 'text' ? selectedBlock.block : null;
+      const legacySectionContext = buildSectionContext(htmlPage, textSelection);
+      const logicalContext = resolveTextSelectionContext(selectedBlock, logicalStructure, trimmedText);
+      const selectedUnitText = trimSelectionContextText(logicalContext.text, 1100);
+      const sectionText = trimSelectionContextText(
+        logicalContext.sectionUnit?.text || logicalContext.text || legacySectionContext.sectionText || trimmedText,
+        2200
+      );
+      const sectionHeading = logicalContext.title || legacySectionContext.sectionHeading;
+      const defaultTitle = sectionHeading?.trim() || 'Interactive explainer';
 
       setInteractiveWidgetState({
         title: defaultTitle,
@@ -1073,9 +1118,9 @@ export function CanvasPageWithOverlay({
 
         const prompt = buildInteractiveWidgetPrompt({
           documentTitle,
-          selectedText: trimmedText,
-          sectionHeading: sectionContext.sectionHeading,
-          sectionText: sectionContext.sectionText
+          selectedText: logicalContext.scope === 'block' ? trimmedText : selectedUnitText,
+          sectionHeading,
+          sectionText
         });
         const provider = getRewriteProvider();
         const response = provider === 'openai'
@@ -1126,7 +1171,7 @@ export function CanvasPageWithOverlay({
             spec.html,
             spec.css,
             spec.js,
-            trimmedText
+            selectedUnitText
           );
           setAnnotationVersion((current) => current + 1);
         } catch (saveError) {
@@ -1152,6 +1197,7 @@ export function CanvasPageWithOverlay({
       ensureGeminiApiKey,
       ensureOpenAiApiKey,
       htmlPage,
+      logicalStructure,
       onInteractiveWidgetGenerationActivityChange,
       pageNumber
     ]
@@ -1448,9 +1494,10 @@ export function CanvasPageWithOverlay({
     : null;
   const activeTextSelectionText = activeTextSelection?.block.text.trim() ?? '';
   const isGeneratingInteractiveWidget = interactiveWidgetState?.isLoading ?? false;
+  const enableAutomaticFormulaSuggestion = false;
 
   useEffect(() => {
-    if (!enableFormulaHighlight || !activeTextSelectionKey || activeTextSelectionText.length === 0) {
+    if (!enableAutomaticFormulaSuggestion || !enableFormulaHighlight || !activeTextSelectionKey || activeTextSelectionText.length === 0) {
       if (activeTextSelectionKey && activeTextSelectionText.length > 0 && !enableFormulaHighlight) {
         console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} automatic suggestion skipped because formula highlights are disabled`, {
           pageNumber,
@@ -1563,6 +1610,7 @@ export function CanvasPageWithOverlay({
   }, [
     activeTextSelectionKey,
     activeTextSelectionText,
+    enableAutomaticFormulaSuggestion,
     enableFormulaHighlight,
     getCachedMathResult,
     pageNumber,
@@ -1630,15 +1678,78 @@ export function CanvasPageWithOverlay({
     });
   }, [documentId, pageNumber, imageExplanationState]);
 
+  const clearTextHoverSelection = useCallback(() => {
+    if (canvasHighlight?.kind === 'text' && canvasHighlight.pageNumber === page.number) {
+      onCanvasHighlight(null);
+    }
+  }, [canvasHighlight, onCanvasHighlight, page.number]);
+
+  const updateHoverTextSelection = useCallback(
+    (pdfX: number, pdfY: number) => {
+      if (!htmlPage) {
+        clearTextHoverSelection();
+        return;
+      }
+
+      const block = findParagraphBlockAtPoint(htmlPage, pdfX, pdfY);
+      if (!block) {
+        clearTextHoverSelection();
+        return;
+      }
+
+      const blockIndex = htmlPage.content.findIndex((candidate) => candidate === block);
+      if (blockIndex < 0) {
+        clearTextHoverSelection();
+        return;
+      }
+
+      const refinedBlock = refineTextBlockForSelection(block, { x: pdfX, y: pdfY });
+      const logicalSelection = resolveHtmlLogicalUnitForSelection(logicalStructure, {
+        pageNumber: page.number,
+        blockIndex,
+        blockType: block.type
+      });
+      const nextSelection: Extract<CanvasHighlightSelection, { kind: 'text' }> = {
+        kind: 'text',
+        pageNumber: page.number,
+        blockIndex,
+        block: refinedBlock,
+        selectionScope: logicalSelection.scope,
+        logicalUnitId: logicalSelection.logicalUnit?.id,
+        sectionUnitId: logicalSelection.sectionUnit?.id
+      };
+
+      if (
+        canvasHighlight?.kind === 'text' &&
+        canvasHighlight.pageNumber === nextSelection.pageNumber &&
+        canvasHighlight.blockIndex === nextSelection.blockIndex &&
+        canvasHighlight.logicalUnitId === nextSelection.logicalUnitId &&
+        canvasHighlight.sectionUnitId === nextSelection.sectionUnitId
+      ) {
+        return;
+      }
+
+      onCanvasHighlight(nextSelection);
+    },
+    [canvasHighlight, clearTextHoverSelection, htmlPage, logicalStructure, onCanvasHighlight, page.number]
+  );
+
   // Handle mouse move to detect hoverable elements
   const handleCanvasMouseMove = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (lassoMode) {
       if (hoveredElement) setHoveredElement(null);
+      clearTextHoverSelection();
       return;
     }
 
-    if (focusMode || !canvasRef.current || !geminiExtraction) {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('.overlay-toolbar')) {
+      return;
+    }
+
+    if (focusMode || !canvasRef.current) {
       if (hoveredElement) setHoveredElement(null);
+      clearTextHoverSelection();
       return;
     }
 
@@ -1655,66 +1766,70 @@ export function CanvasPageWithOverlay({
     const pdfX = relativeX / zoom - padding;
     const pdfY = page.size.height - (relativeY / zoom - padding);
 
-    // Check for hoverable element types: formula, reference, table, image
-    const hoverableTypes: GeminiElementType[] = ['formula', 'reference', 'table', 'image'];
+    if (geminiExtraction) {
+      // Check for hoverable element types: formula, reference, table, image
+      const hoverableTypes: GeminiElementType[] = ['formula', 'reference', 'table', 'image'];
 
-    // Use aligned elements when available (more accurate bounds from PDF text items)
-    // Only fall back to Gemini bounds for element types that don't have aligned data
-    for (const elementType of hoverableTypes) {
-      // Check aligned elements first
-      if (alignedElements) {
-        const alignedForType = alignedElements.elements.filter(el => el.type === elementType);
-        if (alignedForType.length > 0) {
-          // We have aligned data for this type - use ONLY aligned bounds, don't fall back to Gemini
-          const aligned = alignedForType.find(el => {
-            const { bounds } = el;
-            const tolerance = elementType === 'formula' ? 20 : 15;
-            return (
-              pdfX >= bounds.minX - tolerance &&
-              pdfX <= bounds.maxX + tolerance &&
-              pdfY >= bounds.minY - tolerance &&
-              pdfY <= bounds.maxY + tolerance
-            );
-          });
-          if (aligned) {
-            const { bounds } = aligned;
-            if (!hoveredElement ||
+      // Use aligned elements when available (more accurate bounds from PDF text items)
+      // Only fall back to Gemini bounds for element types that don't have aligned data
+      for (const elementType of hoverableTypes) {
+        if (alignedElements) {
+          const alignedForType = alignedElements.elements.filter((el) => el.type === elementType);
+          if (alignedForType.length > 0) {
+            const aligned = alignedForType.find((el) => {
+              const { bounds } = el;
+              const tolerance = elementType === 'formula' ? 20 : 15;
+              return (
+                pdfX >= bounds.minX - tolerance &&
+                pdfX <= bounds.maxX + tolerance &&
+                pdfY >= bounds.minY - tolerance &&
+                pdfY <= bounds.maxY + tolerance
+              );
+            });
+            if (aligned) {
+              const { bounds } = aligned;
+              if (
+                !hoveredElement ||
                 hoveredElement.type !== elementType ||
                 hoveredElement.bounds.minX !== bounds.minX ||
-                hoveredElement.bounds.minY !== bounds.minY) {
-              setHoveredElement({ type: elementType as GeminiElementType, bounds });
+                hoveredElement.bounds.minY !== bounds.minY
+              ) {
+                setHoveredElement({ type: elementType as GeminiElementType, bounds });
+              }
+              clearTextHoverSelection();
+              return;
             }
-            return;
+            continue;
           }
-          // Has aligned data but cursor not in bounds - skip to next type (don't use Gemini)
-          continue;
         }
-      }
 
-      // No aligned data for this type - fall back to Gemini bounds
-      const element = findElementAtPoint(
-        geminiExtraction,
-        pageNumber,
-        pdfX,
-        pdfY,
-        page.size.width,
-        page.size.height,
-        elementType
-      );
-      if (element) {
-        const bounds = convertBoundsToCoordinates(element.bounding_box, page.size.width, page.size.height);
-        if (!hoveredElement ||
+        const element = findElementAtPoint(
+          geminiExtraction,
+          pageNumber,
+          pdfX,
+          pdfY,
+          page.size.width,
+          page.size.height,
+          elementType
+        );
+        if (element) {
+          const bounds = convertBoundsToCoordinates(element.bounding_box, page.size.width, page.size.height);
+          if (
+            !hoveredElement ||
             hoveredElement.type !== elementType ||
             hoveredElement.bounds.minX !== bounds.minX ||
-            hoveredElement.bounds.minY !== bounds.minY) {
-          setHoveredElement({ type: elementType, bounds });
+            hoveredElement.bounds.minY !== bounds.minY
+          ) {
+            setHoveredElement({ type: elementType, bounds });
+          }
+          clearTextHoverSelection();
+          return;
         }
-        return;
       }
     }
 
     // Debug: Log formulas on this page if Alt key is held (for debugging detection issues)
-    if (event.altKey) {
+    if (geminiExtraction && event.altKey) {
       const pageData = geminiExtraction.pages.find(p => p.page_number === pageNumber);
       const formulas = pageData?.elements.filter(e => e.type === 'formula') ?? [];
       const alignedFormulas = alignedElements?.elements.filter(e => e.type === 'formula') ?? [];
@@ -1740,12 +1855,26 @@ export function CanvasPageWithOverlay({
     if (hoveredElement) {
       setHoveredElement(null);
     }
-  }, [focusMode, geminiExtraction, alignedElements, lassoMode, pageNumber, page.size.width, page.size.height, zoom, hoveredElement]);
+    updateHoverTextSelection(pdfX, pdfY);
+  }, [
+    alignedElements,
+    clearTextHoverSelection,
+    focusMode,
+    geminiExtraction,
+    hoveredElement,
+    lassoMode,
+    page.size.height,
+    page.size.width,
+    pageNumber,
+    updateHoverTextSelection,
+    zoom
+  ]);
 
   // Clear hover on mouse leave
   const handleCanvasMouseLeave = useCallback(() => {
     setHoveredElement(null);
-  }, []);
+    clearTextHoverSelection();
+  }, [clearTextHoverSelection]);
 
   const handleCanvasClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (ignoreNextCanvasClickRef.current) {
@@ -1970,24 +2099,9 @@ export function CanvasPageWithOverlay({
     }
 
     setTableOverlay(null);
+  }, [focusMode, htmlPage, lassoMode, logicalStructure, onCanvasHighlight, page.number, page.size.height, page.size.width, extractedTables, geminiExtraction, pageNumber, zoom, documentId, enableImageHighlight]);
 
-    const block = findParagraphBlockAtPoint(htmlPage, pdfX, pdfY);
-
-    if (!block) {
-      onCanvasHighlight(null);
-      return;
-    }
-
-    const refinedBlock = refineTextBlockForSelection(block, { x: pdfX, y: pdfY });
-    console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} paragraph selected`, {
-      pageNumber,
-      excerpt: summarizeForLog(refinedBlock.text),
-      bounds: refinedBlock.bounds
-    });
-    onCanvasHighlight({ kind: 'text', pageNumber: page.number, block: refinedBlock });
-  }, [focusMode, htmlPage, lassoMode, onCanvasHighlight, page.number, page.size.height, page.size.width, extractedTables, geminiExtraction, pageNumber, zoom, documentId, enableImageHighlight]);
-
-  const highlightBlocks: HighlightBlockData[] = [];
+  const highlightBlocks: OverlayHighlightEntry[] = [];
 
   if (focusMode && focusLayout) {
     const focusPage = focusLayout.pages?.find((p: any) => (p.pageNumber ?? p.number) === page.number);
@@ -1996,7 +2110,10 @@ export function CanvasPageWithOverlay({
         if (block.relevance?.state === 'highlight') {
           const highlight = buildHighlightBlockData(block);
           if (highlight) {
-            highlightBlocks.push(highlight);
+            highlightBlocks.push({
+              highlight,
+              isPrimary: false
+            });
           }
         }
       }
@@ -2005,10 +2122,38 @@ export function CanvasPageWithOverlay({
     }
   }
 
-  if (!focusMode && canvasHighlight?.pageNumber === page.number) {
-    const manualHighlight = buildHighlightBlockData(canvasHighlight.block);
-    if (manualHighlight) {
-      highlightBlocks.push(manualHighlight);
+  if (!focusMode && canvasHighlight?.kind === 'text') {
+    const logicalUnit = findHtmlLogicalUnitById(logicalStructure, canvasHighlight.logicalUnitId);
+    const pageSegment = getHtmlLogicalUnitPageSegment(logicalUnit, page.number);
+
+    if (htmlPage && pageSegment && pageSegment.blockIndexes.length > 0) {
+      for (const blockIndex of pageSegment.blockIndexes) {
+        const sourceBlock = htmlPage.content[blockIndex];
+        if (!isParagraphBlock(sourceBlock)) {
+          continue;
+        }
+        const selectedBlock =
+          canvasHighlight.pageNumber === page.number && canvasHighlight.blockIndex === blockIndex
+            ? canvasHighlight.block
+            : sourceBlock;
+        const highlight = buildHighlightBlockData(selectedBlock);
+        if (highlight) {
+          highlightBlocks.push({
+            highlight,
+            blockIndex,
+            isPrimary: canvasHighlight.pageNumber === page.number && canvasHighlight.blockIndex === blockIndex
+          });
+        }
+      }
+    } else if (canvasHighlight.pageNumber === page.number) {
+      const manualHighlight = buildHighlightBlockData(canvasHighlight.block);
+      if (manualHighlight) {
+        highlightBlocks.push({
+          highlight: manualHighlight,
+          blockIndex: canvasHighlight.blockIndex,
+          isPrimary: true
+        });
+      }
     }
   }
 
@@ -2027,6 +2172,8 @@ export function CanvasPageWithOverlay({
   const activeLassoBounds = lassoSelection?.bounds ?? null;
   const canvasOffsetLeft = canvasRef.current?.offsetLeft ?? 0;
   const canvasOffsetTop = canvasRef.current?.offsetTop ?? 0;
+  const isLogicalTextHoverOverlay = !focusMode && canvasHighlight?.kind === 'text';
+  const showOverlayDim = focusMode || Boolean(tableOverlay);
   const overlayClassName = hasOverlayContent ? 'canvas-overlay canvas-overlay--interactive' : 'canvas-overlay';
   const overlayLayerClassName = hasOverlayContent
     ? 'canvas-overlay-layer canvas-overlay-layer--interactive'
@@ -2130,197 +2277,93 @@ export function CanvasPageWithOverlay({
       )}
       {canvasRef.current && (highlightBlocks.length > 0 || tableOverlay) && (
         <div className={overlayLayerClassName} aria-hidden="true">
-          <div className="canvas-overlay-full-dim" />
+          {showOverlayDim && <div className="canvas-overlay-full-dim" />}
           <div className={overlayClassName}>
-            {highlightBlocks.map((block, index) => {
+            {highlightBlocks.map((entry, index) => {
+              const block = entry.highlight;
               const bounds = block.bounds;
               const blockKey = buildHighlightBlockKey(page.number, bounds);
-              const overrideText = highlightTextOverrides[blockKey];
-              const lines: HighlightLineData[] = overrideText
-                ? [
-                    {
-                      text: overrideText,
-                      bounds,
-                      lineHeight: getOverrideLineHeight(block)
-                    }
-                  ]
-                : block.lines;
-              const highlightText = lines.map((line) => line.text).join(' ').trim();
-              const imageEntry = imageMap[blockKey];
-              const isLoadingImage = Boolean(imageLoading[blockKey]);
+              const selectedBlockForWidget =
+                entry.isPrimary &&
+                activeTextSelection &&
+                activeTextSelection.pageNumber === page.number &&
+                activeTextSelection.blockIndex === entry.blockIndex
+                  ? activeTextSelection
+                  : null;
+              const highlightText = selectedBlockForWidget?.block.text.trim() ?? '';
+              const selectionContext = selectedBlockForWidget
+                ? resolveTextSelectionContext(selectedBlockForWidget, logicalStructure, highlightText)
+                : null;
+              const chatContextText = selectionContext ? buildChatContextText(selectionContext) : highlightText;
+              const generationPromptText = selectionContext
+                ? trimSelectionContextText(selectionContext.text, 900)
+                : highlightText;
+              const isLoadingImage = entry.isPrimary && Boolean(imageLoading[blockKey]);
               const imageErrorMessage = imageError[blockKey];
-              const hasRequestedImage = isLoadingImage || Boolean(imageEntry) || Boolean(imageErrorMessage);
-              const blockFontSizePx = block.fontSize ? block.fontSize * scaleY : undefined;
               // Account for canvas padding (16px matches DEFAULT_OPTIONS.pagePadding)
               const canvasPadding = 16 * zoom;
               const blockLeft = bounds.minX * scaleX + canvasPadding;
               const blockTop = (page.size.height - bounds.maxY) * scaleY + canvasPadding; // Flip Y coordinate
               const blockWidth = (bounds.maxX - bounds.minX) * scaleX;
               const blockHeight = (bounds.maxY - bounds.minY) * scaleY;
-              const hasLineGeometry = lines.length > 0 && lines.every((line) => Boolean(line.bounds));
-              const extraImageWidth = hasRequestedImage ? IMAGE_PANEL_WIDTH + HIGHLIGHT_PADDING : 0;
-              const selectedBlockForWidget =
-                activeTextSelection &&
-                buildHighlightBlockKey(page.number, activeTextSelection.block.bounds) === blockKey
-                  ? activeTextSelection
-                  : null;
-              const formulaSuggestionEntry = formulaSuggestionState[blockKey];
-              const isDetectingInterestingStuff = formulaSuggestionEntry?.status === 'loading';
-              const showFormulaSuggestion = formulaSuggestionEntry?.status === 'ready' && formulaSuggestionEntry?.hasMath;
-              const highlightFormulaSuggestion = showFormulaSuggestion && formulaSuggestionAttentionKey === blockKey;
+              const logicalHoverClass =
+                isLogicalTextHoverOverlay && entry.isPrimary
+                  ? ' canvas-overlay-highlight-block--logical-hover-primary'
+                  : isLogicalTextHoverOverlay
+                  ? ' canvas-overlay-highlight-block--logical-hover-secondary'
+                  : entry.isPrimary
+                  ? ''
+                  : ' canvas-overlay-highlight-block--secondary';
 
               return (
                 <div
                   key={index}
-                  className="canvas-overlay-highlight-block"
+                  className={`canvas-overlay-highlight-block${logicalHoverClass}`}
                   style={{
                     left: `${blockLeft - HIGHLIGHT_PADDING}px`,
                     top: `${blockTop - HIGHLIGHT_PADDING}px`,
-                    width: `${blockWidth + HIGHLIGHT_PADDING * 2 + extraImageWidth}px`,
+                    width: `${blockWidth + HIGHLIGHT_PADDING * 2}px`,
                     height: `${blockHeight + HIGHLIGHT_PADDING * 2}px`,
-                    fontFamily: block.fontFamily
+                    fontFamily: block.fontFamily,
+                    pointerEvents: entry.isPrimary ? 'auto' : 'none'
                   }}
                 >
-                  <OverlayToolbar onClose={() => onCanvasHighlight(null)}>
-                    <OverlayToolbarButton
-                      onClick={() => handleOpenMiniChat(highlightText, blockLeft, blockTop, blockWidth, bounds)}
-                      icon={<ExploreIcon />}
-                      label="Chat about this"
-                      title="Ask questions about this text"
-                    />
-                    <OverlayToolbarButton
-                      onClick={() => handleGenerateImage(blockKey, highlightText, bounds)}
-                      icon={isLoadingImage ? <LoadingIcon /> : <ImageIcon />}
-                      label="Generate Gemini image"
-                      title="Generate Gemini image for this text"
-                      disabled={isLoadingImage}
-                    />
-                    <OverlayToolbarButton
-                      onClick={() =>
-                        void handleGenerateInteractiveWidget(
-                          highlightText,
-                          getWidgetPopupPosition(bounds),
-                          bounds,
-                          selectedBlockForWidget
-                        )
-                      }
-                      icon={isGeneratingInteractiveWidget ? <LoadingIcon /> : <WidgetIcon />}
-                      label="Create interactive widget"
-                      title="Generate a sandboxed interactive widget for this paragraph"
-                      disabled={isGeneratingInteractiveWidget}
-                    />
-                    {isDetectingInterestingStuff && (
-                      <OverlayToolbarButton
-                        onClick={() => {}}
-                        icon={<LoadingIcon />}
-                        label="Detecting interesting stuff"
-                        title="Detecting interesting stuff inside this selection..."
-                        ariaDisabled
-                        className="overlay-toolbar-btn--busy"
-                      />
-                    )}
-                    {showFormulaSuggestion && (
-                      <OverlayToolbarButton
-                        onClick={() => handleDetectMath(highlightText, blockTop + blockHeight + 10, blockLeft)}
-                        icon={<MathIcon />}
-                        label="Formula widget"
-                        title="Open the detected formula widget for this text"
-                        variant="primary"
-                        className={highlightFormulaSuggestion ? 'overlay-toolbar-btn--suggested' : ''}
-                      />
-                    )}
-                  </OverlayToolbar>
-                  <div className="canvas-overlay-highlight-inner">
-                    <div
-                      className="canvas-overlay-highlight-content"
-                      style={
-                        hasRequestedImage
-                          ? { gridTemplateColumns: `minmax(0, 1fr) ${IMAGE_PANEL_WIDTH}px` }
-                          : { gridTemplateColumns: '1fr' }
-                      }
-                    >
-                      <div className="canvas-overlay-highlight-text">
-                        {hasLineGeometry ? (
-                          lines.map((line, lineIndex) => {
-                            const lineBounds = line.bounds!;
-                            const relativeLeft = (lineBounds.minX - bounds.minX) * scaleX + HIGHLIGHT_PADDING;
-                            const relativeTop = (bounds.maxY - lineBounds.maxY) * scaleY + HIGHLIGHT_PADDING;
-                            const lineWidthPx = (lineBounds.maxX - lineBounds.minX) * scaleX;
-                            const measuredHeight = (lineBounds.maxY - lineBounds.minY) * scaleY;
-                            const scaledLineHeight = typeof line.lineHeight === 'number' ? line.lineHeight * scaleY : undefined;
-                            const computedLineHeight = Math.max(10, scaledLineHeight ?? measuredHeight ?? blockFontSizePx ?? 14);
-                            const computedFontSize = Math.min(
-                              computedLineHeight,
-                              Math.max(10, blockFontSizePx ?? computedLineHeight * 0.85)
-                            );
-
-                            return (
-                              <div
-                                key={`${index}-${lineIndex}`}
-                                className="canvas-overlay-highlight-line"
-                                style={{
-                                  left: `${relativeLeft}px`,
-                                  top: `${relativeTop}px`,
-                                  width: `${lineWidthPx}px`,
-                                  height: `${computedLineHeight}px`,
-                                  fontSize: `${computedFontSize}px`,
-                                  lineHeight: `${computedLineHeight}px`
-                                }}
-                              >
-                                <CitationText
-                                  text={line.text}
-                                  onCitationClick={handleCitationClick}
-                                  hasExtraction={Boolean(geminiExtraction)}
-                                  paragraphText={highlightText}
-                                  bounds={bounds}
-                                />
-                              </div>
-                            );
-                          })
-                        ) : lines.length > 0 ? (
-                          <div
-                            className="canvas-overlay-highlight-flow"
-                            style={{
-                              padding: `${HIGHLIGHT_PADDING}px`,
-                              fontSize: `${Math.max(12, blockFontSizePx ?? 14)}px`,
-                              lineHeight: 1.4
-                            }}
-                          >
-                            {lines.map((line, lineIndex) => (
-                              <span key={`${index}-flow-${lineIndex}`}>
-                                <CitationText
-                                  text={line.text}
-                                  onCitationClick={handleCitationClick}
-                                  hasExtraction={Boolean(geminiExtraction)}
-                                  paragraphText={highlightText}
-                                  bounds={bounds}
-                                />
-                                {lineIndex < lines.length - 1 && <br />}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-
-                      {hasRequestedImage && (
-                        <div className="canvas-overlay-image-panel" style={{ width: `${IMAGE_PANEL_WIDTH}px` }}>
-                          {imageEntry ? (
-                            <div className="canvas-overlay-image">
-                              <img src={imageEntry.dataUri} alt="Gemini generated" />
-                              {imageEntry.text && <div className="canvas-overlay-image-caption">{imageEntry.text}</div>}
-                            </div>
-                          ) : isLoadingImage ? (
-                            <div className="canvas-overlay-image canvas-overlay-image--loading">
-                              <LoadingIcon />
-                              <span>Generating image…</span>
-                            </div>
-                          ) : imageErrorMessage ? (
-                            <div className="canvas-overlay-image canvas-overlay-image--error">{imageErrorMessage}</div>
-                          ) : null}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  {entry.isPrimary ? (
+                    <>
+                      <OverlayToolbar onClose={() => onCanvasHighlight(null)} showClose={!isLogicalTextHoverOverlay}>
+                        <OverlayToolbarButton
+                          onClick={() => handleOpenMiniChat(chatContextText, blockLeft, blockTop, blockWidth, bounds)}
+                          icon={<ExploreIcon />}
+                          label="Chat about this"
+                          title="Ask questions about this selection"
+                        />
+                        <OverlayToolbarButton
+                          onClick={() => handleGenerateImage(blockKey, generationPromptText, bounds)}
+                          icon={isLoadingImage ? <LoadingIcon /> : <ImageIcon />}
+                          label="Generate Gemini image"
+                          title={imageErrorMessage || 'Generate Gemini image for this selection'}
+                          disabled={isLoadingImage}
+                        />
+                        <OverlayToolbarButton
+                          onClick={() =>
+                            void handleGenerateInteractiveWidget(
+                              generationPromptText,
+                              getWidgetPopupPosition(bounds),
+                              bounds,
+                              selectedBlockForWidget
+                            )
+                          }
+                          icon={isGeneratingInteractiveWidget ? <LoadingIcon /> : <WidgetIcon />}
+                          label="Create interactive widget"
+                          title="Generate a sandboxed interactive widget for this selection"
+                          disabled={isGeneratingInteractiveWidget}
+                        />
+                      </OverlayToolbar>
+                      <div className="canvas-overlay-highlight-inner canvas-overlay-highlight-inner--secondary" />
+                    </>
+                  ) : (
+                    <div className="canvas-overlay-highlight-inner canvas-overlay-highlight-inner--secondary" />
+                  )}
                 </div>
               );
             })}

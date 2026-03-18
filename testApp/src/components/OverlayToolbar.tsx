@@ -4,9 +4,15 @@ interface OverlayToolbarProps {
   onClose: () => void;
   children?: ReactNode;
   position?: 'top-right' | 'top-left';
+  showClose?: boolean;
 }
 
-export function OverlayToolbar({ onClose, children, position = 'top-right' }: OverlayToolbarProps): JSX.Element {
+export function OverlayToolbar({
+  onClose,
+  children,
+  position = 'top-right',
+  showClose = true
+}: OverlayToolbarProps): JSX.Element {
   const positionClass = position === 'top-left' ? 'overlay-toolbar--left' : '';
 
   const handleToolbarClick = (event: MouseEvent) => {
@@ -27,15 +33,17 @@ export function OverlayToolbar({ onClose, children, position = 'top-right' }: Ov
       onClick={handleToolbarClick}
     >
       {children}
-      <button
-        type="button"
-        className="overlay-toolbar-btn overlay-toolbar-btn--close"
-        onClick={handleClose}
-        aria-label="Close"
-        title="Close"
-      >
-        <CloseIcon />
-      </button>
+      {showClose && (
+        <button
+          type="button"
+          className="overlay-toolbar-btn overlay-toolbar-btn--close"
+          onClick={handleClose}
+          aria-label="Close"
+          title="Close"
+        >
+          <CloseIcon />
+        </button>
+      )}
     </div>
   );
 }

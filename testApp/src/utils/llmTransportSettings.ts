@@ -12,6 +12,7 @@ export type LlmTransportStoredSettings = {
 export const LLM_TRANSPORT_MODE_STORAGE_KEY = 'llm-transport-mode';
 export const LLM_PROXY_BASE_URL_STORAGE_KEY = 'llm-proxy-base-url';
 export const LLM_PROXY_AUTH_TOKEN_STORAGE_KEY = 'llm-proxy-auth-token';
+export const LLM_TRANSPORT_SETTINGS_CHANGED_EVENT = 'llm-transport-settings-changed';
 
 export const DEFAULT_LLM_PROXY_BASE_URL = '/api/llm';
 export const DEFAULT_PROXY_RUNTIME_TOKEN = 'proxy-no-auth-required';
@@ -113,9 +114,17 @@ function writeStorageValue(key: string, value: string): void {
     } else {
       window.localStorage.removeItem(key);
     }
+    dispatchLlmTransportSettingsChanged();
   } catch {
     // Ignore storage access issues.
   }
+}
+
+function dispatchLlmTransportSettingsChanged(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(LLM_TRANSPORT_SETTINGS_CHANGED_EVENT));
 }
 
 function readEnvValue(key: string): string | undefined {
