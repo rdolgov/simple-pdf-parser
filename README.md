@@ -89,11 +89,20 @@ Supported proxy routes:
 - `POST /api/llm/gemini/v1beta/models/<model>:generateContent`
 - `POST /api/llm/gemini/v1beta/models/<model>:batchEmbedContents`
 - `POST /api/llm/gemini/v1beta/models/<model>:embedContent`
+- `GET /api/auth/session`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+
+Route aliases also exist under `/proxy/api/...`, so the app can be opened at `/proxy` while still keeping the original `/api/...` endpoints available.
 
 Server environment variables:
 
 - `PORT` defaults to `8787`
 - `LLM_PROXY_AUTH_TOKEN` is optional shared auth checked against `Authorization: Bearer ...` or Gemini `?key=...`
+- `LLM_PROXY_USERS` is optional predefined cookie-login users in `username:password,username:password` format
+- `LLM_PROXY_SESSION_COOKIE_NAME` defaults to `llm_proxy_session`
+- `LLM_PROXY_SESSION_TTL_MS` defaults to `2592000000` (30 days)
+- `LLM_PROXY_SESSION_COOKIE_SECURE` defaults to `false`
 - `OPENAI_API_KEY` configures the upstream OpenAI key used by the proxy
 - `OPENAI_BASE_URL` defaults to `https://api.openai.com/v1`
 - `GEMINI_API_KEY` configures the upstream Gemini key used by the proxy
@@ -103,6 +112,9 @@ Server environment variables:
 - `LLM_PROXY_CACHE_DIR` defaults to `.cache/llm-proxy`
 - `LLM_PROXY_CACHE_TTL_MS` is optional; unset means entries do not expire automatically
 - `LLM_PROXY_CACHE_MAX_BODY_BYTES` defaults to `20971520` (20 MB per cached response)
+- `LLM_PROXY_APP_DIR` defaults to `testApp/dist` and is used when serving the built app under `/proxy`
+
+The proxy server now auto-loads root-level `.env` and `.env.local` files on startup. Shell environment variables still win over file-loaded values.
 
 The proxy now persists successful upstream responses on disk and reuses them when the same request is issued again. It first computes a SHA-256 digest of the POST body, then derives the final cache key from provider, upstream route, normalized query params, request headers relevant to content negotiation, and that body digest. Each proxied response also includes:
 
@@ -118,11 +130,38 @@ Example:
 ```bash
 OPENAI_API_KEY=... \
 GEMINI_API_KEY=... \
+LLM_PROXY_USERS='alice:secret,bob:password' \
 LLM_PROXY_AUTH_TOKEN=dev-shared-token \
 npm run start:server
 ```
 
-In the React app sidebar, switch `LLM Transport` to `Proxy server` and set the proxy base URL to `/api/llm` for local Vite development or to your deployed backend URL if it lives elsewhere.
+### `/proxy` Login Route
+
+The app now supports two top-level access patterns:
+
+- `/` keeps the existing direct-provider workflow. Users can supply their own OpenAI/Gemini keys in the browser and can still manually switch transport to the proxy if needed.
+- `/proxy` forces proxy transport and uses cookie-backed login when `LLM_PROXY_USERS` is configured.
+
+When the browser loads `/proxy`:
+
+- the app automatically uses `/proxy/api/llm`
+- direct transport selection is disabled
+- the user is prompted to sign in once
+- the server sets an `HttpOnly` session cookie so later visits do not require logging in again until the cookie expires or the user signs out
+
+For local development with Vite:
+
+- open the normal app at `http://localhost:5174/`
+- open the proxy-gated app at `http://localhost:5174/proxy`
+- Vite proxies both `/api/...` and `/proxy/api/...` to the Node backend
+
+For production:
+
+- build the React app with `npm --prefix testApp run build`
+- start the Node proxy server
+- the Node server will serve the built app at `/proxy` from `testApp/dist` by default
+
+In the React app sidebar, root-route users can still switch `LLM Transport` to `Proxy server` and use `/api/llm` manually. On the `/proxy` route the app locks to proxy mode automatically.
 
 ### Debug Web App
 

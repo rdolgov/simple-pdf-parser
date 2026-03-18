@@ -1,9 +1,37 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import { resolve } from 'node:path';
+import { extname, resolve } from 'node:path';
+
+function proxyRouteDevPlugin(): Plugin {
+  return {
+    name: 'proxy-route-dev-plugin',
+    configureServer(server) {
+      server.middlewares.use((request, _response, next) => {
+        const originalUrl = request.url ?? '/';
+        const pathname = originalUrl.split('?')[0] ?? originalUrl;
+        const search = originalUrl.slice(pathname.length);
+
+        if (!(pathname === '/proxy' || pathname.startsWith('/proxy/'))) {
+          next();
+          return;
+        }
+
+        if (pathname.startsWith('/proxy/api/')) {
+          next();
+          return;
+        }
+
+        request.url = extname(pathname)
+          ? `${pathname.replace(/^\/proxy/, '') || '/'}${search}`
+          : `/index.html${search}`;
+        next();
+      });
+    }
+  };
+}
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), proxyRouteDevPlugin()],
   build: {
     rollupOptions: {
       input: {
@@ -22,7 +50,15 @@ export default defineConfig({
   server: {
     port: 5174,
     proxy: {
+      '/api/auth': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
       '/api/llm': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
+      '/proxy/api': {
         target: 'http://localhost:8787',
         changeOrigin: true
       }

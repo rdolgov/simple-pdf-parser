@@ -24,6 +24,131 @@ body {
   overflow: hidden;
 }
 
+.proxy-login-shell {
+  min-height: 100vh;
+  width: 100vw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(96, 165, 250, 0.18), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(15, 118, 110, 0.16), transparent 30%),
+    linear-gradient(180deg, #e2e8f0 0%, #f8fafc 100%);
+}
+
+.proxy-login-card {
+  width: min(440px, 100%);
+  padding: 24px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.proxy-login-eyebrow {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0f766e;
+}
+
+.proxy-login-title {
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.1;
+  color: #0f172a;
+}
+
+.proxy-login-copy {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: #475569;
+}
+
+.proxy-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.proxy-login-form input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  padding: 10px 12px;
+  font: inherit;
+  color: #0f172a;
+  background: #fff;
+}
+
+.proxy-login-form input:focus {
+  outline: none;
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.proxy-login-error {
+  font-size: 0.86rem;
+  color: #b91c1c;
+}
+
+.proxy-login-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.proxy-login-actions button {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.proxy-login-actions button:first-child {
+  background: #0f766e;
+  color: #fff;
+}
+
+.proxy-login-actions button:first-child:hover:not(:disabled) {
+  background: #115e59;
+}
+
+.proxy-login-secondary {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.proxy-login-secondary:hover:not(:disabled) {
+  background: #cbd5e1;
+}
+
+.proxy-login-actions button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.inline-link-button {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: #2563eb;
+  font: inherit;
+  cursor: pointer;
+}
+
+.inline-link-button:hover {
+  text-decoration: underline;
+}
+
 .global-progress-overlay {
   position: fixed;
   inset: 0;

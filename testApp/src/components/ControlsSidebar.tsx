@@ -74,6 +74,9 @@ interface ControlsSidebarProps {
   setEnableTableHighlight: (value: boolean) => void;
   enableWebSearch: boolean;
   setEnableWebSearch: (value: boolean) => void;
+  isProxyRouteManaged: boolean;
+  proxySessionUsername: string | null;
+  onProxyLogout: () => Promise<void>;
 }
 
 export function ControlsSidebar({
@@ -110,7 +113,10 @@ export function ControlsSidebar({
   enableTableHighlight,
   setEnableTableHighlight,
   enableWebSearch,
-  setEnableWebSearch
+  setEnableWebSearch,
+  isProxyRouteManaged,
+  proxySessionUsername,
+  onProxyLogout
 }: ControlsSidebarProps): JSX.Element {
   const [extractProvider, setExtractProviderState] = useState<StructuredExtractProvider>('openai');
   const [extractGeminiApiKey, setExtractGeminiApiKey] = useState('');
@@ -396,6 +402,7 @@ export function ControlsSidebar({
                 setLlmTransportModeState(nextMode);
                 setLlmTransportMode(nextMode);
               }}
+              disabled={isProxyRouteManaged}
             >
               <option value="direct">Direct provider calls</option>
               <option value="proxy">Proxy server</option>
@@ -405,29 +412,43 @@ export function ControlsSidebar({
                 <input
                   type="text"
                   value={proxyBaseUrl}
-                  placeholder="/api/llm"
+                  placeholder={isProxyRouteManaged ? '/proxy/api/llm' : '/api/llm'}
+                  disabled={isProxyRouteManaged}
                   onChange={(event) => {
                     const value = event.target.value;
                     setProxyBaseUrlState(value);
                     setLlmProxyBaseUrl(value);
                   }}
                 />
-                <input
-                  type="password"
-                  value={proxyAuthToken}
-                  placeholder="Optional proxy auth token"
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setProxyAuthTokenState(value);
-                    setLlmProxyAuthToken(value);
-                  }}
-                />
+                {!isProxyRouteManaged && (
+                  <input
+                    type="password"
+                    value={proxyAuthToken}
+                    placeholder="Optional proxy auth token"
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setProxyAuthTokenState(value);
+                      setLlmProxyAuthToken(value);
+                    }}
+                  />
+                )}
+                {isProxyRouteManaged && proxySessionUsername && (
+                  <div className="structured-extract-settings-note">
+                    Signed in as <strong>{proxySessionUsername}</strong>.
+                    {' '}
+                    <button type="button" className="inline-link-button" onClick={() => void onProxyLogout()}>
+                      Sign out
+                    </button>
+                  </div>
+                )}
               </>
             )}
             <span className="structured-extract-settings-note">
-              {isProxyTransport
-                ? 'Gemini and OpenAI calls go through the proxy base URL below. Provider API key fields remain stored for direct mode, but are ignored on the client while proxy mode is active.'
-                : 'The browser calls Gemini and OpenAI directly. Provider API key fields below are required client-side.'}
+              {isProxyRouteManaged
+                ? 'This /proxy route is locked to the server proxy and uses a cookie-backed login session. Direct provider keys stay available when you open the app on the root route instead.'
+                : isProxyTransport
+                  ? 'Gemini and OpenAI calls go through the proxy base URL below. Provider API key fields remain stored for direct mode, but are ignored on the client while proxy mode is active.'
+                  : 'The browser calls Gemini and OpenAI directly. Provider API key fields below are required client-side.'}
             </span>
           </div>
           <div className="structured-extract-settings">

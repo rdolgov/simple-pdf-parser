@@ -13,6 +13,7 @@ coverage/
 # Logs and editor detritus
 *.log
 .DS_Store
+.env
 .env.local
 .idea/
 .cache/llm-proxy/

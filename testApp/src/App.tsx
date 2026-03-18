@@ -51,6 +51,7 @@ import {
   useCanvasRenderCoordinator
 } from './hooks';
 import { useGlobalFetchActivity } from './hooks/useGlobalFetchActivity';
+import { useProxyAuthSession } from './hooks/useProxyAuthSession';
 import {
   describeAiDetectionMode,
   parseAiDetectionMode,
@@ -58,8 +59,17 @@ import {
   shouldAutoRunStructuredExtract
 } from './utils/aiDetectionActivation';
 import { applyTransportToRelevanceConfig, hasRuntimeProviderAccess } from './utils/llmClients';
+import { isProxyAppRoute } from './utils/proxyRoute';
+import { ProxyLoginGate } from './components/ProxyLoginGate';
 
 export default function App(): JSX.Element {
+  const isManagedProxyRoute = useMemo(() => isProxyAppRoute(), []);
+  const {
+    state: proxyAuthState,
+    login: loginProxySession,
+    logout: logoutProxySession,
+    refresh: refreshProxySession
+  } = useProxyAuthSession(isManagedProxyRoute);
   const aiDetectionMode = useMemo(
     () => parseAiDetectionMode(typeof window === 'undefined' ? '' : window.location.search),
     []
@@ -535,6 +545,10 @@ export default function App(): JSX.Element {
     focusExchangeRef.current = exchange;
   }, []);
 
+  const handleProxyLogout = useCallback(async () => {
+    await logoutProxySession();
+  }, [logoutProxySession]);
+
   useEffect(() => {
     if (focusQuery.trim().length === 0 && focusState.status !== 'idle') {
       setFocusState({ status: 'idle' });
@@ -952,6 +966,22 @@ export default function App(): JSX.Element {
     );
   }, [viewMode, structuredState, zoom, handleStructuredElementClick, structuredTables]);
 
+  if (
+    isManagedProxyRoute &&
+    (proxyAuthState.status === 'loading' ||
+      proxyAuthState.status === 'error' ||
+      (proxyAuthState.authEnabled && !proxyAuthState.authenticated))
+  ) {
+    return (
+      <ProxyLoginGate
+        error={proxyAuthState.error}
+        isLoading={proxyAuthState.status === 'loading'}
+        onLogin={loginProxySession}
+        onRetry={refreshProxySession}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       {/* Semantic Search Bar - Only show when document is loaded */}
@@ -1081,6 +1111,9 @@ export default function App(): JSX.Element {
           setEnableTableHighlight={setEnableTableHighlight}
           enableWebSearch={enableWebSearch}
           setEnableWebSearch={setEnableWebSearch}
+          isProxyRouteManaged={isManagedProxyRoute}
+          proxySessionUsername={proxyAuthState.authenticated ? proxyAuthState.username : null}
+          onProxyLogout={handleProxyLogout}
         />
       )}
       <GlobalProgressOverlay

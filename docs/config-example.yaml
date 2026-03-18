@@ -15,7 +15,15 @@ openAI:
 llmProxy:
   port: 8787
   authToken: "OPTIONAL_SHARED_PROXY_TOKEN"
+  users: "alice:secret,bob:password" # optional cookie-login users for /proxy
   corsOrigin: "*"
+  session:
+    cookieName: "llm_proxy_session"
+    ttlMs: 2592000000
+    secure: false
+  app:
+    dir: "testApp/dist"
+    routePrefix: "/proxy"
   cache:
     enabled: true
     dir: ".cache/llm-proxy"
@@ -33,6 +41,10 @@ testApp:
     mode: "proxy" # or "direct"
     proxyBaseUrl: "/api/llm"
     proxyAuthToken: "OPTIONAL_SHARED_PROXY_TOKEN"
+  proxyRoute:
+    url: "/proxy"
+    authBaseUrl: "/proxy/api/auth"
+    llmBaseUrl: "/proxy/api/llm"
 
 structuredExtract:
   provider: "gemini" # or "openai"

@@ -1,4 +1,5 @@
 import { canUseLocalStorage } from './storage';
+import { getDefaultProxyApiBaseUrl, getForcedLlmTransportMode } from './proxyRoute';
 
 export type LlmTransportMode = 'direct' | 'proxy';
 
@@ -24,12 +25,19 @@ export function loadLlmTransportStoredSettings(): LlmTransportStoredSettings {
 }
 
 export function getLlmTransportMode(): LlmTransportMode {
+  const forcedMode = getForcedLlmTransportMode();
+  if (forcedMode) {
+    return forcedMode;
+  }
   const envValue = normalizeMode(readEnvValue('VITE_LLM_TRANSPORT_MODE'));
   const storedValue = normalizeMode(readStorageValue(LLM_TRANSPORT_MODE_STORAGE_KEY));
   return storedValue ?? envValue ?? 'direct';
 }
 
 export function setLlmTransportMode(mode: LlmTransportMode): void {
+  if (getForcedLlmTransportMode()) {
+    return;
+  }
   writeStorageValue(LLM_TRANSPORT_MODE_STORAGE_KEY, mode);
 }
 
@@ -38,12 +46,19 @@ export function isProxyTransportEnabled(): boolean {
 }
 
 export function getLlmProxyBaseUrl(): string {
+  if (getForcedLlmTransportMode() === 'proxy') {
+    const envValue = normalizeNonEmpty(readEnvValue('VITE_LLM_PROXY_BASE_URL'));
+    return envValue ?? getDefaultProxyApiBaseUrl();
+  }
   const envValue = normalizeNonEmpty(readEnvValue('VITE_LLM_PROXY_BASE_URL'));
   const storedValue = normalizeNonEmpty(readStorageValue(LLM_PROXY_BASE_URL_STORAGE_KEY));
-  return storedValue ?? envValue ?? DEFAULT_LLM_PROXY_BASE_URL;
+  return storedValue ?? envValue ?? getDefaultProxyApiBaseUrl() ?? DEFAULT_LLM_PROXY_BASE_URL;
 }
 
 export function setLlmProxyBaseUrl(value: string): void {
+  if (getForcedLlmTransportMode()) {
+    return;
+  }
   writeStorageValue(LLM_PROXY_BASE_URL_STORAGE_KEY, value);
 }
 

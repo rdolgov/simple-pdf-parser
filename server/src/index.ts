@@ -1,5 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { FileResponseCache } from './requestCache.js';
+import { loadLocalEnvFiles } from './loadLocalEnv.js';
+import { ProxySessionAuth, parseProxyUsers } from './sessionAuth.js';
+import { StaticProxyApp } from './staticProxyApp.js';
 
 type ServerConfig = {
   port: number;
@@ -13,6 +16,11 @@ type ServerConfig = {
   cacheDir: string;
   cacheTtlMs?: number;
   cacheMaxBodyBytes: number;
+  proxyUsers: Map<string, string>;
+  sessionCookieName: string;
+  sessionTtlMs: number;
+  sessionCookieSecure: boolean;
+  proxyAppDir: string;
 };
 
 type ProxyResponseData = {
@@ -21,15 +29,33 @@ type ProxyResponseData = {
   body: Buffer;
 };
 
+const PROXY_APP_PREFIX = '/proxy';
 const OPENAI_PROXY_PREFIX = '/api/llm/openai/';
 const GEMINI_PROXY_PREFIX = '/api/llm/gemini/';
+const PROXY_OPENAI_PROXY_PREFIX = '/proxy/api/llm/openai/';
+const PROXY_GEMINI_PROXY_PREFIX = '/proxy/api/llm/gemini/';
+const HEALTH_PATHS = new Set(['/health', '/api/health', '/proxy/api/health']);
+const AUTH_SESSION_PATHS = new Set(['/api/auth/session', '/proxy/api/auth/session']);
+const AUTH_LOGIN_PATHS = new Set(['/api/auth/login', '/proxy/api/auth/login']);
+const AUTH_LOGOUT_PATHS = new Set(['/api/auth/logout', '/proxy/api/auth/logout']);
 
+loadLocalEnvFiles();
 const config = loadConfig();
 const responseCache = new FileResponseCache({
   enabled: config.cacheEnabled,
   cacheDir: config.cacheDir,
   ttlMs: config.cacheTtlMs,
   maxBodyBytes: config.cacheMaxBodyBytes
+});
+const sessionAuth = new ProxySessionAuth({
+  cookieName: config.sessionCookieName,
+  cookieSecure: config.sessionCookieSecure,
+  sessionTtlMs: config.sessionTtlMs,
+  users: config.proxyUsers
+});
+const staticProxyApp = new StaticProxyApp({
+  appDir: config.proxyAppDir,
+  routePrefix: PROXY_APP_PREFIX
 });
 
 const server = createServer((request, response) => {
@@ -49,14 +75,27 @@ const server = createServer((request, response) => {
 
 server.listen(config.port, () => {
   console.log(`[llm-proxy] Listening on http://localhost:${config.port}`);
-  console.log('[llm-proxy] OpenAI route:', `${OPENAI_PROXY_PREFIX}responses`);
-  console.log('[llm-proxy] Gemini route:', `${GEMINI_PROXY_PREFIX}v1beta/models/{model}:generateContent`);
+  console.log('[llm-proxy] OpenAI routes:', `${OPENAI_PROXY_PREFIX}responses`, `and ${PROXY_OPENAI_PROXY_PREFIX}responses`);
+  console.log(
+    '[llm-proxy] Gemini routes:',
+    `${GEMINI_PROXY_PREFIX}v1beta/models/{model}:generateContent`,
+    `and ${PROXY_GEMINI_PROXY_PREFIX}v1beta/models/{model}:generateContent`
+  );
+  console.log(
+    '[llm-proxy] Auth:',
+    sessionAuth.isEnabled()
+      ? `cookie users=${config.proxyUsers.size} cookieName=${config.sessionCookieName} ttlMs=${config.sessionTtlMs}`
+      : config.proxyAuthToken
+        ? 'shared token only'
+        : 'disabled'
+  );
   console.log(
     '[llm-proxy] Cache:',
     responseCache.isEnabled()
       ? `enabled dir=${responseCache.getCacheDir()} ttlMs=${responseCache.getTtlMs() ?? 'none'}`
       : 'disabled'
   );
+  console.log('[llm-proxy] Proxy app route:', `${PROXY_APP_PREFIX} -> ${staticProxyApp.appDir}`);
 });
 
 async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -70,7 +109,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
   const requestUrl = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
 
-  if (request.method === 'GET' && requestUrl.pathname === '/health') {
+  if (request.method === 'GET' && HEALTH_PATHS.has(requestUrl.pathname)) {
     response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     response.end(
       JSON.stringify({
@@ -79,42 +118,82 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           openai: Boolean(config.openAiApiKey),
           gemini: Boolean(config.geminiApiKey)
         },
+        auth: {
+          sharedTokenEnabled: Boolean(config.proxyAuthToken),
+          sessionAuthEnabled: sessionAuth.isEnabled(),
+          sessionUserCount: config.proxyUsers.size,
+          sessionCookieName: config.sessionCookieName,
+          sessionTtlMs: config.sessionTtlMs
+        },
         cache: {
           enabled: config.cacheEnabled,
           dir: config.cacheDir,
           ttlMs: config.cacheTtlMs ?? null,
           maxBodyBytes: config.cacheMaxBodyBytes
+        },
+        app: {
+          routePrefix: PROXY_APP_PREFIX,
+          dir: config.proxyAppDir
         }
       })
     );
     return;
   }
 
-  if (request.method !== 'POST') {
-    sendJson(response, 405, { error: 'Only POST is supported for proxy routes.' });
+  if (request.method === 'GET' && AUTH_SESSION_PATHS.has(requestUrl.pathname)) {
+    sendJson(response, 200, {
+      ok: true,
+      ...sessionAuth.getSessionStatus(request)
+    });
     return;
   }
 
-  if (requestUrl.pathname.startsWith(OPENAI_PROXY_PREFIX)) {
-    await proxyOpenAiRequest(request, response, requestUrl, config);
+  if (request.method === 'POST' && AUTH_LOGIN_PATHS.has(requestUrl.pathname)) {
+    await handleLoginRequest(request, response);
     return;
   }
 
-  if (requestUrl.pathname.startsWith(GEMINI_PROXY_PREFIX)) {
-    await proxyGeminiRequest(request, response, requestUrl, config);
+  if (request.method === 'POST' && AUTH_LOGOUT_PATHS.has(requestUrl.pathname)) {
+    handleLogoutRequest(request, response);
     return;
   }
 
-  sendJson(response, 404, { error: 'Unknown proxy route.' });
+  if (request.method === 'POST') {
+    const openAiUpstreamPath = stripKnownPrefix(requestUrl.pathname, [OPENAI_PROXY_PREFIX, PROXY_OPENAI_PROXY_PREFIX]);
+    if (openAiUpstreamPath !== null) {
+      await proxyOpenAiRequest(request, response, requestUrl, openAiUpstreamPath, config);
+      return;
+    }
+
+    const geminiUpstreamPath = stripKnownPrefix(requestUrl.pathname, [GEMINI_PROXY_PREFIX, PROXY_GEMINI_PROXY_PREFIX]);
+    if (geminiUpstreamPath !== null) {
+      await proxyGeminiRequest(request, response, requestUrl, geminiUpstreamPath, config);
+      return;
+    }
+
+    sendJson(response, 404, { error: 'Unknown proxy route.' });
+    return;
+  }
+
+  if (request.method === 'GET') {
+    if (await staticProxyApp.tryServe(requestUrl.pathname, response)) {
+      return;
+    }
+    sendJson(response, 404, { error: 'Not found.' });
+    return;
+  }
+
+  sendJson(response, 405, { error: 'Unsupported request method.' });
 }
 
 async function proxyOpenAiRequest(
   request: IncomingMessage,
   response: ServerResponse,
   requestUrl: URL,
+  upstreamPath: string,
   currentConfig: ServerConfig
 ): Promise<void> {
-  if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken)) {
+  if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
     sendJson(response, 401, { error: 'Proxy authorization failed.' });
     return;
   }
@@ -124,7 +203,6 @@ async function proxyOpenAiRequest(
     return;
   }
 
-  const upstreamPath = requestUrl.pathname.slice(OPENAI_PROXY_PREFIX.length);
   if (!isAllowedOpenAiPath(upstreamPath)) {
     sendJson(response, 404, { error: 'Unsupported OpenAI proxy path.' });
     return;
@@ -199,9 +277,10 @@ async function proxyGeminiRequest(
   request: IncomingMessage,
   response: ServerResponse,
   requestUrl: URL,
+  upstreamPath: string,
   currentConfig: ServerConfig
 ): Promise<void> {
-  if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken)) {
+  if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
     sendJson(response, 401, { error: 'Proxy authorization failed.' });
     return;
   }
@@ -211,7 +290,6 @@ async function proxyGeminiRequest(
     return;
   }
 
-  const upstreamPath = requestUrl.pathname.slice(GEMINI_PROXY_PREFIX.length);
   if (!isAllowedGeminiPath(upstreamPath)) {
     sendJson(response, 404, { error: 'Unsupported Gemini proxy path.' });
     return;
@@ -293,23 +371,74 @@ function isAllowedGeminiPath(pathname: string): boolean {
   return /^v[0-9a-z]+(?:[a-z]*)\/models\/[^/]+:(generateContent|batchEmbedContents|embedContent)$/i.test(pathname);
 }
 
-function isAuthorized(request: IncomingMessage, requestUrl: URL, expectedToken?: string): boolean {
-  if (!expectedToken) {
+async function handleLoginRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  if (!sessionAuth.isEnabled()) {
+    sendJson(response, 404, { error: 'Proxy login is not enabled on this server.' });
+    return;
+  }
+
+  const body = await readJsonBody(request);
+  const username = typeof body.username === 'string' ? body.username.trim() : '';
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!username || !password) {
+    sendJson(response, 400, { error: 'Username and password are required.' });
+    return;
+  }
+
+  const session = sessionAuth.authenticate(username, password);
+  if (!session) {
+    sendJson(response, 401, { error: 'Invalid username or password.' });
+    return;
+  }
+
+  response.setHeader('Set-Cookie', sessionAuth.createSessionCookie(session));
+  sendJson(response, 200, {
+    ok: true,
+    authEnabled: true,
+    authenticated: true,
+    username: session.username,
+    expiresAt: new Date(session.expiresAt).toISOString()
+  });
+}
+
+function handleLogoutRequest(request: IncomingMessage, response: ServerResponse): void {
+  sessionAuth.clearSessionForRequest(request);
+  response.setHeader('Set-Cookie', sessionAuth.createClearedSessionCookie());
+  sendJson(response, 200, {
+    ok: true,
+    authEnabled: sessionAuth.isEnabled(),
+    authenticated: false,
+    username: null,
+    expiresAt: null
+  });
+}
+
+function isAuthorized(
+  request: IncomingMessage,
+  requestUrl: URL,
+  expectedToken: string | undefined,
+  auth: ProxySessionAuth
+): boolean {
+  if (auth.getSessionFromRequest(request)) {
     return true;
   }
 
   const headerValue = request.headers.authorization?.trim();
-  if (headerValue === `Bearer ${expectedToken}`) {
+  if (expectedToken && headerValue === `Bearer ${expectedToken}`) {
     return true;
   }
 
   const alternateHeader = request.headers['x-llm-proxy-auth'];
-  if (typeof alternateHeader === 'string' && alternateHeader.trim() === expectedToken) {
+  if (expectedToken && typeof alternateHeader === 'string' && alternateHeader.trim() === expectedToken) {
     return true;
   }
 
   const queryToken = requestUrl.searchParams.get('key')?.trim();
-  return queryToken === expectedToken;
+  if (expectedToken && queryToken === expectedToken) {
+    return true;
+  }
+
+  return !auth.isEnabled() && !expectedToken;
 }
 
 function loadConfig(): ServerConfig {
@@ -326,7 +455,12 @@ function loadConfig(): ServerConfig {
     cacheEnabled: normalizeBoolean(env.LLM_PROXY_CACHE_ENABLED, true),
     cacheDir: normalizeNonEmpty(env.LLM_PROXY_CACHE_DIR) ?? '.cache/llm-proxy',
     cacheTtlMs: normalizeOptionalNumber(env.LLM_PROXY_CACHE_TTL_MS),
-    cacheMaxBodyBytes: normalizePositiveNumber(env.LLM_PROXY_CACHE_MAX_BODY_BYTES, 20 * 1024 * 1024)
+    cacheMaxBodyBytes: normalizePositiveNumber(env.LLM_PROXY_CACHE_MAX_BODY_BYTES, 20 * 1024 * 1024),
+    proxyUsers: parseProxyUsers(env.LLM_PROXY_USERS),
+    sessionCookieName: normalizeNonEmpty(env.LLM_PROXY_SESSION_COOKIE_NAME) ?? 'llm_proxy_session',
+    sessionTtlMs: normalizePositiveNumber(env.LLM_PROXY_SESSION_TTL_MS, 30 * 24 * 60 * 60 * 1000),
+    sessionCookieSecure: normalizeBoolean(env.LLM_PROXY_SESSION_COOKIE_SECURE, false),
+    proxyAppDir: normalizeNonEmpty(env.LLM_PROXY_APP_DIR) ?? 'testApp/dist'
   };
 }
 
@@ -393,6 +527,22 @@ async function readRawBody(request: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const body = await readRawBody(request);
+  if (body.length === 0) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(body.toString('utf-8')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 async function readUpstreamResponse(upstreamResponse: Response): Promise<ProxyResponseData> {
   const body = Buffer.from(await upstreamResponse.arrayBuffer());
   const headers: Record<string, string> = {
@@ -455,6 +605,15 @@ function readHeaderValue(value: string | string[] | undefined): string | undefin
     return value[0];
   }
   return value;
+}
+
+function stripKnownPrefix(pathname: string, prefixes: string[]): string | null {
+  for (const prefix of prefixes) {
+    if (pathname.startsWith(prefix)) {
+      return pathname.slice(prefix.length);
+    }
+  }
+  return null;
 }
 
 function isCacheableResponse(status: number): boolean {
