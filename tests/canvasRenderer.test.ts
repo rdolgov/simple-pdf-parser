@@ -816,6 +816,81 @@ describe('CanvasRenderer', () => {
     expect(mainDraw?.scaleY).toBe(1);
     expect(scriptDraw!.scaleY).toBeLessThan(1);
   });
+
+  it('shrinks compact superscript and subscript tokens enough to avoid crowding adjacent formula glyphs', () => {
+    const contextImpl = new ScriptMetricRecordingContext();
+    const canvas = new RecordingCanvas(contextImpl);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            {
+              text: 'O',
+              bounds: { minX: 61.7, minY: 54.8, maxX: 67.8, maxY: 61.8 },
+              font: 'CMMI7',
+              fontSize: 6.9738,
+              baselineStart: { x: 61.7, y: 56.2 },
+              baselineEnd: { x: 67.8, y: 56.2 }
+            },
+            {
+              text: 'W',
+              bounds: { minX: 52, minY: 50, maxX: 61.4, maxY: 60 },
+              font: 'CMMI10',
+              fontSize: 10,
+              baselineStart: { x: 52, y: 52 },
+              baselineEnd: { x: 61.4, y: 52 }
+            },
+            {
+              text: 'head',
+              bounds: { minX: 20, minY: 50, maxX: 41, maxY: 60 },
+              font: 'Times New Roman',
+              fontSize: 10,
+              baselineStart: { x: 20, y: 52 },
+              baselineEnd: { x: 41, y: 52 }
+            },
+            {
+              text: '1',
+              bounds: { minX: 41.1, minY: 49.2, maxX: 44.9, maxY: 56.2 },
+              font: 'Times New Roman',
+              fontSize: 6.9738,
+              baselineStart: { x: 41.1, y: 50.6 },
+              baselineEnd: { x: 44.9, y: 50.6 }
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 100, height: 100 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+    renderer.render(canvas, document, 1);
+
+    const headDraw = contextImpl.textDraws.find((draw) => draw.text === 'head');
+    const subscriptDraw = contextImpl.textDraws.find((draw) => draw.text === '1');
+    const mainDraw = contextImpl.textDraws.find((draw) => draw.text === 'W');
+    const superscriptDraw = contextImpl.textDraws.find((draw) => draw.text === 'O');
+
+    expect(headDraw).toBeDefined();
+    expect(mainDraw).toBeDefined();
+    expect(subscriptDraw).toBeDefined();
+    expect(superscriptDraw).toBeDefined();
+    expect(headDraw?.scaleY).toBe(1);
+    expect(mainDraw?.scaleY).toBe(1);
+    expect(subscriptDraw!.scaleY).toBeLessThan(0.95);
+    expect(superscriptDraw!.scaleY).toBeLessThan(0.9);
+    expect(subscriptDraw!.scaleX).toBeLessThan(headDraw!.scaleX);
+    expect(superscriptDraw!.scaleX).toBeLessThan(mainDraw!.scaleX);
+    expect(subscriptDraw!.translateY - mainDraw!.translateY).toBeGreaterThan(1.8);
+    expect(subscriptDraw!.translateY - mainDraw!.translateY).toBeLessThan(5.5);
+    expect(mainDraw!.translateY - superscriptDraw!.translateY).toBeGreaterThan(4.8);
+    expect(mainDraw!.translateY - superscriptDraw!.translateY).toBeLessThan(6);
+  });
 });
 
 function readFontSizeForTest(font: string): number {

@@ -6,6 +6,7 @@ import type {
   PDFPathItem,
   PDFTextItem,
   Type3Glyph,
+  Type3PathCommand,
   Type3GlyphImageLayer
 } from '../types.js';
 import type { PDFDocument } from '../pdfDocument.js';
@@ -16,6 +17,7 @@ import {
 } from './displayOperatorRenderer.js';
 import {
   resolveGlyphScaleX,
+  resolveParsedHeightScale,
   shouldUseParsedVerticalFit,
   resolveVerticalScaleBounds
 } from './embeddedFontRenderPolicy.js';
@@ -87,6 +89,15 @@ interface PageMetrics {
   orientation: 'ascending' | 'descending';
   baselineHeight: number;
 }
+
+type ScriptAnchorSegment = {
+  item: PDFTextItem;
+  fontSize: number;
+  baselineY: number;
+  minX: number;
+  maxX: number;
+  text: string;
+};
 
 export class CanvasRenderer {
   private readonly baseOptions: RenderOptions;
@@ -661,6 +672,7 @@ export class CanvasRenderer {
     };
 
     const cmexComposites = detectCmexComposites(sortedItems);
+    const scriptAnchorSegments = this.buildScriptAnchorSegments(sortedItems);
     this.drawCmexComposites(context, cmexComposites.composites, projectPoint, options);
 
     for (const [index, item] of sortedItems.entries()) {
@@ -691,6 +703,12 @@ export class CanvasRenderer {
       );
 
       const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
+      const scriptAttachmentShift =
+        embeddedFont?.renderMode === 'type1-glyph' || embeddedFont?.sourceKind === 'type1-synthetic'
+          ? 0
+          : this.resolveScriptAttachmentShift(item, scriptAnchorSegments, metrics, options.scale);
+      const adjustedTextPlacement =
+        scriptAttachmentShift !== 0 ? this.offsetTextPlacement(textPlacement, scriptAttachmentShift) : textPlacement;
       const projectedWidth = textPlacement.projectedWidth;
       const glyphSpanRun = resolveRenderableGlyphSpanRun(item, {
         force: embeddedFont?.renderMode === 'glyph-span'
@@ -710,6 +728,10 @@ export class CanvasRenderer {
       let scaleX = 1;
       if (measuredWidth > 0 && projectedWidth > 0) {
         scaleX = projectedWidth / measuredWidth;
+      }
+      const compactScriptScale = resolveParsedHeightScale(item, embeddedFont);
+      if (compactScriptScale < 1) {
+        scaleX *= compactScriptScale;
       }
       const scaleY = verticalFit.scaleY;
 
@@ -768,24 +790,39 @@ export class CanvasRenderer {
         continue;
       }
 
+      if (embeddedFont?.renderMode === 'type1-glyph' && embeddedFont.type1Font) {
+        if (this.drawType1TextItem(context, item, adjustedTextPlacement, options.scale, embeddedFont)) {
+          continue;
+        }
+      }
+
       if (glyphSpanRun) {
-        this.drawGlyphSpanTextItem(context, item, textPlacement, glyphSpanRun, verticalFit, embeddedFont);
+        this.drawGlyphSpanTextItem(
+          context,
+          item,
+          adjustedTextPlacement,
+          glyphSpanRun,
+          verticalFit,
+          compactScriptScale,
+          embeddedFont
+        );
         continue;
       }
 
       const needsRotation = Math.abs(textPlacement.rotation) > 0.001;
+      const effectiveRotation = Math.abs(adjustedTextPlacement.rotation) > 0.001;
       const needsVerticalFit = Math.abs(scaleY - 1) > 0.02 || Math.abs(verticalFit.localYOffset) > 0.01;
-      if (Math.abs(scaleX - 1) > 0.02 || needsRotation || needsVerticalFit) {
+      if (Math.abs(scaleX - 1) > 0.02 || effectiveRotation || needsVerticalFit || scriptAttachmentShift !== 0) {
         context.save();
-        context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
-        if (needsRotation) {
-          context.rotate(textPlacement.rotation);
+        context.translate(adjustedTextPlacement.baseline.x, adjustedTextPlacement.baseline.y);
+        if (effectiveRotation) {
+          context.rotate(adjustedTextPlacement.rotation);
         }
         context.scale(scaleX, scaleY);
         context.fillText(item.text, 0, verticalFit.localYOffset);
         context.restore();
       } else {
-        context.fillText(item.text, textPlacement.baseline.x, textPlacement.baseline.y);
+        context.fillText(item.text, adjustedTextPlacement.baseline.x, adjustedTextPlacement.baseline.y);
       }
     }
 
@@ -1017,6 +1054,7 @@ export class CanvasRenderer {
     textPlacement: { baseline: { x: number; y: number }; projectedWidth: number; rotation: number },
     glyphSpanRun: ReturnType<typeof resolveRenderableGlyphSpanRun>,
     verticalFit: VerticalTextFit,
+    compactScriptScale: number,
     embeddedFont?: RegisteredEmbeddedFont
   ): void {
     if (!glyphSpanRun || !(glyphSpanRun.totalAdvance > 0) || !(textPlacement.projectedWidth > 0)) {
@@ -1045,7 +1083,8 @@ export class CanvasRenderer {
 
       const measuredWidth = Math.max(context.measureText(renderedText).width, 1);
       const rawScaleX = spanProjectedWidth / measuredWidth;
-      const scaleX = resolveGlyphScaleX(rawScaleX, item, glyphSpanRun.spans.length, embeddedFont);
+      const scaleX =
+        resolveGlyphScaleX(rawScaleX, item, glyphSpanRun.spans.length, embeddedFont) * compactScriptScale;
 
       context.save();
       context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
@@ -1057,6 +1096,221 @@ export class CanvasRenderer {
       context.fillText(renderedText, 0, verticalFit.localYOffset);
       context.restore();
     }
+  }
+
+  private drawType1TextItem(
+    context: CanvasRenderingContext2D,
+    item: PDFTextItem,
+    textPlacement: { baseline: { x: number; y: number }; projectedWidth: number; rotation: number },
+    scale: number,
+    embeddedFont: RegisteredEmbeddedFont
+  ): boolean {
+    const type1Font = embeddedFont.type1Font;
+    const spans = item.glyphSpans;
+    const fontSize = item.fontSize ?? 0;
+    if (!type1Font || !spans || spans.length === 0 || !(fontSize > 0) || !(textPlacement.projectedWidth > 0)) {
+      return false;
+    }
+
+    const totalAdvance = spans.reduce((sum, span) => sum + Math.max(span.advance, 0), 0);
+    if (!(totalAdvance > 0)) {
+      return false;
+    }
+
+    const matrixX = Math.abs(type1Font.fontMatrix[0] || 0.001);
+    const matrixY = Math.abs(type1Font.fontMatrix[3] || matrixX || 0.001);
+    const baseScaleX = fontSize * scale * matrixX;
+    const baseScaleY = fontSize * scale * matrixY;
+    if (!(baseScaleX > 0) || !(baseScaleY > 0)) {
+      return false;
+    }
+
+    const needsRotation = Math.abs(textPlacement.rotation) > 0.001;
+    let consumedAdvance = 0;
+    let didDraw = false;
+
+    for (const span of spans) {
+      const spanAdvance = Math.max(span.advance, 0);
+      const offsetX = (consumedAdvance / totalAdvance) * textPlacement.projectedWidth;
+      const spanProjectedWidth = (spanAdvance / totalAdvance) * textPlacement.projectedWidth;
+      consumedAdvance += spanAdvance;
+
+      if (!(spanProjectedWidth > 0) || span.glyphCode === undefined) {
+        continue;
+      }
+
+      const glyphName = type1Font.encoding.get(span.glyphCode);
+      if (!glyphName || glyphName === '.notdef') {
+        continue;
+      }
+
+      const glyph = type1Font.glyphs.get(glyphName);
+      if (!glyph || glyph.pathCommands.length === 0) {
+        continue;
+      }
+
+      const glyphNominalWidth = Math.max(glyph.width * baseScaleX, 0);
+      const horizontalFit = glyphNominalWidth > 0 ? spanProjectedWidth / glyphNominalWidth : 1;
+
+      context.save();
+      context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
+      if (needsRotation) {
+        context.rotate(textPlacement.rotation);
+      }
+      context.translate(offsetX, 0);
+      context.scale(baseScaleX * horizontalFit, -baseScaleY);
+      context.beginPath();
+      this.traceType1GlyphPath(context, glyph.pathCommands);
+      context.fill();
+      context.restore();
+      didDraw = true;
+    }
+
+    return didDraw;
+  }
+
+  private buildScriptAnchorSegments(items: PDFTextItem[]): ScriptAnchorSegment[] {
+    const segments: ScriptAnchorSegment[] = [];
+
+    for (const item of items) {
+      const fontSize = item.fontSize ?? 0;
+      const baselineStart = item.baselineStart;
+      const baselineEnd = item.baselineEnd;
+      if (!(fontSize > 0) || !baselineStart || !baselineEnd) {
+        continue;
+      }
+      const projectedWidth = Math.hypot(baselineEnd.x - baselineStart.x, baselineEnd.y - baselineStart.y);
+      const totalAdvance = item.glyphSpans?.reduce((sum, span) => sum + Math.max(span.advance, 0), 0) ?? 0;
+      if (item.glyphSpans && item.glyphSpans.length > 1 && projectedWidth > 0 && totalAdvance > 0) {
+        let consumedAdvance = 0;
+        for (const span of item.glyphSpans) {
+          if (!span.text.trim()) {
+            consumedAdvance += Math.max(span.advance, 0);
+            continue;
+          }
+
+          const startRatio = consumedAdvance / totalAdvance;
+          consumedAdvance += Math.max(span.advance, 0);
+          const endRatio = consumedAdvance / totalAdvance;
+          const startX = baselineStart.x + (baselineEnd.x - baselineStart.x) * startRatio;
+          const endX = baselineStart.x + (baselineEnd.x - baselineStart.x) * endRatio;
+
+          segments.push({
+            item,
+            fontSize,
+            baselineY: baselineStart.y,
+            minX: Math.min(startX, endX),
+            maxX: Math.max(startX, endX),
+            text: span.text
+          });
+        }
+        continue;
+      }
+
+      segments.push({
+        item,
+        fontSize,
+        baselineY: baselineStart.y,
+        minX: Math.min(item.bounds.minX, item.bounds.maxX),
+        maxX: Math.max(item.bounds.minX, item.bounds.maxX),
+        text: item.text
+      });
+    }
+
+    return segments;
+  }
+
+  private resolveScriptAttachmentShift(
+    item: PDFTextItem,
+    segments: ScriptAnchorSegment[],
+    metrics: PageMetrics,
+    scale: number
+  ): number {
+    const fontSize = item.fontSize ?? 0;
+    const baselineY = item.baselineStart?.y;
+    if (!(fontSize > 0) || !baselineY || fontSize > 7.5) {
+      return 0;
+    }
+
+    const compactText = item.text.replace(/\s+/g, '');
+    if (compactText.length === 0 || compactText.length > 2) {
+      return 0;
+    }
+
+    const scriptMidX = (item.bounds.minX + item.bounds.maxX) / 2;
+    let bestSegment: ScriptAnchorSegment | undefined;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const segment of segments) {
+      if (segment.item === item || !(segment.fontSize > fontSize + 0.75)) {
+        continue;
+      }
+
+      const xDistance =
+        scriptMidX < segment.minX ? segment.minX - scriptMidX : scriptMidX > segment.maxX ? scriptMidX - segment.maxX : 0;
+      if (xDistance > Math.max(fontSize * 0.9, segment.fontSize * 0.45, 2)) {
+        continue;
+      }
+
+      const visualDelta =
+        metrics.orientation === 'ascending' ? segment.baselineY - baselineY : baselineY - segment.baselineY;
+      const absVisualDelta = Math.abs(visualDelta);
+      if (absVisualDelta < fontSize * 0.12 || absVisualDelta > Math.max(segment.fontSize * 1.4, fontSize * 3)) {
+        continue;
+      }
+
+      const textPenalty = /^[A-Za-z0-9]$/.test(segment.text) ? 0 : 0.35;
+      const score = xDistance * 2 + Math.abs(absVisualDelta - fontSize * 0.75) + textPenalty;
+      if (score < bestScore) {
+        bestScore = score;
+        bestSegment = segment;
+      }
+    }
+
+    if (!bestSegment) {
+      return 0;
+    }
+
+    const visualDelta =
+      metrics.orientation === 'ascending' ? bestSegment.baselineY - baselineY : baselineY - bestSegment.baselineY;
+
+    if (visualDelta > fontSize * 0.2) {
+      const targetDelta = Math.max(fontSize * 0.74, 4.85);
+      if (targetDelta <= visualDelta) {
+        return 0;
+      }
+      return -(targetDelta - visualDelta) * scale;
+    }
+
+    if (visualDelta < -fontSize * 0.08) {
+      const targetDelta = Math.max(fontSize * 0.3, 2.05);
+      const actualDelta = -visualDelta;
+      if (targetDelta <= actualDelta) {
+        return 0;
+      }
+      return (targetDelta - actualDelta) * scale;
+    }
+
+    return 0;
+  }
+
+  private offsetTextPlacement(
+    placement: { baseline: { x: number; y: number }; projectedWidth: number; rotation: number },
+    normalShift: number
+  ): { baseline: { x: number; y: number }; projectedWidth: number; rotation: number } {
+    if (normalShift === 0) {
+      return placement;
+    }
+
+    const shiftX = -Math.sin(placement.rotation) * normalShift;
+    const shiftY = Math.cos(placement.rotation) * normalShift;
+    return {
+      ...placement,
+      baseline: {
+        x: placement.baseline.x + shiftX,
+        y: placement.baseline.y + shiftY
+      }
+    };
   }
 
   private shouldSkipSuspiciousType3Whitespace(
@@ -1137,6 +1391,27 @@ export class CanvasRenderer {
         case 'n':
           // End path without painting
           context.beginPath();
+          break;
+      }
+    }
+  }
+
+  private traceType1GlyphPath(context: CanvasRenderingContext2D, commands: Type3PathCommand[]): void {
+    for (const cmd of commands) {
+      switch (cmd.op) {
+        case 'M':
+          context.moveTo(cmd.x, cmd.y);
+          break;
+        case 'L':
+          context.lineTo(cmd.x, cmd.y);
+          break;
+        case 'C':
+          context.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x3, cmd.y3);
+          break;
+        case 'Z':
+          context.closePath();
+          break;
+        default:
           break;
       }
     }
@@ -1341,8 +1616,9 @@ export class CanvasRenderer {
       return { scaleY: 1, localYOffset: 0 };
     }
 
-    const desiredAscent = Math.max(0, (item.bounds.maxY - baselineY) * scale);
-    const desiredDescent = Math.max(0, (baselineY - item.bounds.minY) * scale);
+    const parsedHeightScale = resolveParsedHeightScale(item, embeddedFont);
+    const desiredAscent = Math.max(0, (item.bounds.maxY - baselineY) * scale * parsedHeightScale);
+    const desiredDescent = Math.max(0, (baselineY - item.bounds.minY) * scale * parsedHeightScale);
     const measuredHeight = actualAscent + actualDescent;
     const desiredHeight = desiredAscent + desiredDescent;
     if (!(measuredHeight > 0) || !(desiredHeight > 0)) {

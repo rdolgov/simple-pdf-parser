@@ -2,11 +2,15 @@ import type { PDFEmbeddedFontResource, PDFTextItem } from '../types.js';
 import { PDFDocument } from '../pdfDocument.js';
 import { canRegisterEmbeddedFontsInCurrentScope, getGlobalFontSet } from './canvasEnvironment.js';
 import { buildSyntheticOpenTypeFromType1C } from './type1COpenTypeBuilder.js';
+import { buildSyntheticOpenTypeFromType1 } from './type1OpenTypeBuilder.js';
+import { parseType1Font, type ParsedType1Font } from './type1FontProgram.js';
 
 export interface RegisteredEmbeddedFont {
   family: string;
-  renderMode: 'text' | 'glyph-span';
+  renderMode: 'text' | 'glyph-span' | 'type1-glyph';
+  sourceKind?: 'truetype' | 'type1c' | 'type1-synthetic' | 'type1-raw';
   glyphCodeToText?: Map<number, string>;
+  type1Font?: ParsedType1Font;
 }
 
 const readyCache = new WeakMap<PDFDocument, Map<string, RegisteredEmbeddedFont>>();
@@ -39,10 +43,6 @@ async function prepareEmbeddedFontsForKeys(
   documentModel: PDFDocument,
   fontKeys: Iterable<string>
 ): Promise<boolean> {
-  if (!canRegisterEmbeddedFonts()) {
-    return false;
-  }
-
   const requestedFontKeys = [...new Set(fontKeys)].filter((fontKey) => Boolean(documentModel.getFontResource(fontKey)));
   if (requestedFontKeys.length === 0) {
     return false;
@@ -150,14 +150,53 @@ async function registerEmbeddedFont(
   }
 
   if (resource.fontFileKind === 'FontFile2' || resource.fontFileSubtype === 'OpenType') {
+    if (!canRegisterEmbeddedFonts()) {
+      return undefined;
+    }
     const family = createEmbeddedFamilyName(resource.baseFontName ?? 'Embedded', fontKey);
     const fontFace = new FontFace(family, toArrayBuffer(resource.data));
     await fontFace.load();
     getBrowserFontSet()?.add?.(fontFace);
-    return { family, renderMode: 'text' };
+    return { family, renderMode: 'text', sourceKind: 'truetype' };
+  }
+
+  if (
+    resource.fontFileKind === 'FontFile' &&
+    (resource.subtype === 'Type1' || resource.subtype === 'MMType1' || resource.fontFileSubtype === 'Type1')
+  ) {
+    const parsed = parseType1Font(resource);
+    if (!parsed) {
+      return undefined;
+    }
+
+    if (canRegisterEmbeddedFonts()) {
+      const synthetic = buildSyntheticOpenTypeFromType1(resource, parsed);
+      if (synthetic) {
+        const family = createEmbeddedFamilyName(resource.baseFontName ?? 'Type1', fontKey);
+        const fontFace = new FontFace(family, toArrayBuffer(synthetic.buffer));
+        await fontFace.load();
+        getBrowserFontSet()?.add?.(fontFace);
+        return {
+          family,
+          renderMode: 'glyph-span',
+          sourceKind: 'type1-synthetic',
+          glyphCodeToText: synthetic.glyphCodeToText
+        };
+      }
+    }
+
+    return {
+      family: createEmbeddedFamilyName(resource.baseFontName ?? 'Type1', fontKey),
+      renderMode: 'type1-glyph',
+      sourceKind: 'type1-raw',
+      type1Font: parsed
+    };
   }
 
   if (resource.fontFileSubtype === 'Type1C' || resource.fontFileSubtype === 'CIDFontType0C') {
+    if (!canRegisterEmbeddedFonts()) {
+      return undefined;
+    }
     const synthetic = buildSyntheticOpenTypeFromType1C(resource);
     if (!synthetic) {
       return undefined;
@@ -170,6 +209,7 @@ async function registerEmbeddedFont(
     return {
       family,
       renderMode: 'glyph-span',
+      sourceKind: 'type1c',
       glyphCodeToText: synthetic.glyphCodeToText
     };
   }

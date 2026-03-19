@@ -1,6 +1,7 @@
 import type { CSSProperties, MouseEvent } from 'react';
 
 import type { AnnotationBounds } from '../storage/annotationStorage';
+import { findFormulaFragmentMatches, type FormulaFragmentMatch } from '../utils/formulaFragmentDetector';
 import type { HighlightLineData } from '../utils/highlightUtils';
 import { buildInterestingTextLayout, type InterestingTextMatch } from '../utils/interestingTextSegments';
 
@@ -13,17 +14,21 @@ interface InterestingTextOverlayProps {
   scaleX: number;
   scaleY: number;
   hasReferenceExtraction: boolean;
+  enableFormulaPrototype: boolean;
   onCitationClick: (
     citationNumber: string,
     event: MouseEvent<HTMLElement>,
     paragraphText: string,
     bounds: AnnotationBounds
   ) => void;
+  onFormulaClick: (formulaText: string, event: MouseEvent<HTMLElement>) => void;
 }
+
+type OverlayMatch = InterestingTextMatch | FormulaFragmentMatch;
 
 type Hotspot = {
   key: string;
-  match: InterestingTextMatch;
+  match: OverlayMatch;
   style: CSSProperties;
 };
 
@@ -34,10 +39,19 @@ export function InterestingTextOverlay({
   scaleX,
   scaleY,
   hasReferenceExtraction,
-  onCitationClick
+  enableFormulaPrototype,
+  onCitationClick,
+  onFormulaClick
 }: InterestingTextOverlayProps): JSX.Element | null {
   const layout = buildInterestingTextLayout(lines.map((line) => ({ text: line.text })));
-  const hotspots = buildHotspots(layout.matches, layout.lineSlices, lines, blockBounds, scaleX, scaleY);
+  const formulaMatches = enableFormulaPrototype
+    ? findFormulaFragmentMatches(
+        layout.text,
+        layout.matches.map((match) => ({ start: match.start, end: match.end }))
+      )
+    : [];
+  const overlayMatches = [...layout.matches, ...formulaMatches].sort((left, right) => left.start - right.start);
+  const hotspots = buildHotspots(overlayMatches, layout.lineSlices, lines, blockBounds, scaleX, scaleY);
   if (hotspots.length === 0) {
     return null;
   }
@@ -63,6 +77,24 @@ export function InterestingTextOverlay({
               aria-label={`Open link ${hotspot.match.content}`}
               title={hotspot.match.href}
               onClick={stopPropagation}
+              onMouseDown={stopPropagation}
+            />
+          );
+        }
+
+        if (hotspot.match.kind === 'formula') {
+          return (
+            <button
+              key={hotspot.key}
+              type="button"
+              className="interesting-text-hotspot interesting-text-hotspot--formula"
+              style={hotspot.style}
+              aria-label={`Inspect formula fragment ${hotspot.match.content}`}
+              title={`Inspect math fragment: ${hotspot.match.content}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onFormulaClick(hotspot.match.content, event);
+              }}
               onMouseDown={stopPropagation}
             />
           );
@@ -94,7 +126,7 @@ export function InterestingTextOverlay({
 }
 
 function buildHotspots(
-  matches: InterestingTextMatch[],
+  matches: OverlayMatch[],
   lineSlices: Array<{ start: number; end: number }>,
   lines: HighlightLineData[],
   blockBounds: AnnotationBounds,
@@ -157,7 +189,7 @@ function buildHotspots(
 }
 
 function buildSpanHotspots(payload: {
-  match: InterestingTextMatch;
+  match: OverlayMatch;
   line: HighlightLineData;
   lineIndex: number;
   lineLocalStart: number;
@@ -209,7 +241,7 @@ function buildSpanHotspots(payload: {
 }
 
 function buildApproximateLineHotspot(payload: {
-  match: InterestingTextMatch;
+  match: OverlayMatch;
   lineSlice: { start: number; end: number };
   lineIndex: number;
   bounds: AnnotationBounds;

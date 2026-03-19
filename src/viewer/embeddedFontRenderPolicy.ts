@@ -30,7 +30,8 @@ export function resolveVerticalScaleBounds(
   item: PDFTextItem,
   embeddedFont: RegisteredEmbeddedFont | undefined
 ): { minScaleY: number; maxScaleY: number } {
-  const exactEmbeddedGlyphs = embeddedFont?.renderMode === 'glyph-span';
+  const exactEmbeddedGlyphs =
+    embeddedFont?.renderMode === 'glyph-span' && embeddedFont.sourceKind !== 'type1-synthetic';
   const stretchyDelimiter = isStretchyMathDelimiter(item);
   const displayOperator = isDisplayCmexOperator(item);
   const fontSize = item.fontSize ?? 0;
@@ -60,6 +61,10 @@ export function shouldUseParsedVerticalFit(
   item: PDFTextItem,
   embeddedFont: RegisteredEmbeddedFont | undefined
 ): boolean {
+  if (embeddedFont?.sourceKind === 'type1-synthetic') {
+    return false;
+  }
+
   if (isStretchyMathDelimiter(item) || isStretchyMathOperator(item)) {
     return true;
   }
@@ -82,6 +87,10 @@ export function resolveGlyphScaleX(
   spanCount: number,
   embeddedFont: RegisteredEmbeddedFont | undefined
 ): number {
+  if (embeddedFont?.sourceKind === 'type1-synthetic') {
+    return rawScaleX;
+  }
+
   if (embeddedFont?.renderMode !== 'glyph-span') {
     return rawScaleX;
   }
@@ -93,4 +102,34 @@ export function resolveGlyphScaleX(
   }
 
   return Math.min(Math.max(rawScaleX, 0.9), 1.1);
+}
+
+export function resolveParsedHeightScale(
+  item: PDFTextItem,
+  embeddedFont: RegisteredEmbeddedFont | undefined
+): number {
+  if (embeddedFont?.sourceKind === 'type1-synthetic') {
+    return 1;
+  }
+
+  const fontSize = item.fontSize ?? 0;
+  if (!(fontSize > 0) || fontSize > 7.5) {
+    return 1;
+  }
+
+  const compactText = item.text.replace(/\s+/g, '');
+  if (compactText.length === 0 || compactText.length > 2) {
+    return 1;
+  }
+
+  const isComputerModernScript = /^(cm|lasy|line10)/i.test(item.font ?? '');
+  if (isComputerModernScript && embeddedFont?.renderMode === 'glyph-span') {
+    return 0.76;
+  }
+
+  if (isComputerModernScript) {
+    return 0.8;
+  }
+
+  return 0.82;
 }

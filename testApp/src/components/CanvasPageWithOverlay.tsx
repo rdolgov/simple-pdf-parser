@@ -1070,6 +1070,22 @@ export function CanvasPageWithOverlay({
     setMathViewState(null);
   }, []);
 
+  const handleInlineFormulaClick = useCallback(
+    (formulaText: string, clickEvent: MouseEvent<HTMLElement>) => {
+      const target = clickEvent.currentTarget as HTMLElement;
+      const rect = target.getBoundingClientRect();
+      const containerRect = target.closest('.canvas-page')?.getBoundingClientRect();
+      if (!containerRect) {
+        return;
+      }
+
+      const popupLeft = rect.left - containerRect.left + rect.width + 10;
+      const popupTop = rect.top - containerRect.top;
+      void handleDetectMath(formulaText, popupTop, popupLeft);
+    },
+    [handleDetectMath]
+  );
+
   const handleCloseImageExplanation = useCallback(() => {
     setImageExplanationState(null);
   }, []);
@@ -2366,7 +2382,9 @@ export function CanvasPageWithOverlay({
                           scaleX={scaleX}
                           scaleY={scaleY}
                           hasReferenceExtraction={Boolean(geminiExtraction)}
+                          enableFormulaPrototype={enableFormulaHighlight}
                           onCitationClick={handleCitationClick}
+                          onFormulaClick={handleInlineFormulaClick}
                         />
                       </div>
                     </>
