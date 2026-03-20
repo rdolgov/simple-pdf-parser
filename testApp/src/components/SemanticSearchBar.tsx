@@ -3,6 +3,7 @@ import type { KeyboardEvent, FocusEvent, MouseEvent as ReactMouseEvent } from 'r
 import type { IndexingProgress, KeywordSearchResult, SemanticSearchResult } from '../search';
 import type { ExtractState, GeminiExtractionState } from '../hooks';
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
+import { getAiExtractionStatusView } from '../utils/aiExtractionStatus';
 import {
   type SearchHistoryEntry,
   addSearchToHistory,
@@ -107,6 +108,11 @@ export function SemanticSearchBar({
   const aiDetectionButtonTitle = aiDetectionSupport.supported
     ? aiDetectionModeDescription
     : aiDetectionSupport.message ?? 'AI detection is not supported for this PDF.';
+  const aiExtractionStatus = getAiExtractionStatusView({
+    extractState,
+    geminiExtractionState,
+    aiDetectionSupport
+  });
 
   // Load search history on mount and when expanded
   useEffect(() => {
@@ -552,6 +558,14 @@ export function SemanticSearchBar({
           <LassoIcon />
           <span>{isLassoMode ? 'Draw' : 'Lasso'}</span>
         </button>
+
+        <div
+          className={`semantic-search-ai-status semantic-search-ai-status--${aiExtractionStatus.tone}`}
+          title={aiExtractionStatus.title}
+          aria-label={aiExtractionStatus.title}
+        >
+          <span>{aiExtractionStatus.label}</span>
+        </div>
 
         <button
           type="button"
