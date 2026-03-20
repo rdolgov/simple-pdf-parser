@@ -12,7 +12,7 @@ export async function readFormattedOpenAiErrorBody(response: Response): Promise<
   }
 }
 
-export function normalizeProviderApiError(provider: 'OpenAI' | 'Gemini', error: unknown): Error {
+export function normalizeProviderApiError(provider: 'OpenAI' | 'Gemini' | 'Codex', error: unknown): Error {
   const message = formatProviderErrorMessage(provider, error);
   if (error instanceof Error && message === error.message) {
     return error;
@@ -48,7 +48,7 @@ function formatOpenAiErrorText(text: string, fallbackStatusText: string, request
   return details.length > 0 ? `${message} (${details.join(', ')})` : message;
 }
 
-function formatProviderErrorMessage(provider: 'OpenAI' | 'Gemini', error: unknown): string {
+function formatProviderErrorMessage(provider: 'OpenAI' | 'Gemini' | 'Codex', error: unknown): string {
   const basePrefix = `${provider} API request failed`;
 
   if (error instanceof Error) {

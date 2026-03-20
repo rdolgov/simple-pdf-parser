@@ -36,6 +36,7 @@ import {
   type LlmTransportMode
 } from '../utils/llmTransportSettings';
 import { hasRuntimeProviderAccess } from '../utils/llmClients';
+import { getProviderDisplayName, isOpenAiCompatibleAppProvider, isProxyOnlyProvider } from '../utils/providerMetadata';
 import { resetLocalAppData } from '../utils/resetLocalAppData';
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 
@@ -121,8 +122,10 @@ export function ControlsSidebar({
   const [extractProvider, setExtractProviderState] = useState<StructuredExtractProvider>('openai');
   const [extractGeminiApiKey, setExtractGeminiApiKey] = useState('');
   const [extractOpenAiApiKey, setExtractOpenAiApiKey] = useState('');
+  const [extractCodexApiKey, setExtractCodexApiKey] = useState('');
   const [extractGeminiModel, setExtractGeminiModel] = useState('');
   const [extractOpenAiModel, setExtractOpenAiModel] = useState('');
+  const [extractCodexModel, setExtractCodexModel] = useState('');
   const [semanticSearchProvider, setSemanticSearchProviderState] = useState<SemanticSearchProvider>('openai');
   const [semanticSearchGeminiApiKey, setSemanticSearchGeminiApiKey] = useState('');
   const [semanticSearchOpenAiApiKey, setSemanticSearchOpenAiApiKey] = useState('');
@@ -136,8 +139,10 @@ export function ControlsSidebar({
   const [rewriteProvider, setRewriteProviderState] = useState<RewriteProvider>('openai');
   const [rewriteGeminiApiKey, setRewriteGeminiApiKey] = useState('');
   const [rewriteOpenAiApiKey, setRewriteOpenAiApiKey] = useState('');
+  const [rewriteCodexApiKey, setRewriteCodexApiKey] = useState('');
   const [rewriteGeminiModel, setRewriteGeminiModel] = useState('');
   const [rewriteOpenAiModel, setRewriteOpenAiModel] = useState('');
+  const [rewriteCodexModel, setRewriteCodexModel] = useState('');
   const [llmTransportMode, setLlmTransportModeState] = useState<LlmTransportMode>('direct');
   const [proxyBaseUrl, setProxyBaseUrlState] = useState('');
   const [proxyAuthToken, setProxyAuthTokenState] = useState('');
@@ -154,8 +159,10 @@ export function ControlsSidebar({
     setExtractProviderState(settings.provider);
     setExtractGeminiApiKey(settings.geminiApiKey);
     setExtractOpenAiApiKey(settings.openaiApiKey);
+    setExtractCodexApiKey(settings.codexApiKey);
     setExtractGeminiModel(settings.geminiModel);
     setExtractOpenAiModel(settings.openaiModel);
+    setExtractCodexModel(settings.codexModel);
 
     const semanticSearchSettings = loadSemanticSearchStoredSettings();
     setSemanticSearchProviderState(semanticSearchSettings.provider);
@@ -175,25 +182,44 @@ export function ControlsSidebar({
     setRewriteProviderState(rewriteProviderSettings.provider);
     setRewriteGeminiApiKey(rewriteProviderSettings.geminiApiKey);
     setRewriteOpenAiApiKey(rewriteProviderSettings.openaiApiKey);
+    setRewriteCodexApiKey(rewriteProviderSettings.codexApiKey);
     setRewriteGeminiModel(rewriteProviderSettings.geminiModel);
     setRewriteOpenAiModel(rewriteProviderSettings.openaiModel);
+    setRewriteCodexModel(rewriteProviderSettings.codexModel);
   }, []);
 
-  const currentExtractApiKey = extractProvider === 'openai' ? extractOpenAiApiKey : extractGeminiApiKey;
-  const currentExtractModel = extractProvider === 'openai' ? extractOpenAiModel : extractGeminiModel;
+  const currentExtractApiKey = extractProvider === 'openai'
+    ? extractOpenAiApiKey
+    : extractProvider === 'codex'
+      ? extractCodexApiKey
+      : extractGeminiApiKey;
+  const currentExtractModel = extractProvider === 'openai'
+    ? extractOpenAiModel
+    : extractProvider === 'codex'
+      ? extractCodexModel
+      : extractGeminiModel;
   const currentSemanticSearchApiKey = semanticSearchProvider === 'openai'
     ? semanticSearchOpenAiApiKey
     : semanticSearchGeminiApiKey;
   const currentSemanticSearchModel = semanticSearchProvider === 'openai'
     ? semanticSearchOpenAiModel
     : semanticSearchGeminiModel;
-  const currentRewriteApiKey = rewriteProvider === 'openai' ? rewriteOpenAiApiKey : rewriteGeminiApiKey;
-  const currentRewriteModel = rewriteProvider === 'openai' ? rewriteOpenAiModel : rewriteGeminiModel;
+  const currentRewriteApiKey = rewriteProvider === 'openai'
+    ? rewriteOpenAiApiKey
+    : rewriteProvider === 'codex'
+      ? rewriteCodexApiKey
+      : rewriteGeminiApiKey;
+  const currentRewriteModel = rewriteProvider === 'openai'
+    ? rewriteOpenAiModel
+    : rewriteProvider === 'codex'
+      ? rewriteCodexModel
+      : rewriteGeminiModel;
   const isProxyTransport = llmTransportMode === 'proxy';
   const isAiDetectionRunning = extractState.status === 'loading' || geminiExtractionState.status === 'loading';
   const isAiDetectionReady = extractState.status === 'ready' && geminiExtractionState.status === 'ready';
   const canRunFocusWithCurrentTransport =
-    useRecordingPlayback || hasRuntimeProviderAccess('openai', openAiConfig.apiKey ?? '');
+    useRecordingPlayback ||
+    (isOpenAiCompatibleAppProvider(focusProvider) && hasRuntimeProviderAccess(focusProvider, openAiConfig.apiKey ?? ''));
 
   const handleExtractProviderChange = (provider: StructuredExtractProvider) => {
     setExtractProviderState(provider);
@@ -203,6 +229,8 @@ export function ControlsSidebar({
   const handleExtractApiKeyChange = (value: string) => {
     if (extractProvider === 'openai') {
       setExtractOpenAiApiKey(value);
+    } else if (extractProvider === 'codex') {
+      setExtractCodexApiKey(value);
     } else {
       setExtractGeminiApiKey(value);
     }
@@ -212,6 +240,8 @@ export function ControlsSidebar({
   const handleExtractModelChange = (value: string) => {
     if (extractProvider === 'openai') {
       setExtractOpenAiModel(value);
+    } else if (extractProvider === 'codex') {
+      setExtractCodexModel(value);
     } else {
       setExtractGeminiModel(value);
     }
@@ -265,6 +295,8 @@ export function ControlsSidebar({
   const handleRewriteApiKeyChange = (value: string) => {
     if (rewriteProvider === 'openai') {
       setRewriteOpenAiApiKey(value);
+    } else if (rewriteProvider === 'codex') {
+      setRewriteCodexApiKey(value);
     } else {
       setRewriteGeminiApiKey(value);
     }
@@ -274,6 +306,8 @@ export function ControlsSidebar({
   const handleRewriteModelChange = (value: string) => {
     if (rewriteProvider === 'openai') {
       setRewriteOpenAiModel(value);
+    } else if (rewriteProvider === 'codex') {
+      setRewriteCodexModel(value);
     } else {
       setRewriteGeminiModel(value);
     }
@@ -348,6 +382,7 @@ export function ControlsSidebar({
             >
               <option value="mock">Mock relevance</option>
               <option value="openai">OpenAI</option>
+              <option value="codex">Codex</option>
             </select>
             <button
               type="button"
@@ -355,29 +390,39 @@ export function ControlsSidebar({
               disabled={
                 state.status !== 'ready' ||
                 focusQuery.trim().length === 0 ||
-                (focusProvider === 'openai' && !canRunFocusWithCurrentTransport)
+                (isOpenAiCompatibleAppProvider(focusProvider) && !canRunFocusWithCurrentTransport)
               }
             >
               Highlight Relevant
             </button>
           </div>
 
-          {focusProvider === 'openai' && (
+          {isOpenAiCompatibleAppProvider(focusProvider) && (
             <div className="openai-config">
               <input
                 type="password"
                 value={openAiConfig.apiKey ?? ''}
-                placeholder={isProxyTransport ? 'Direct-mode OpenAI API key (unused in proxy mode)' : 'OpenAI API key'}
+                placeholder={
+                  isProxyTransport
+                    ? `Direct-mode ${getProviderDisplayName(focusProvider)} API key (unused in proxy mode)`
+                    : isProxyOnlyProvider(focusProvider)
+                      ? `${getProviderDisplayName(focusProvider)} proxy token`
+                      : `${getProviderDisplayName(focusProvider)} API key`
+                }
                 onChange={(event) => setOpenAiConfig({ ...openAiConfig, apiKey: event.target.value.trim() })}
               />
               <input
                 type="text"
                 value={openAiConfig.model ?? ''}
-                placeholder="Model (e.g., gpt-5.2)"
+                placeholder={focusProvider === 'codex' ? 'Model (e.g., gpt-5-codex)' : 'Model (e.g., gpt-5.2)'}
                 onChange={(event) => setOpenAiConfig({ ...openAiConfig, model: event.target.value.trim() })}
               />
               {!isProxyTransport && !useRecordingPlayback && (!openAiConfig.apiKey || openAiConfig.apiKey.length === 0) && (
-                <span className="focus-warning">API key required for OpenAI</span>
+                <span className="focus-warning">
+                  {isProxyOnlyProvider(focusProvider)
+                    ? `${getProviderDisplayName(focusProvider)} focus requires proxy transport`
+                    : `API key required for ${getProviderDisplayName(focusProvider)}`}
+                </span>
               )}
               {isProxyTransport && (
                 <span className="structured-extract-settings-note">
@@ -447,8 +492,8 @@ export function ControlsSidebar({
               {isProxyRouteManaged
                 ? 'This /proxy route is locked to the server proxy and uses a cookie-backed login session. Direct provider keys stay available when you open the app on the root route instead.'
                 : isProxyTransport
-                  ? 'Gemini and OpenAI calls go through the proxy base URL below. Provider API key fields remain stored for direct mode, but are ignored on the client while proxy mode is active.'
-                  : 'The browser calls Gemini and OpenAI directly. Provider API key fields below are required client-side.'}
+                  ? 'Gemini, OpenAI, and Codex calls go through the proxy base URL below. Provider API key fields remain stored for direct mode, but are ignored on the client while proxy mode is active.'
+                  : 'The browser calls Gemini and OpenAI directly. Codex is proxy-only.'}
             </span>
           </div>
           <div className="structured-extract-settings">
@@ -459,6 +504,7 @@ export function ControlsSidebar({
             >
               <option value="gemini">Rewrite with Gemini</option>
               <option value="openai">Rewrite with OpenAI</option>
+              <option value="codex">Rewrite with Codex</option>
             </select>
             <input
               type="password"
@@ -467,17 +513,27 @@ export function ControlsSidebar({
                 isProxyTransport
                   ? rewriteProvider === 'openai'
                     ? 'Direct-mode OpenAI API key'
-                    : 'Direct-mode Gemini API key'
+                    : rewriteProvider === 'codex'
+                      ? 'Direct-mode Codex token'
+                      : 'Direct-mode Gemini API key'
                   : rewriteProvider === 'openai'
                     ? 'OpenAI API key'
-                    : 'Gemini API key'
+                    : rewriteProvider === 'codex'
+                      ? 'Codex proxy token'
+                      : 'Gemini API key'
               }
               onChange={(event) => handleRewriteApiKeyChange(event.target.value)}
             />
             <input
               type="text"
               value={currentRewriteModel}
-              placeholder={rewriteProvider === 'openai' ? 'Model (e.g., gpt-5.2)' : 'Model (e.g., gemini-3-pro-preview)'}
+              placeholder={
+                rewriteProvider === 'openai'
+                  ? 'Model (e.g., gpt-5.2)'
+                  : rewriteProvider === 'codex'
+                    ? 'Model (e.g., gpt-5-codex)'
+                    : 'Model (e.g., gemini-3-pro-preview)'
+              }
               onChange={(event) => handleRewriteModelChange(event.target.value)}
             />
             <select
@@ -585,6 +641,7 @@ export function ControlsSidebar({
             >
               <option value="gemini">Gemini</option>
               <option value="openai">OpenAI</option>
+              <option value="codex">Codex</option>
             </select>
             <input
               type="password"
@@ -593,21 +650,31 @@ export function ControlsSidebar({
                 isProxyTransport
                   ? extractProvider === 'openai'
                     ? 'Direct-mode OpenAI API key'
-                    : 'Direct-mode Gemini API key'
+                    : extractProvider === 'codex'
+                      ? 'Direct-mode Codex token'
+                      : 'Direct-mode Gemini API key'
                   : extractProvider === 'openai'
                     ? 'OpenAI API key'
-                    : 'Gemini API key'
+                    : extractProvider === 'codex'
+                      ? 'Codex proxy token'
+                      : 'Gemini API key'
               }
               onChange={(event) => handleExtractApiKeyChange(event.target.value)}
             />
             <input
               type="text"
               value={currentExtractModel}
-              placeholder={extractProvider === 'openai' ? 'Model (e.g., gpt-5.2)' : 'Model (e.g., gemini-3-pro-preview)'}
+              placeholder={
+                extractProvider === 'openai'
+                  ? 'Model (e.g., gpt-5.2)'
+                  : extractProvider === 'codex'
+                    ? 'Model (e.g., gpt-5-codex)'
+                    : 'Model (e.g., gemini-3-pro-preview)'
+              }
               onChange={(event) => handleExtractModelChange(event.target.value)}
             />
             <span className="structured-extract-settings-note">
-              Used for PDF table/image structured extraction and LLM-based logical unit grouping. Cache is per file checksum and provider/model.
+              Used for PDF table/image structured extraction and LLM-based logical unit grouping. Codex runs only through the proxy. Cache is per file checksum and provider/model.
             </span>
           </div>
           <span className="structured-extract-settings-note">{aiDetectionModeDescription}</span>
@@ -665,9 +732,9 @@ export function ControlsSidebar({
             type="checkbox"
             checked={recordFocusExchanges}
             onChange={(event) => setRecordFocusExchanges(event.target.checked)}
-            disabled={focusProvider !== 'openai'}
+            disabled={!isOpenAiCompatibleAppProvider(focusProvider)}
           />
-          <span>Capture Gemini exchanges</span>
+          <span>Capture focus exchanges</span>
         </label>
           <label className="checkbox-option">
             <input

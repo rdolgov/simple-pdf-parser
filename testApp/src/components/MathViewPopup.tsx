@@ -8,6 +8,7 @@ import {
   setCachedExplanation
 } from '../storage/mathCache';
 import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
+import { getProviderDisplayName, isOpenAiCompatibleAppProvider } from '../utils/providerMetadata';
 
 
 interface MathViewPopupProps {
@@ -17,7 +18,7 @@ interface MathViewPopupProps {
   isLoading?: boolean;
   error?: string | null;
   apiKey?: string;
-  provider?: 'gemini' | 'openai';
+  provider?: 'gemini' | 'openai' | 'codex';
   model?: string | null;
 }
 
@@ -169,11 +170,11 @@ Important:
       - For the behavior section, describe the mathematical relationship
       - Only return the JSON, no markdown code blocks`;
 
-      const response = provider === 'openai'
+      const response = isOpenAiCompatibleAppProvider(provider)
         ? await createTransportedOpenAiApi({
             apiKey,
             ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
-          }).generateText(prompt)
+          }, provider).generateText(prompt)
         : await createTransportedGeminiApi({
             apiKey,
             model: model && model.trim().length > 0 ? model.trim() : 'gemini-3-pro-preview'
@@ -250,7 +251,7 @@ Important:
                 className="math-view-explain-btn"
                 onClick={handleExplainFormula}
                 disabled={!apiKey}
-                title={apiKey ? 'Explain this formula' : `${provider === 'openai' ? 'OpenAI' : 'Gemini'} API key required`}
+                title={apiKey ? 'Explain this formula' : `${getProviderDisplayName(provider)} API key required`}
               >
                 <ExplainIcon />
                 <span>Explain Formula</span>

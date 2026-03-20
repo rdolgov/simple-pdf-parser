@@ -7,20 +7,24 @@ export const REWRITE_PROVIDER_STORAGE_KEY = 'rewrite-provider';
 
 export const REWRITE_PROVIDER_API_KEY_STORAGE_KEYS: Record<RewriteProvider, readonly string[]> = {
   gemini: ['rewrite-gemini-api-key', 'gemini-overlay-api-key', 'gemini-api-key'],
-  openai: ['rewrite-openai-api-key', 'openai-api-key', 'openai-overlay-api-key']
+  openai: ['rewrite-openai-api-key', 'openai-api-key', 'openai-overlay-api-key'],
+  codex: ['rewrite-codex-api-key', 'codex-api-key', 'codex-overlay-api-key']
 } as const;
 
 export const REWRITE_PROVIDER_MODEL_STORAGE_KEYS: Record<RewriteProvider, string> = {
   gemini: 'rewrite-gemini-model',
-  openai: 'rewrite-openai-model'
+  openai: 'rewrite-openai-model',
+  codex: 'rewrite-codex-model'
 } as const;
 
 export type RewriteProviderStoredSettings = {
   provider: RewriteProvider;
   geminiApiKey: string;
   openaiApiKey: string;
+  codexApiKey: string;
   geminiModel: string;
   openaiModel: string;
+  codexModel: string;
 };
 
 export function loadRewriteProviderStoredSettings(): RewriteProviderStoredSettings {
@@ -28,8 +32,10 @@ export function loadRewriteProviderStoredSettings(): RewriteProviderStoredSettin
     provider: getRewriteProvider(),
     geminiApiKey: getRewriteApiKey('gemini') ?? '',
     openaiApiKey: getRewriteApiKey('openai') ?? '',
+    codexApiKey: getRewriteApiKey('codex') ?? '',
     geminiModel: getRewriteModel('gemini') ?? '',
-    openaiModel: getRewriteModel('openai') ?? ''
+    openaiModel: getRewriteModel('openai') ?? '',
+    codexModel: getRewriteModel('codex') ?? ''
   };
 }
 
@@ -39,7 +45,7 @@ export function getRewriteProvider(): RewriteProvider {
   }
   try {
     const raw = window.localStorage.getItem(REWRITE_PROVIDER_STORAGE_KEY)?.trim().toLowerCase();
-    return raw === 'gemini' ? 'gemini' : 'openai';
+    return raw === 'gemini' || raw === 'codex' ? raw : 'openai';
   } catch {
     return 'openai';
   }

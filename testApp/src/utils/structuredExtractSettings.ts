@@ -6,20 +6,24 @@ export const STRUCTURED_EXTRACT_SETTINGS_CHANGED_EVENT = 'structured-extract-set
 
 export const STRUCTURED_EXTRACT_PROVIDER_API_KEY_STORAGE_KEYS: Record<StructuredExtractProvider, readonly string[]> = {
   gemini: ['gemini-overlay-api-key', 'gemini-api-key'],
-  openai: ['openai-api-key', 'openai-overlay-api-key']
+  openai: ['openai-api-key', 'openai-overlay-api-key'],
+  codex: ['codex-api-key', 'codex-overlay-api-key']
 } as const;
 
 export const STRUCTURED_EXTRACT_PROVIDER_MODEL_STORAGE_KEYS: Record<StructuredExtractProvider, string> = {
   gemini: 'structured-extract-gemini-model',
-  openai: 'structured-extract-openai-model'
+  openai: 'structured-extract-openai-model',
+  codex: 'structured-extract-codex-model'
 } as const;
 
 export type StructuredExtractStoredSettings = {
   provider: StructuredExtractProvider;
   geminiApiKey: string;
   openaiApiKey: string;
+  codexApiKey: string;
   geminiModel: string;
   openaiModel: string;
+  codexModel: string;
 };
 
 export function loadStructuredExtractStoredSettings(): StructuredExtractStoredSettings {
@@ -27,8 +31,10 @@ export function loadStructuredExtractStoredSettings(): StructuredExtractStoredSe
     provider: getStructuredExtractProvider(),
     geminiApiKey: getStructuredExtractApiKey('gemini') ?? '',
     openaiApiKey: getStructuredExtractApiKey('openai') ?? '',
+    codexApiKey: getStructuredExtractApiKey('codex') ?? '',
     geminiModel: getStructuredExtractModel('gemini') ?? '',
-    openaiModel: getStructuredExtractModel('openai') ?? ''
+    openaiModel: getStructuredExtractModel('openai') ?? '',
+    codexModel: getStructuredExtractModel('codex') ?? ''
   };
 }
 
@@ -38,7 +44,7 @@ export function getStructuredExtractProvider(): StructuredExtractProvider {
   }
   try {
     const raw = window.localStorage.getItem(STRUCTURED_EXTRACT_PROVIDER_STORAGE_KEY)?.trim().toLowerCase();
-    return raw === 'gemini' ? 'gemini' : 'openai';
+    return raw === 'gemini' || raw === 'codex' ? raw : 'openai';
   } catch {
     return 'openai';
   }

@@ -11,6 +11,7 @@ import { getRewriteApiKey, getRewriteModel, getRewriteProvider, setRewriteApiKey
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
 import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
+import { getProviderDisplayName, isOpenAiCompatibleAppProvider, isProxyOnlyProvider } from '../utils/providerMetadata';
 
 const EXTRACTION_PROMPT = `Convert this PDF to JSON format with the following structure:
 {
@@ -137,8 +138,16 @@ export function useGeminiExtraction({
     let apiKey = getRewriteApiKey(provider);
 
     if (!apiKey && !isProxyTransportEnabled()) {
+      if (isProxyOnlyProvider(provider)) {
+        setState({
+          status: 'error',
+          extraction: null,
+          error: `${getProviderDisplayName(provider)} layout extraction requires proxy transport.`
+        });
+        return;
+      }
       apiKey = window.prompt(
-        `Enter your ${provider === 'openai' ? 'OpenAI' : 'Gemini'} API key to extract document structure:`
+        `Enter your ${getProviderDisplayName(provider)} API key to extract document structure:`
       );
       if (!apiKey) {
         setState({ status: 'error', extraction: null, error: 'API key required' });
@@ -155,7 +164,7 @@ export function useGeminiExtraction({
       const configuredModel = getRewriteModel(provider)?.trim();
 
       // Send request with PDF file
-      const result = provider === 'openai'
+      const result = isOpenAiCompatibleAppProvider(provider)
         ? await (async () => {
             const openAiModel =
               configuredModel && !/^(gemini-|models\/gemini|gpt-image-|dall-e-)/i.test(configuredModel)
@@ -164,7 +173,7 @@ export function useGeminiExtraction({
             const client = createTransportedOpenAiApi({
               apiKey,
               ...(openAiModel ? { model: openAiModel } : {})
-            });
+            }, provider);
             return client.generateContent({
               contents: {
                 parts: [

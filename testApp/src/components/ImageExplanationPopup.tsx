@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
 import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
+import { getProviderDisplayName, isOpenAiCompatibleAppProvider } from '../utils/providerMetadata';
 
 
 export interface ImageExplanationData {
@@ -14,7 +15,7 @@ interface ImageExplanationPopupProps {
   position: { top: number; left: number };
   onClose: () => void;
   apiKey?: string;
-  provider?: 'gemini' | 'openai';
+  provider?: 'gemini' | 'openai' | 'codex';
   model?: string | null;
   savedExplanation?: ImageExplanationData | null;
   onSaveExplanation: (explanation: string) => void;
@@ -104,7 +105,7 @@ export function ImageExplanationPopup({
 
   const handleExplain = useCallback(async () => {
     if (!apiKey) {
-      setError(provider === 'openai' ? 'OpenAI API key is required' : 'Gemini API key is required');
+      setError(`${getProviderDisplayName(provider)} API key is required`);
       return;
     }
 
@@ -125,11 +126,11 @@ export function ImageExplanationPopup({
 4. **Context**: How might this relate to the surrounding document content?
 
       Keep the explanation concise but thorough, suitable for someone trying to understand the document.`;
-      const result = provider === 'openai'
+      const result = isOpenAiCompatibleAppProvider(provider)
         ? await createTransportedOpenAiApi({
             apiKey,
             ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
-          }).generateFromImage(base64Data, mimeType, prompt)
+          }, provider).generateFromImage(base64Data, mimeType, prompt)
         : await createTransportedGeminiApi({
             apiKey,
             ...(model && model.trim().length > 0 ? { model: model.trim() } : {})

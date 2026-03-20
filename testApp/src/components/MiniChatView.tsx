@@ -11,12 +11,13 @@ import {
   findAnnotationAtBounds
 } from '../storage/annotationStorage';
 import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
+import { getProviderDisplayName, isOpenAiCompatibleAppProvider } from '../utils/providerMetadata';
 
 
 interface MiniChatViewProps {
   contextText: string;
   apiKey: string;
-  provider?: 'gemini' | 'openai';
+  provider?: 'gemini' | 'openai' | 'codex';
   model?: string | null;
   onClose: () => void;
   position?: { top: number; left: number };
@@ -215,11 +216,11 @@ export function MiniChatView({
         (conversationHistory ? `\n\nPrevious conversation:\n${conversationHistory}\n\n` : '\n\n') +
         `User: ${trimmed}`;
 
-      const result = provider === 'openai'
+      const result = isOpenAiCompatibleAppProvider(provider)
         ? await createTransportedOpenAiApi({
             apiKey,
             ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
-          }).generateText(fullPrompt)
+          }, provider).generateText(fullPrompt)
         : await createTransportedGeminiApi({
             apiKey,
             tools: enableWebSearch ? [createGoogleSearchTool()] : undefined,
@@ -381,7 +382,7 @@ export function MiniChatView({
 
       {!apiKey && (
         <div className="mini-chat-no-key">
-          {provider === 'openai' ? 'OpenAI API key required.' : 'Gemini API key required.'}
+          {getProviderDisplayName(provider) + ' API key required.'}
         </div>
       )}
     </div>

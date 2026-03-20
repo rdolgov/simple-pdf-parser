@@ -5,6 +5,7 @@ import type {
   HtmlParagraphBlock
 } from './htmlLayoutConverter.js';
 import type { PDFImageBounds } from '../types.js';
+import type { StructuredExtractProvider } from '../query/structuredExtractApi.js';
 
 type TextBlock = HtmlParagraphBlock | HtmlHeadingBlock;
 
@@ -47,7 +48,7 @@ export interface HtmlLogicalBlockAssignment {
 export type HtmlLogicalStructureStrategy = 'heuristic-v1' | 'llm-v1';
 
 export interface HtmlLogicalStructureMetadata {
-  provider?: 'openai' | 'gemini';
+  provider?: StructuredExtractProvider;
   model?: string;
   promptVersion?: string;
   batchCount?: number;

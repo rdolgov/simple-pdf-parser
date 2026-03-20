@@ -1,4 +1,5 @@
 import type { HtmlDocumentLayout, HtmlContentBlock, HtmlPageLayout } from '../html/htmlLayoutConverter.js';
+import type { OpenAiCompatibleProvider } from './openAiCompatibleProvider.js';
 
 export type RelevanceState = 'highlight' | 'dim' | 'hidden';
 
@@ -27,7 +28,7 @@ export interface RelevanceQueryInput {
 }
 
 export interface RelevanceServiceConfig {
-  provider: 'openai' | 'anthropic' | 'custom';
+  provider: OpenAiCompatibleProvider | 'anthropic' | 'custom';
   apiKey?: string;
   model?: string;
   endpoint?: string;

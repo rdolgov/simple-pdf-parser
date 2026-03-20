@@ -6,11 +6,13 @@ import {
   type StructuredExtractFileInput
 } from './geminiStructuredExtract.js';
 import { OpenAiAPI, type OpenAiApiConfig } from './openAiApi.js';
+import type { OpenAiCompatibleProvider } from './openAiCompatibleProvider.js';
 
 export type OpenAiStructuredExtractOptions = GeminiStructuredExtractOptions;
 
 export interface OpenAiStructuredExtractConfig {
   apiKey: string;
+  providerName?: OpenAiCompatibleProvider;
   model?: string;
   endpoint?: string;
   generationConfig?: OpenAiApiConfig['generationConfig'];
@@ -49,7 +51,7 @@ export class OpenAiStructuredExtract {
       },
       {
         client,
-        providerName: 'openai'
+        providerName: config.providerName ?? 'openai'
       }
     );
   }

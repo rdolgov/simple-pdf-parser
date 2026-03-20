@@ -5,7 +5,8 @@ import type {
   HtmlParagraphBlock,
   HtmlTableBlock,
   BlockRelevanceAnnotation,
-  RelevanceServiceConfig
+  RelevanceServiceConfig,
+  OpenAiCompatibleProvider
 } from 'pdf-layout-parser';
 import type { StructuredDataDocument, TableModel } from '@viewer/htmlStructuredDataRenderer';
 
@@ -45,7 +46,7 @@ export type ViewMode =
 
 export type FocusViewMode = Extract<ViewMode, 'focus-render' | 'focus-pdf'>;
 
-export type FocusProvider = 'mock' | 'openai';
+export type FocusProvider = 'mock' | OpenAiCompatibleProvider;
 
 export type FocusRecording = {
   id: string;

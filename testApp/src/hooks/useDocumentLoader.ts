@@ -28,6 +28,7 @@ import { analyzeAiDetectionSupport, type AiDetectionSupport } from '../utils/aiD
 import type { PdfParseWorkerResponse } from '../workers/pdfParseProtocol';
 import { deserializePdfPage } from '../workers/pdfPageTransfer';
 import { createTransportedStructuredExtractApi } from '../utils/llmClients';
+import { getProviderDisplayName, isProxyOnlyProvider } from '../utils/providerMetadata';
 import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
 
 const EXTRACT_CACHE_SCHEMA_VERSION = 4;
@@ -236,8 +237,11 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         const model = getStructuredExtractModel(provider);
         const apiKey = resolveApiKeyForExtract(provider);
         if (!apiKey && !isProxyTransportEnabled()) {
+          if (isProxyOnlyProvider(provider)) {
+            throw new Error(`${getProviderDisplayName(provider)} structured extraction requires proxy transport.`);
+          }
           throw new Error(
-            `${provider === 'openai' ? 'OpenAI' : 'Gemini'} API key is required to extract structured table and image metadata.`
+            `${getProviderDisplayName(provider)} API key is required to extract structured table and image metadata.`
           );
         }
 
@@ -469,7 +473,7 @@ async function parsePdfDocumentInWorker(
   });
 }
 
-function resolveApiKeyForExtract(provider: 'gemini' | 'openai'): string | null {
+function resolveApiKeyForExtract(provider: 'gemini' | 'openai' | 'codex'): string | null {
   const existing = getStructuredExtractApiKey(provider);
   if (existing) {
     return existing;
@@ -477,7 +481,10 @@ function resolveApiKeyForExtract(provider: 'gemini' | 'openai'): string | null {
   if (isProxyTransportEnabled()) {
     return null;
   }
-  const providerName = provider === 'openai' ? 'OpenAI' : 'Gemini';
+  if (isProxyOnlyProvider(provider)) {
+    return null;
+  }
+  const providerName = getProviderDisplayName(provider);
   const prompted = window.prompt(`Enter your ${providerName} API key to extract tables and images from this PDF:`);
   const normalized = prompted?.trim();
   if (!normalized) {

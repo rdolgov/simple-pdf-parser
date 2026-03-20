@@ -45,7 +45,7 @@ export interface GeminiExtractionRecord {
   documentHash: string;
   extraction: GeminiDocumentExtraction;
   createdAt: number;
-  provider?: 'gemini' | 'openai';
+  provider?: 'gemini' | 'openai' | 'codex';
   model?: string;
 }
 

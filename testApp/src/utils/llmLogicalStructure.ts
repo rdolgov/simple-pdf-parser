@@ -2,6 +2,7 @@ import {
   buildHtmlLogicalStructure,
   buildHtmlLogicalStructureFromTopicGroups,
   collectHtmlLogicalSectionBatches,
+  isOpenAiCompatibleProvider,
   normalizeHtmlLogicalTopicGroups,
   parseHtmlLogicalTopicProposals,
   type HtmlDocumentLayout,
@@ -80,11 +81,11 @@ async function requestLogicalStructureBatch(
 ): Promise<string> {
   const prompt = buildLogicalStructurePrompt(batch);
 
-  if (settings.provider === 'openai') {
+  if (isOpenAiCompatibleProvider(settings.provider)) {
     const client = createTransportedOpenAiApi({
       apiKey: settings.directApiKey,
       ...(settings.model ? { model: settings.model } : {})
-    });
+    }, settings.provider);
     const response = await client.generateText(prompt, {
       generationConfig: {
         temperature: 0.1,

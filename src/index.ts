@@ -15,6 +15,7 @@ export * from './query/openaiRelevanceService.js';
 export * from './query/mockRelevanceService.js';
 export * from './query/geminiApi.js';
 export * from './query/openAiApi.js';
+export * from './query/openAiCompatibleProvider.js';
 export * from './query/structuredExtractApi.js';
 export * from './query/openAiStructuredExtract.js';
 export * from './query/lmStudioApi.js';

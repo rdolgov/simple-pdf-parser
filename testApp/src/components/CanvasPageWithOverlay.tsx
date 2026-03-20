@@ -75,6 +75,7 @@ import {
   hasRuntimeProviderAccess,
   resolveRuntimeProviderApiKey
 } from '../utils/llmClients';
+import { getProviderDisplayName, isOpenAiCompatibleAppProvider, isProxyOnlyProvider } from '../utils/providerMetadata';
 import { buildSectionContext } from '../utils/sectionContext';
 import {
   buildInteractiveWidgetPrompt,
@@ -702,19 +703,22 @@ export function CanvasPageWithOverlay({
     return null;
   }, [geminiApiKey]);
 
-  const ensureOpenAiApiKey = useCallback((): string | null => {
-    const stored = getRewriteApiKey('openai');
+  const ensureOpenAiCompatibleApiKey = useCallback((provider: 'openai' | 'codex'): string | null => {
+    const stored = getRewriteApiKey(provider);
     if (stored && stored.trim().length > 0) {
-      return resolveRuntimeProviderApiKey('openai', stored.trim());
+      return resolveRuntimeProviderApiKey(provider, stored.trim());
     }
     if (isProxyTransportEnabled()) {
-      return resolveRuntimeProviderApiKey('openai');
+      return resolveRuntimeProviderApiKey(provider);
     }
-    const entered = window.prompt('Enter your OpenAI API key to use OpenAI features on this PDF:');
+    if (isProxyOnlyProvider(provider)) {
+      return null;
+    }
+    const entered = window.prompt(`Enter your ${getProviderDisplayName(provider)} API key to use ${getProviderDisplayName(provider)} features on this PDF:`);
     if (entered && entered.trim().length > 0) {
       const value = entered.trim();
-      setRewriteApiKey('openai', value);
-      return resolveRuntimeProviderApiKey('openai', value);
+      setRewriteApiKey(provider, value);
+      return resolveRuntimeProviderApiKey(provider, value);
     }
     return null;
   }, []);
@@ -724,12 +728,12 @@ export function CanvasPageWithOverlay({
       const { mimeType, base64Data } = parseDataUri(imageDataUri);
       const provider = getRewriteProvider();
 
-      if (provider === 'openai') {
-        const openAiKey = ensureOpenAiApiKey();
+      if (isOpenAiCompatibleAppProvider(provider)) {
+        const openAiKey = ensureOpenAiCompatibleApiKey(provider);
         if (!openAiKey) {
-          throw new Error('OpenAI API key required.');
+          throw new Error(`${getProviderDisplayName(provider)} API key required.`);
         }
-        const configuredModel = getRewriteModel('openai')?.trim();
+        const configuredModel = getRewriteModel(provider)?.trim();
         const textModel =
           configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
             ? configuredModel
@@ -737,7 +741,7 @@ export function CanvasPageWithOverlay({
         const response = await createTransportedOpenAiApi({
           apiKey: openAiKey,
           ...(textModel ? { model: textModel } : {})
-        }).generateFromImage(base64Data, mimeType, prompt);
+        }, provider).generateFromImage(base64Data, mimeType, prompt);
         return response.text.trim();
       }
 
@@ -756,7 +760,7 @@ export function CanvasPageWithOverlay({
       }).generateFromImage(base64Data, mimeType, prompt, { mediaResolution: 'high' });
       return response.text.trim();
     },
-    [ensureGeminiApiKey, ensureOpenAiApiKey]
+    [ensureGeminiApiKey, ensureOpenAiCompatibleApiKey]
   );
 
   const handleRewriteHighlight = useCallback(
@@ -782,13 +786,13 @@ export function CanvasPageWithOverlay({
         });
         const rewriteProvider = getRewriteProvider();
         const response =
-          rewriteProvider === 'openai'
+          isOpenAiCompatibleAppProvider(rewriteProvider)
             ? await (async () => {
-                const openAiKey = ensureOpenAiApiKey();
+                const openAiKey = ensureOpenAiCompatibleApiKey(rewriteProvider);
                 if (!openAiKey) {
-                  throw new Error('OpenAI API key required for rewrite.');
+                  throw new Error(`${getProviderDisplayName(rewriteProvider)} API key required for rewrite.`);
                 }
-                const configuredModel = getRewriteModel('openai')?.trim();
+                const configuredModel = getRewriteModel(rewriteProvider)?.trim();
                 const openAiModel =
                   configuredModel && !/^gemini-/i.test(configuredModel)
                     ? configuredModel
@@ -796,7 +800,7 @@ export function CanvasPageWithOverlay({
                 const client = createTransportedOpenAiApi({
                   apiKey: openAiKey,
                   ...(openAiModel ? { model: openAiModel } : {})
-                });
+                }, rewriteProvider);
                 return client.generateText(prompt);
               })()
             : await (async () => {
@@ -832,7 +836,7 @@ export function CanvasPageWithOverlay({
         });
       }
     },
-    [documentTitle, ensureGeminiApiKey, ensureOpenAiApiKey]
+    [documentTitle, ensureGeminiApiKey, ensureOpenAiCompatibleApiKey]
   );
 
   const handleGenerateImage = useCallback(
@@ -855,20 +859,23 @@ export function CanvasPageWithOverlay({
         onInlineImageGenerationActivityChange?.(1);
         tracksInlineActivity = true;
         const provider = getRewriteProvider();
-        const response = provider === 'openai'
+        const response = isOpenAiCompatibleAppProvider(provider)
           ? await (async () => {
-              const openAiKey = ensureOpenAiApiKey();
-              if (!openAiKey) {
-                throw new Error('OpenAI API key required for image generation.');
+              if (provider === 'codex') {
+                throw new Error('Codex does not support image generation. Use OpenAI or Gemini for this action.');
               }
-              const configuredModel = getRewriteModel('openai')?.trim();
+              const openAiKey = ensureOpenAiCompatibleApiKey(provider);
+              if (!openAiKey) {
+                throw new Error(`${getProviderDisplayName(provider)} API key required for image generation.`);
+              }
+              const configuredModel = getRewriteModel(provider)?.trim();
               const imageModel = configuredModel && /^(gpt-image-|dall-e-)/i.test(configuredModel)
                 ? configuredModel
                 : undefined;
               const client = createTransportedOpenAiApi({
                 apiKey: openAiKey,
                 ...(imageModel ? { model: imageModel } : {})
-              });
+              }, provider);
               return client.generateImage(trimmedPrompt);
             })()
           : await (async () => {
@@ -926,7 +933,7 @@ export function CanvasPageWithOverlay({
     },
     [
       ensureGeminiApiKey,
-      ensureOpenAiApiKey,
+      ensureOpenAiCompatibleApiKey,
       documentId,
       getWidgetPopupPosition,
       pageNumber,
@@ -956,20 +963,20 @@ export function CanvasPageWithOverlay({
         provider,
         excerpt: summarizeForLog(trimmedText)
       });
-      const response = provider === 'openai'
+      const response = isOpenAiCompatibleAppProvider(provider)
         ? await (async () => {
-            const openAiKey = ensureOpenAiApiKey();
+            const openAiKey = ensureOpenAiCompatibleApiKey(provider);
             if (!openAiKey) {
-              throw new Error('OpenAI API key required');
+              throw new Error(`${getProviderDisplayName(provider)} API key required`);
             }
-            const configuredModel = getRewriteModel('openai')?.trim();
+            const configuredModel = getRewriteModel(provider)?.trim();
             const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
               ? configuredModel
               : undefined;
             const client = createTransportedOpenAiApi({
               apiKey: openAiKey,
               ...(textModel ? { model: textModel } : {})
-            });
+            }, provider);
             return client.generateText(prompt);
           })()
         : await (async () => {
@@ -995,7 +1002,7 @@ export function CanvasPageWithOverlay({
       });
       return latex;
     },
-    [ensureGeminiApiKey, ensureOpenAiApiKey, pageNumber]
+    [ensureGeminiApiKey, ensureOpenAiCompatibleApiKey, pageNumber]
   );
 
   const handleDetectMath = useCallback(
@@ -1142,20 +1149,20 @@ export function CanvasPageWithOverlay({
           sectionText
         });
         const provider = getRewriteProvider();
-        const response = provider === 'openai'
+        const response = isOpenAiCompatibleAppProvider(provider)
           ? await (async () => {
-              const openAiKey = ensureOpenAiApiKey();
+              const openAiKey = ensureOpenAiCompatibleApiKey(provider);
               if (!openAiKey) {
-                throw new Error('OpenAI API key required for interactive widgets.');
+                throw new Error(`${getProviderDisplayName(provider)} API key required for interactive widgets.`);
               }
-              const configuredModel = getRewriteModel('openai')?.trim();
+              const configuredModel = getRewriteModel(provider)?.trim();
               const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
                 ? configuredModel
                 : undefined;
               const client = createTransportedOpenAiApi({
                 apiKey: openAiKey,
                 ...(textModel ? { model: textModel } : {})
-              });
+              }, provider);
               return client.generateText(prompt);
             })()
           : await (async () => {
@@ -1214,7 +1221,7 @@ export function CanvasPageWithOverlay({
       documentId,
       documentTitle,
       ensureGeminiApiKey,
-      ensureOpenAiApiKey,
+      ensureOpenAiCompatibleApiKey,
       htmlPage,
       logicalStructure,
       onInteractiveWidgetGenerationActivityChange,
@@ -1499,8 +1506,8 @@ export function CanvasPageWithOverlay({
 
   const overlayAiProvider = getRewriteProvider();
   const overlayAiModel = getRewriteModel(overlayAiProvider);
-  const overlayAiKey = overlayAiProvider === 'openai'
-    ? resolveRuntimeProviderApiKey('openai', getRewriteApiKey('openai') ?? '')
+  const overlayAiKey = isOpenAiCompatibleAppProvider(overlayAiProvider)
+    ? resolveRuntimeProviderApiKey(overlayAiProvider, getRewriteApiKey(overlayAiProvider) ?? '')
     : resolveRuntimeProviderApiKey('gemini', getRewriteApiKey('gemini') ?? geminiApiKey ?? '');
   const activeTextSelection =
     !focusMode &&
@@ -2388,9 +2395,14 @@ export function CanvasPageWithOverlay({
                         <OverlayToolbarButton
                           onClick={() => handleGenerateImage(blockKey, generationPromptText, bounds)}
                           icon={isLoadingImage ? <LoadingIcon /> : <ImageIcon />}
-                          label="Generate Gemini image"
-                          title={imageErrorMessage || 'Generate Gemini image for this selection'}
-                          disabled={isLoadingImage}
+                          label="Generate image"
+                          title={
+                            imageErrorMessage ||
+                            (overlayAiProvider === 'codex'
+                              ? 'Codex does not support image generation. Switch to OpenAI or Gemini.'
+                              : `Generate image with ${getProviderDisplayName(overlayAiProvider)}`)
+                          }
+                          disabled={isLoadingImage || overlayAiProvider === 'codex'}
                         />
                         <OverlayToolbarButton
                           onClick={() =>
@@ -2566,7 +2578,7 @@ export function CanvasPageWithOverlay({
               title={
                 hasRuntimeProviderAccess(overlayAiProvider, overlayAiKey)
                   ? 'Explain how this reference connects to the paragraph'
-                  : `${overlayAiProvider === 'openai' ? 'OpenAI' : 'Gemini'} API key required`
+                  : `${getProviderDisplayName(overlayAiProvider)} API key required`
               }
             >
               <ConnectionIcon /> Explain Connection

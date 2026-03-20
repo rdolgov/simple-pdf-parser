@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { executeCodexResponses, type CodexExecConfig } from './codexExecProxy.js';
 import { FileResponseCache } from './requestCache.js';
 import { loadLocalEnvFiles } from './loadLocalEnv.js';
 import { ProxySessionAuth, parseProxyUsers } from './sessionAuth.js';
@@ -12,6 +13,7 @@ type ServerConfig = {
   openAiApiKey?: string;
   geminiBaseUrl: string;
   geminiApiKey?: string;
+  codexExec: CodexExecConfig;
   cacheEnabled: boolean;
   cacheDir: string;
   cacheTtlMs?: number;
@@ -32,8 +34,10 @@ type ProxyResponseData = {
 const PROXY_APP_PREFIX = '/proxy';
 const OPENAI_PROXY_PREFIX = '/api/llm/openai/';
 const GEMINI_PROXY_PREFIX = '/api/llm/gemini/';
+const CODEX_PROXY_PREFIX = '/api/llm/codex/';
 const PROXY_OPENAI_PROXY_PREFIX = '/proxy/api/llm/openai/';
 const PROXY_GEMINI_PROXY_PREFIX = '/proxy/api/llm/gemini/';
+const PROXY_CODEX_PROXY_PREFIX = '/proxy/api/llm/codex/';
 const HEALTH_PATHS = new Set(['/health', '/api/health', '/proxy/api/health']);
 const AUTH_SESSION_PATHS = new Set(['/api/auth/session', '/proxy/api/auth/session']);
 const AUTH_LOGIN_PATHS = new Set(['/api/auth/login', '/proxy/api/auth/login']);
@@ -81,6 +85,7 @@ server.listen(config.port, () => {
     `${GEMINI_PROXY_PREFIX}v1beta/models/{model}:generateContent`,
     `and ${PROXY_GEMINI_PROXY_PREFIX}v1beta/models/{model}:generateContent`
   );
+  console.log('[llm-proxy] Codex routes:', `${CODEX_PROXY_PREFIX}responses`, `and ${PROXY_CODEX_PROXY_PREFIX}responses`);
   console.log(
     '[llm-proxy] Auth:',
     sessionAuth.isEnabled()
@@ -116,7 +121,8 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         ok: true,
         providers: {
           openai: Boolean(config.openAiApiKey),
-          gemini: Boolean(config.geminiApiKey)
+          gemini: Boolean(config.geminiApiKey),
+          codex: config.codexExec.enabled
         },
         auth: {
           sharedTokenEnabled: Boolean(config.proxyAuthToken),
@@ -168,6 +174,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const geminiUpstreamPath = stripKnownPrefix(requestUrl.pathname, [GEMINI_PROXY_PREFIX, PROXY_GEMINI_PROXY_PREFIX]);
     if (geminiUpstreamPath !== null) {
       await proxyGeminiRequest(request, response, requestUrl, geminiUpstreamPath, config);
+      return;
+    }
+
+    const codexUpstreamPath = stripKnownPrefix(requestUrl.pathname, [CODEX_PROXY_PREFIX, PROXY_CODEX_PROXY_PREFIX]);
+    if (codexUpstreamPath !== null) {
+      await proxyCodexRequest(request, response, requestUrl, codexUpstreamPath, config);
       return;
     }
 
@@ -363,12 +375,95 @@ async function proxyGeminiRequest(
   writeProxyResponse(response, upstream, bypassCache ? 'BYPASS' : 'MISS', cacheKey, bodyHash);
 }
 
+async function proxyCodexRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  upstreamPath: string,
+  currentConfig: ServerConfig
+): Promise<void> {
+  if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
+    sendJson(response, 401, { error: 'Proxy authorization failed.' });
+    return;
+  }
+
+  if (!currentConfig.codexExec.enabled) {
+    sendJson(response, 500, { error: 'CODEX_EXEC_ENABLED is not configured on the proxy server.' });
+    return;
+  }
+
+  if (!isAllowedCodexPath(upstreamPath)) {
+    sendJson(response, 404, { error: 'Unsupported Codex proxy path.' });
+    return;
+  }
+
+  const body = await readRawBody(request);
+  const accept = readHeaderValue(request.headers.accept);
+  const contentType = readHeaderValue(request.headers['content-type']);
+  const cacheEntry = responseCache.buildKey({
+    provider: 'codex',
+    upstreamBaseUrl: currentConfig.codexExec.command,
+    upstreamPath,
+    queryParams: requestUrl.searchParams,
+    method: 'POST',
+    accept,
+    contentType,
+    body
+  });
+  const cacheKey = cacheEntry.key;
+  const bodyHash = cacheEntry.bodyHash;
+
+  const bypassCache = shouldBypassCache(request, requestUrl);
+  if (!bypassCache) {
+    const cached = await responseCache.get(cacheKey);
+    if (cached) {
+      writeProxyResponse(
+        response,
+        {
+          status: cached.status,
+          headers: cached.headers,
+          body: cached.body
+        },
+        'HIT',
+        cacheKey,
+        bodyHash,
+        cached.createdAt
+      );
+      return;
+    }
+  }
+
+  let upstream: ProxyResponseData;
+  try {
+    upstream = await executeCodexResponses(body, currentConfig.codexExec);
+  } catch (error) {
+    console.error('[llm-proxy] Codex exec request failed', error);
+    sendJson(response, 502, {
+      error: error instanceof Error ? error.message : 'Failed to execute codex exec.'
+    });
+    return;
+  }
+
+  if (isCacheableResponse(upstream.status)) {
+    try {
+      await responseCache.set(cacheKey, upstream);
+    } catch (error) {
+      console.warn('[llm-proxy] Failed to store Codex cache entry', error);
+    }
+  }
+  writeProxyResponse(response, upstream, bypassCache ? 'BYPASS' : 'MISS', cacheKey, bodyHash);
+}
+
 function isAllowedOpenAiPath(pathname: string): boolean {
   return pathname === 'responses' || pathname === 'embeddings' || pathname === 'images/generations';
 }
 
 function isAllowedGeminiPath(pathname: string): boolean {
   return /^v[0-9a-z]+(?:[a-z]*)\/models\/[^/]+:(generateContent|batchEmbedContents|embedContent)$/i.test(pathname);
+}
+
+function isAllowedCodexPath(pathname: string): boolean {
+  return pathname === 'responses';
 }
 
 async function handleLoginRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -452,6 +547,19 @@ function loadConfig(): ServerConfig {
     openAiApiKey: normalizeNonEmpty(env.OPENAI_API_KEY),
     geminiBaseUrl: normalizeUrl(env.GEMINI_BASE_URL, 'https://generativelanguage.googleapis.com'),
     geminiApiKey: normalizeNonEmpty(env.GEMINI_API_KEY),
+    codexExec: {
+      enabled: normalizeBoolean(env.CODEX_EXEC_ENABLED, false),
+      command: normalizeNonEmpty(env.CODEX_EXEC_COMMAND) ?? 'codex',
+      workdir: normalizeNonEmpty(env.CODEX_EXEC_WORKDIR) ?? process.cwd(),
+      defaultModel: normalizeNonEmpty(env.CODEX_EXEC_MODEL),
+      sandboxMode: normalizeCodexSandboxMode(env.CODEX_EXEC_SANDBOX_MODE),
+      profile: normalizeNonEmpty(env.CODEX_EXEC_PROFILE),
+      fullAuto: normalizeBoolean(env.CODEX_EXEC_FULL_AUTO, true),
+      dangerouslyBypassApprovals: normalizeBoolean(env.CODEX_EXEC_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX, false),
+      skipGitRepoCheck: normalizeBoolean(env.CODEX_EXEC_SKIP_GIT_REPO_CHECK, true),
+      additionalWritableDirs: normalizePathList(env.CODEX_EXEC_ADDITIONAL_WRITE_DIRS),
+      timeoutMs: normalizePositiveNumber(env.CODEX_EXEC_TIMEOUT_MS, 10 * 60 * 1000)
+    },
     cacheEnabled: normalizeBoolean(env.LLM_PROXY_CACHE_ENABLED, true),
     cacheDir: normalizeNonEmpty(env.LLM_PROXY_CACHE_DIR) ?? '.cache/llm-proxy',
     cacheTtlMs: normalizeOptionalNumber(env.LLM_PROXY_CACHE_TTL_MS),
@@ -513,6 +621,24 @@ function normalizePositiveNumber(value: string | undefined, fallback: number): n
 function normalizeUrl(value: string | undefined, fallback: string): string {
   const normalized = normalizeNonEmpty(value);
   return normalized ? normalized.replace(/\/+$/, '') : fallback;
+}
+
+function normalizeCodexSandboxMode(value: string | undefined): CodexExecConfig['sandboxMode'] {
+  const normalized = normalizeNonEmpty(value)?.toLowerCase();
+  if (normalized === 'read-only' || normalized === 'workspace-write' || normalized === 'danger-full-access') {
+    return normalized;
+  }
+  return 'workspace-write';
+}
+
+function normalizePathList(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }
 
 function joinUrl(baseUrl: string, path: string): string {

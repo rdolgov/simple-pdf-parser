@@ -5,6 +5,10 @@ import type {
   RelevanceServiceConfig
 } from './relevanceTypes.js';
 import { normalizeProviderApiError, readFormattedOpenAiErrorBody } from './apiErrorUtils.js';
+import {
+  getOpenAiCompatibleProviderLabel,
+  type OpenAiCompatibleProvider
+} from './openAiCompatibleProvider.js';
 
 interface OpenAiLikeClient {
   responses: {
@@ -30,12 +34,13 @@ export class OpenAiRelevanceService implements RelevanceService {
   private readonly createClient: () => Promise<OpenAiLikeClient>;
 
   constructor(private readonly config: RelevanceServiceConfig, clientFactory?: OpenAiClientFactory) {
-    if (config.provider !== 'openai') {
-      throw new Error(`OpenAiRelevanceService requires provider to be "openai" (received "${config.provider}")`);
+    if (config.provider !== 'openai' && config.provider !== 'codex') {
+      throw new Error(`OpenAiRelevanceService requires provider to be "openai" or "codex" (received "${config.provider}")`);
     }
     const apiKey = config.apiKey;
     if (!apiKey) {
-      throw new Error('OpenAiRelevanceService requires an apiKey');
+      const providerName = getOpenAiCompatibleProviderLabel(config.provider);
+      throw new Error(`OpenAiRelevanceService requires an apiKey for ${providerName}`);
     }
 
     this.createClient = clientFactory
@@ -44,6 +49,7 @@ export class OpenAiRelevanceService implements RelevanceService {
         return client;
       }
       : async () => {
+          const providerLabel = getOpenAiCompatibleProviderLabel(this.config.provider as OpenAiCompatibleProvider);
           const moduleId = 'openai';
           try {
             const { default: OpenAI } = await import(/* @vite-ignore */ moduleId);
@@ -53,7 +59,7 @@ export class OpenAiRelevanceService implements RelevanceService {
               dangerouslyAllowBrowser: this.config.dangerouslyAllowBrowser ?? false
             });
           } catch (error) {
-            return createFetchResponsesClient(apiKey, this.config.endpoint);
+            return createFetchResponsesClient(apiKey, this.config.endpoint, providerLabel);
           }
         };
   }
@@ -86,7 +92,7 @@ export class OpenAiRelevanceService implements RelevanceService {
     };
 
     this.config.debugRecorder?.({
-      provider: 'openai',
+      provider: this.config.provider,
       query: input.query,
       prompt,
       requestPayload,
@@ -185,7 +191,7 @@ function parseAnnotations(jsonText: string) {
   }
 }
 
-function createFetchResponsesClient(apiKey: string, endpoint?: string): OpenAiLikeClient {
+function createFetchResponsesClient(apiKey: string, endpoint?: string, providerLabel = 'OpenAI'): OpenAiLikeClient {
   const fetchImpl = resolveFetch();
   const targetEndpoint = normalizeResponsesEndpoint(endpoint);
   return {
@@ -202,11 +208,11 @@ function createFetchResponsesClient(apiKey: string, endpoint?: string): OpenAiLi
             body: JSON.stringify(input)
           });
         } catch (error) {
-          throw normalizeProviderApiError('OpenAI', error);
+          throw normalizeProviderApiError(providerLabel as 'OpenAI' | 'Codex', error);
         }
         if (!response.ok) {
           const message = await readFormattedOpenAiErrorBody(response);
-          throw new Error(`OpenAI request failed with status ${response.status}: ${message}`);
+          throw new Error(`${providerLabel} request failed with status ${response.status}: ${message}`);
         }
         return (await response.json()) as RawOpenAiResponse;
       }

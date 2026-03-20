@@ -5,6 +5,7 @@ import {
   type EmbeddingApiConfig,
   type EmbeddingProvider,
   type GeminiApiConfig,
+  type OpenAiCompatibleProvider,
   type OpenAiApiConfig,
   type RelevanceServiceConfig,
   type StructuredExtractApiConfig,
@@ -17,12 +18,15 @@ import {
   isProxyTransportEnabled
 } from './llmTransportSettings';
 
-type RemoteProvider = Extract<EmbeddingProvider, 'gemini' | 'openai'>;
+type RemoteProvider = 'gemini' | OpenAiCompatibleProvider;
 
 export function hasRuntimeProviderAccess(
   provider: StructuredExtractProvider,
   directApiKey?: string | null
 ): boolean {
+  if (provider === 'codex') {
+    return isProxyTransportEnabled();
+  }
   if (isProxyTransportEnabled()) {
     return true;
   }
@@ -50,12 +54,13 @@ export function resolveProxyProviderBaseUrl(provider: RemoteProvider): string {
 }
 
 export function createTransportedOpenAiApi(
-  config: Omit<OpenAiApiConfig, 'apiKey' | 'endpoint'> & { apiKey?: string | null; endpoint?: string }
+  config: Omit<OpenAiApiConfig, 'apiKey' | 'endpoint'> & { apiKey?: string | null; endpoint?: string },
+  provider: OpenAiCompatibleProvider = 'openai'
 ): OpenAiAPI {
   return new OpenAiAPI({
     ...config,
-    apiKey: resolveRuntimeProviderApiKey('openai', config.apiKey),
-    endpoint: isProxyTransportEnabled() ? resolveProxyProviderBaseUrl('openai') : config.endpoint
+    apiKey: resolveRuntimeProviderApiKey(provider, config.apiKey),
+    endpoint: isProxyTransportEnabled() ? resolveProxyProviderBaseUrl(provider) : config.endpoint
   });
 }
 
@@ -94,10 +99,11 @@ export function applyTransportToEmbeddingConfig(config: EmbeddingApiConfig): Emb
 }
 
 export function applyTransportToRelevanceConfig(config: RelevanceServiceConfig): RelevanceServiceConfig {
+  const provider = config.provider === 'codex' ? 'codex' : 'openai';
   return {
     ...config,
-    apiKey: resolveRuntimeProviderApiKey('openai', config.apiKey),
-    endpoint: isProxyTransportEnabled() ? resolveProxyProviderBaseUrl('openai') : config.endpoint
+    apiKey: resolveRuntimeProviderApiKey(provider, config.apiKey),
+    endpoint: isProxyTransportEnabled() ? resolveProxyProviderBaseUrl(provider) : config.endpoint
   };
 }
 

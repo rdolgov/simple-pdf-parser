@@ -8,9 +8,13 @@ import {
   type StructuredExtractFileInput
 } from './geminiStructuredExtract.js';
 import { OpenAiStructuredExtract } from './openAiStructuredExtract.js';
+import {
+  getOpenAiCompatibleProviderLabel,
+  type OpenAiCompatibleProvider
+} from './openAiCompatibleProvider.js';
 
 export type StructuredExtractFile = StructuredExtractFileInput;
-export type StructuredExtractProvider = 'gemini' | 'openai';
+export type StructuredExtractProvider = 'gemini' | OpenAiCompatibleProvider;
 
 export interface StructuredExtractApiConfig {
   provider?: StructuredExtractProvider;
@@ -44,7 +48,8 @@ export type { ParsedTable };
 
 const PROVIDER_KEY_STORAGE_KEYS: Record<StructuredExtractProvider, readonly string[]> = {
   gemini: ['gemini-overlay-api-key', 'gemini-api-key', 'google-gemini-api-key'],
-  openai: ['openai-api-key', 'openai-overlay-api-key']
+  openai: ['openai-api-key', 'openai-overlay-api-key'],
+  codex: ['codex-api-key', 'codex-overlay-api-key']
 } as const;
 
 export class StructuredExtractAPI {
@@ -61,7 +66,7 @@ export class StructuredExtractAPI {
     const provider = this.config.provider ?? 'gemini';
     const apiKey = resolveApiKey(provider, this.config.apiKey);
     if (!apiKey) {
-      const providerName = provider === 'openai' ? 'OpenAI' : 'Gemini';
+      const providerName = provider === 'gemini' ? 'Gemini' : getOpenAiCompatibleProviderLabel(provider);
       const storageKeys = PROVIDER_KEY_STORAGE_KEYS[provider];
       throw new Error(
         `${providerName} API key is required. Pass apiKey to StructuredExtractAPI or store it in localStorage under ${storageKeys.join(', ')}.`
@@ -69,9 +74,10 @@ export class StructuredExtractAPI {
     }
 
     const extractor =
-      provider === 'openai'
+      provider !== 'gemini'
         ? new OpenAiStructuredExtract({
             apiKey,
+            providerName: provider,
             model: this.config.model,
             endpoint: this.config.endpoint,
             generationConfig: this.config.generationConfig,
@@ -118,9 +124,11 @@ function resolveEnvApiKey(provider: StructuredExtractProvider): string | undefin
     process?: { env?: Record<string, string | undefined> };
   };
   const candidate =
-    provider === 'openai'
-      ? withProcess.process?.env?.OPENAI_API_KEY
-      : withProcess.process?.env?.GEMINI_API_KEY;
+    provider === 'gemini'
+      ? withProcess.process?.env?.GEMINI_API_KEY
+      : provider === 'codex'
+        ? withProcess.process?.env?.CODEX_API_KEY
+        : withProcess.process?.env?.OPENAI_API_KEY;
   return normalizeNonEmpty(candidate);
 }
 

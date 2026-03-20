@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-export type CacheProvider = 'openai' | 'gemini';
+export type CacheProvider = 'openai' | 'gemini' | 'codex';
 
 export interface FileResponseCacheConfig {
   enabled: boolean;

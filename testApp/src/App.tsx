@@ -7,6 +7,7 @@ import {
   DEFAULT_THEME,
   MockRelevanceService,
   DefaultRelevanceAugmenter,
+  getOpenAiCompatibleProviderLabel,
   OpenAiRelevanceService,
   type HtmlDocumentLayout,
   type HtmlPageLayout,
@@ -62,6 +63,7 @@ import {
 import { applyTransportToRelevanceConfig, hasRuntimeProviderAccess } from './utils/llmClients';
 import { isProxyAppRoute } from './utils/proxyRoute';
 import { ProxyLoginGate } from './components/ProxyLoginGate';
+import { isOpenAiCompatibleAppProvider } from './utils/providerMetadata';
 
 export default function App(): JSX.Element {
   const isManagedProxyRoute = useMemo(() => isProxyAppRoute(), []);
@@ -506,21 +508,21 @@ export default function App(): JSX.Element {
 
   const createFocusService = useCallback(
     (provider: FocusProvider, config: RelevanceServiceConfig) => {
-      if (provider === 'openai') {
-        if (!hasRuntimeProviderAccess('openai', config.apiKey)) {
-          throw new Error('OpenAI API key is required');
+      if (isOpenAiCompatibleAppProvider(provider)) {
+        if (!hasRuntimeProviderAccess(provider, config.apiKey)) {
+          throw new Error(`${getOpenAiCompatibleProviderLabel(provider)} API key is required`);
         }
         const transportedConfig = applyTransportToRelevanceConfig({
           ...config,
-          provider: 'openai',
+          provider,
           model: config.model && config.model.length > 0 ? config.model : 'gpt-5.2'
         });
         const clientFactory = () =>
           new OpenAI({
             apiKey: transportedConfig.apiKey!,
             baseURL: transportedConfig.endpoint,
-            dangerouslyAllowBrowser: true
-          });
+              dangerouslyAllowBrowser: true
+            });
         return new OpenAiRelevanceService(
           {
             ...transportedConfig,
@@ -609,8 +611,8 @@ export default function App(): JSX.Element {
         setFocusState({ status: 'error', message: 'Select a recording to replay.' });
         return;
       }
-      if (focusProvider !== 'openai') {
-        setFocusState({ status: 'error', message: 'Recording playback is available only for the OpenAI provider.' });
+      if (!isOpenAiCompatibleAppProvider(focusProvider)) {
+        setFocusState({ status: 'error', message: 'Recording playback is available only for OpenAI-compatible providers.' });
         return;
       }
       if (selectedRecording.query !== query) {
@@ -655,8 +657,15 @@ export default function App(): JSX.Element {
       return;
     }
 
-    if (!useRecordingPlayback && focusProvider === 'openai' && !hasRuntimeProviderAccess('openai', openAiConfig.apiKey)) {
-      setFocusState({ status: 'error', message: 'Provide an OpenAI API key to use GPT focus mode.' });
+    if (
+      !useRecordingPlayback &&
+      isOpenAiCompatibleAppProvider(focusProvider) &&
+      !hasRuntimeProviderAccess(focusProvider, openAiConfig.apiKey)
+    ) {
+      setFocusState({
+        status: 'error',
+        message: `Provide a ${getOpenAiCompatibleProviderLabel(focusProvider)} API key to use focus mode.`
+      });
       return;
     }
 
@@ -667,9 +676,10 @@ export default function App(): JSX.Element {
 
     try {
       const serviceConfig =
-        focusProvider === 'openai'
+        isOpenAiCompatibleAppProvider(focusProvider)
           ? {
               ...openAiConfig,
+              provider: focusProvider,
               dangerouslyAllowBrowser: true,
               debugRecorder: recordFocusExchanges ? handleCaptureExchange : undefined
             }
@@ -685,7 +695,7 @@ export default function App(): JSX.Element {
       const response = await service.analyze({
         query,
         document: currentLayout,
-        maxContextTokens: focusProvider === 'openai' ? 6000 : undefined
+        maxContextTokens: isOpenAiCompatibleAppProvider(focusProvider) ? 6000 : undefined
       });
       const augmented = augmenter.augment(currentLayout, response, { query, defaultState: 'hidden' });
       applyFocusQueryContext(augmented, query);
@@ -702,7 +712,7 @@ export default function App(): JSX.Element {
       setFocusState({ status: 'ready', query, layout: augmented });
       showFocusView('focus-pdf');
 
-      if (focusProvider === 'openai' && recordFocusExchanges && focusExchangeRef.current) {
+      if (isOpenAiCompatibleAppProvider(focusProvider) && recordFocusExchanges && focusExchangeRef.current) {
         const recording = createFocusRecording({
           provider: focusProvider,
           query,
@@ -718,8 +728,8 @@ export default function App(): JSX.Element {
       const message =
         error instanceof Error
           ? error.message
-          : focusProvider === 'openai'
-            ? 'Unable to query OpenAI. Check your API key and model.'
+          : isOpenAiCompatibleAppProvider(focusProvider)
+            ? `Unable to query ${getOpenAiCompatibleProviderLabel(focusProvider)}. Check your API key and model.`
             : 'Unable to highlight relevant sections.';
       setFocusState({ status: 'error', message });
     }
@@ -836,7 +846,7 @@ export default function App(): JSX.Element {
   }, []);
 
   const recordingPlaybackDisabled =
-    focusProvider !== 'openai' ||
+    !isOpenAiCompatibleAppProvider(focusProvider) ||
     !selectedRecording ||
     focusRecordings.length === 0 ||
     focusState.status === 'loading';
