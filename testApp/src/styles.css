@@ -4092,8 +4092,12 @@ footer code {
 
 .mini-chat-view {
   position: absolute;
-  width: 360px;
-  max-height: 480px;
+  width: min(360px, calc(100vw - 32px));
+  height: min(420px, calc(100vh - 32px));
+  min-width: 300px;
+  min-height: 260px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
   background: rgba(255, 255, 255, 0.15);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -4213,10 +4217,9 @@ footer code {
 
 .mini-chat-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 36px 16px 12px 16px;
-  min-height: 120px;
-  max-height: 240px;
 }
 
 .mini-chat-empty {
@@ -4253,6 +4256,67 @@ footer code {
   font-size: 0.85rem;
   max-width: 85%;
   line-height: 1.5;
+}
+
+.mini-chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.mini-chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.mini-chat-markdown p,
+.mini-chat-markdown ul,
+.mini-chat-markdown ol,
+.mini-chat-markdown blockquote,
+.mini-chat-markdown pre,
+.mini-chat-markdown h1,
+.mini-chat-markdown h2,
+.mini-chat-markdown h3,
+.mini-chat-markdown h4,
+.mini-chat-markdown h5,
+.mini-chat-markdown h6 {
+  margin: 0 0 0.55rem;
+}
+
+.mini-chat-markdown ul,
+.mini-chat-markdown ol {
+  padding-left: 1.15rem;
+}
+
+.mini-chat-markdown a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.mini-chat-markdown code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.92em;
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 4px;
+  padding: 0.08rem 0.28rem;
+}
+
+.mini-chat-markdown pre {
+  overflow-x: auto;
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+}
+
+.mini-chat-markdown pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.mini-chat-markdown blockquote {
+  border-left: 3px solid rgba(100, 116, 139, 0.35);
+  margin-left: 0;
+  padding-left: 0.7rem;
+  color: #475569;
 }
 
 .mini-chat-loading {
@@ -4352,6 +4416,23 @@ footer code {
   color: #92400e;
   font-size: 0.75rem;
   text-align: center;
+}
+
+.mini-chat-resize-handle {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: rgba(71, 85, 105, 0.76);
+  cursor: nwse-resize;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
 }
 
 .mini-chat-history-badge {

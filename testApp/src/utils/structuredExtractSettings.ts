@@ -1,4 +1,6 @@
 import type { StructuredExtractProvider } from 'pdf-layout-parser';
+import { DEFAULT_TEXT_PROVIDER, normalizeTextProvider } from './providerDefaults';
+import { ensureGeminiProviderDefaults } from './providerSettingsMigration';
 import { canUseLocalStorage } from './storage';
 
 export const STRUCTURED_EXTRACT_PROVIDER_STORAGE_KEY = 'structured-extract-provider';
@@ -39,14 +41,15 @@ export function loadStructuredExtractStoredSettings(): StructuredExtractStoredSe
 }
 
 export function getStructuredExtractProvider(): StructuredExtractProvider {
+  ensureGeminiProviderDefaults();
   if (!canUseLocalStorage()) {
-    return 'openai';
+    return DEFAULT_TEXT_PROVIDER;
   }
   try {
     const raw = window.localStorage.getItem(STRUCTURED_EXTRACT_PROVIDER_STORAGE_KEY)?.trim().toLowerCase();
-    return raw === 'gemini' || raw === 'codex' ? raw : 'openai';
+    return normalizeTextProvider(raw);
   } catch {
-    return 'openai';
+    return DEFAULT_TEXT_PROVIDER;
   }
 }
 

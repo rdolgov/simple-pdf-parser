@@ -1,4 +1,6 @@
 import type { StructuredExtractProvider } from 'pdf-layout-parser';
+import { DEFAULT_TEXT_PROVIDER, normalizeTextProvider } from './providerDefaults';
+import { ensureGeminiProviderDefaults } from './providerSettingsMigration';
 import { canUseLocalStorage } from './storage';
 
 export type RewriteProvider = StructuredExtractProvider;
@@ -40,14 +42,15 @@ export function loadRewriteProviderStoredSettings(): RewriteProviderStoredSettin
 }
 
 export function getRewriteProvider(): RewriteProvider {
+  ensureGeminiProviderDefaults();
   if (!canUseLocalStorage()) {
-    return 'openai';
+    return DEFAULT_TEXT_PROVIDER;
   }
   try {
     const raw = window.localStorage.getItem(REWRITE_PROVIDER_STORAGE_KEY)?.trim().toLowerCase();
-    return raw === 'gemini' || raw === 'codex' ? raw : 'openai';
+    return normalizeTextProvider(raw);
   } catch {
-    return 'openai';
+    return DEFAULT_TEXT_PROVIDER;
   }
 }
 

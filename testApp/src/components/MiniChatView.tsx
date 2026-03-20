@@ -12,6 +12,7 @@ import {
 } from '../storage/annotationStorage';
 import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
 import { getProviderDisplayName, isOpenAiCompatibleAppProvider } from '../utils/providerMetadata';
+import { renderMarkdownToHtml } from '../utils/markdownRenderer';
 
 
 interface MiniChatViewProps {
@@ -44,7 +45,7 @@ Answer the user's questions based on this context. If the question cannot be ans
 export function MiniChatView({
   contextText,
   apiKey,
-  provider = 'openai',
+  provider = 'gemini',
   model,
   onClose,
   position,
@@ -63,52 +64,79 @@ export function MiniChatView({
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [hasPersistedHistory, setHasPersistedHistory] = useState(false);
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
+  const [panelSize, setPanelSize] = useState<{ width: number; height: number } | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hasLoadedRef = useRef(false);
   const hasAutoSentRef = useRef(false);
   const isDraggingRef = useRef(false);
+  const isResizingRef = useRef(false);
   const dragStartRef = useRef<{ mouseX: number; mouseY: number; elemX: number; elemY: number } | null>(null);
+  const resizeStartRef = useRef<{ mouseX: number; mouseY: number; width: number; height: number } | null>(null);
 
   // Reset drag position when click position changes (always open next to clicked button)
   useEffect(() => {
     setDragPosition(null);
+    setPanelSize(null);
   }, [position?.top, position?.left]);
 
 
-  const handleDragStart = useCallback((e: ReactMouseEvent) => {
-    // Only start drag from the drag handle
-    const target = e.target as HTMLElement;
+  const handlePointerStart = useCallback((event: ReactMouseEvent) => {
+    const target = event.target as HTMLElement;
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    if (target.closest('.mini-chat-resize-handle')) {
+      event.preventDefault();
+      isResizingRef.current = true;
+      resizeStartRef.current = {
+        mouseX: event.clientX,
+        mouseY: event.clientY,
+        width: container.offsetWidth,
+        height: container.offsetHeight
+      };
+      return;
+    }
+
     if (!target.closest('.mini-chat-drag-handle')) {
       return;
     }
-    e.preventDefault();
+
+    event.preventDefault();
     isDraggingRef.current = true;
 
-    const container = containerRef.current;
-    if (container) {
-      // Get current position from inline style or computed style
-      const style = container.style;
-      const currentTop = parseFloat(style.top) || 0;
-      const currentLeft = parseFloat(style.left) || 0;
-
-      dragStartRef.current = {
-        mouseX: e.clientX,
-        mouseY: e.clientY,
-        elemX: currentLeft,
-        elemY: currentTop
-      };
-    }
+    const style = container.style;
+    dragStartRef.current = {
+      mouseX: event.clientX,
+      mouseY: event.clientY,
+      elemX: Number.parseFloat(style.left) || 0,
+      elemY: Number.parseFloat(style.top) || 0
+    };
   }, []);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDraggingRef.current || !dragStartRef.current) return;
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!isDraggingRef.current || !dragStartRef.current) {
+        if (!isResizingRef.current || !resizeStartRef.current) {
+          return;
+        }
 
-      const deltaX = e.clientX - dragStartRef.current.mouseX;
-      const deltaY = e.clientY - dragStartRef.current.mouseY;
+        const nextWidth = Math.max(300, resizeStartRef.current.width + (event.clientX - resizeStartRef.current.mouseX));
+        const nextHeight = Math.max(260, resizeStartRef.current.height + (event.clientY - resizeStartRef.current.mouseY));
+        const maxWidth = Math.max(300, window.innerWidth - 24);
+        const maxHeight = Math.max(260, window.innerHeight - 24);
+        setPanelSize({
+          width: Math.min(nextWidth, maxWidth),
+          height: Math.min(nextHeight, maxHeight)
+        });
+        return;
+      }
 
+      const deltaX = event.clientX - dragStartRef.current.mouseX;
+      const deltaY = event.clientY - dragStartRef.current.mouseY;
       const newLeft = dragStartRef.current.elemX + deltaX;
       const newTop = dragStartRef.current.elemY + deltaY;
 
@@ -116,10 +144,10 @@ export function MiniChatView({
     };
 
     const handleMouseUp = () => {
-      if (isDraggingRef.current) {
-        isDraggingRef.current = false;
-      }
+      isDraggingRef.current = false;
+      isResizingRef.current = false;
       dragStartRef.current = null;
+      resizeStartRef.current = null;
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -288,7 +316,11 @@ export function MiniChatView({
   // Use drag position if set, otherwise fall back to prop position
   const currentPosition = dragPosition ?? position;
   const positionStyle = currentPosition
-    ? { top: `${currentPosition.top}px`, left: `${currentPosition.left}px` }
+    ? {
+        top: `${currentPosition.top}px`,
+        left: `${currentPosition.left}px`,
+        ...(panelSize ? { width: `${panelSize.width}px`, height: `${panelSize.height}px` } : {})
+      }
     : {};
 
   return (
@@ -297,7 +329,7 @@ export function MiniChatView({
       className="mini-chat-view"
       style={{ ...positionStyle, cursor: isDraggingRef.current ? 'grabbing' : 'default' }}
       onClick={handleContainerClick}
-      onMouseDown={handleDragStart}
+      onMouseDown={handlePointerStart}
     >
       <div className="mini-chat-drag-handle">
         <DragIcon />
@@ -343,7 +375,10 @@ export function MiniChatView({
             key={index}
             className={`mini-chat-message mini-chat-message--${message.role}`}
           >
-            <div className="mini-chat-message-content">{message.content}</div>
+            <div
+              className="mini-chat-message-content mini-chat-markdown"
+              dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(message.content) }}
+            />
           </div>
         ))}
         {isLoading && (
@@ -385,6 +420,9 @@ export function MiniChatView({
           {getProviderDisplayName(provider) + ' API key required.'}
         </div>
       )}
+      <div className="mini-chat-resize-handle" aria-hidden="true">
+        <ResizeIcon />
+      </div>
     </div>
   );
 }
@@ -428,6 +466,20 @@ function TrashIcon(): JSX.Element {
         strokeLinejoin="round"
       />
       <path d="M6.5 7v4M9.5 7v4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ResizeIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path
+        d="M5 14.5 14.5 5M9 14.5l5.5-5.5M13 14.5l1.5-1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

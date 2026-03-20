@@ -7,11 +7,12 @@ import {
   saveGeminiExtraction,
   parseGeminiExtractionResponse
 } from '../storage/geminiExtractionStorage';
-import { getRewriteApiKey, getRewriteModel, getRewriteProvider, setRewriteApiKey } from '../utils/rewriteProviderSettings';
+import { setStructuredExtractApiKey } from '../utils/structuredExtractSettings';
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
 import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
 import { getProviderDisplayName, isOpenAiCompatibleAppProvider, isProxyOnlyProvider } from '../utils/providerMetadata';
+import { loadAiLayoutRuntimeSettings } from '../utils/aiLayoutSettings';
 
 const EXTRACTION_PROMPT = `Convert this PDF to JSON format with the following structure:
 {
@@ -87,10 +88,9 @@ export function useGeminiExtraction({
         const cached = await getGeminiExtraction(documentHash!);
         if (cancelled) return;
 
-        const activeProvider = getRewriteProvider();
-        const configuredModel = getRewriteModel(activeProvider);
+        const activeSettings = loadAiLayoutRuntimeSettings();
         const cacheCompatible = cached
-          ? isExtractionCacheCompatible(cached, activeProvider, configuredModel)
+          ? isExtractionCacheCompatible(cached, activeSettings.provider, activeSettings.model)
           : false;
 
         if (cached && cacheCompatible) {
@@ -134,8 +134,9 @@ export function useGeminiExtraction({
       return;
     }
 
-    const provider = getRewriteProvider();
-    let apiKey = getRewriteApiKey(provider);
+    const runtimeSettings = loadAiLayoutRuntimeSettings();
+    const { provider } = runtimeSettings;
+    let apiKey = runtimeSettings.apiKey;
 
     if (!apiKey && !isProxyTransportEnabled()) {
       if (isProxyOnlyProvider(provider)) {
@@ -153,7 +154,7 @@ export function useGeminiExtraction({
         setState({ status: 'error', extraction: null, error: 'API key required' });
         return;
       }
-      setRewriteApiKey(provider, apiKey);
+      setStructuredExtractApiKey(provider, apiKey);
     }
 
     setState({ status: 'loading', extraction: null });
@@ -161,7 +162,7 @@ export function useGeminiExtraction({
     try {
       // Convert PDF data to base64
       const pdfBase64 = arrayBufferToBase64(pdfData);
-      const configuredModel = getRewriteModel(provider)?.trim();
+      const configuredModel = runtimeSettings.model?.trim();
 
       // Send request with PDF file
       const result = isOpenAiCompatibleAppProvider(provider)

@@ -1,4 +1,6 @@
 import type { EmbeddingProvider } from 'pdf-layout-parser';
+import { DEFAULT_SEMANTIC_SEARCH_PROVIDER, normalizeSemanticSearchProvider } from './providerDefaults';
+import { ensureGeminiProviderDefaults } from './providerSettingsMigration';
 import { canUseLocalStorage } from './storage';
 
 export type SemanticSearchProvider = Extract<EmbeddingProvider, 'gemini' | 'openai'>;
@@ -34,14 +36,15 @@ export function loadSemanticSearchStoredSettings(): SemanticSearchStoredSettings
 }
 
 export function getSemanticSearchProvider(): SemanticSearchProvider {
+  ensureGeminiProviderDefaults();
   if (!canUseLocalStorage()) {
-    return 'openai';
+    return DEFAULT_SEMANTIC_SEARCH_PROVIDER;
   }
   try {
     const raw = window.localStorage.getItem(SEMANTIC_SEARCH_PROVIDER_STORAGE_KEY)?.trim().toLowerCase();
-    return raw === 'gemini' ? 'gemini' : 'openai';
+    return normalizeSemanticSearchProvider(raw);
   } catch {
-    return 'openai';
+    return DEFAULT_SEMANTIC_SEARCH_PROVIDER;
   }
 }
 

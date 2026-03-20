@@ -39,6 +39,7 @@ import { hasRuntimeProviderAccess } from '../utils/llmClients';
 import { getProviderDisplayName, isOpenAiCompatibleAppProvider, isProxyOnlyProvider } from '../utils/providerMetadata';
 import { resetLocalAppData } from '../utils/resetLocalAppData';
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
+import { DEFAULT_SEMANTIC_SEARCH_PROVIDER, DEFAULT_TEXT_PROVIDER } from '../utils/providerDefaults';
 
 interface ControlsSidebarProps {
   state: LoadState;
@@ -119,14 +120,14 @@ export function ControlsSidebar({
   proxySessionUsername,
   onProxyLogout
 }: ControlsSidebarProps): JSX.Element {
-  const [extractProvider, setExtractProviderState] = useState<StructuredExtractProvider>('openai');
+  const [extractProvider, setExtractProviderState] = useState<StructuredExtractProvider>(DEFAULT_TEXT_PROVIDER);
   const [extractGeminiApiKey, setExtractGeminiApiKey] = useState('');
   const [extractOpenAiApiKey, setExtractOpenAiApiKey] = useState('');
   const [extractCodexApiKey, setExtractCodexApiKey] = useState('');
   const [extractGeminiModel, setExtractGeminiModel] = useState('');
   const [extractOpenAiModel, setExtractOpenAiModel] = useState('');
   const [extractCodexModel, setExtractCodexModel] = useState('');
-  const [semanticSearchProvider, setSemanticSearchProviderState] = useState<SemanticSearchProvider>('openai');
+  const [semanticSearchProvider, setSemanticSearchProviderState] = useState<SemanticSearchProvider>(DEFAULT_SEMANTIC_SEARCH_PROVIDER);
   const [semanticSearchGeminiApiKey, setSemanticSearchGeminiApiKey] = useState('');
   const [semanticSearchOpenAiApiKey, setSemanticSearchOpenAiApiKey] = useState('');
   const [semanticSearchGeminiModel, setSemanticSearchGeminiModel] = useState('');
@@ -136,7 +137,7 @@ export function ControlsSidebar({
   const [rewriteOtherKnowledge, setRewriteOtherKnowledge] = useState('');
   const [rewritePreference, setRewritePreference] = useState('');
   const [rewriteMemoryNotes, setRewriteMemoryNotes] = useState('');
-  const [rewriteProvider, setRewriteProviderState] = useState<RewriteProvider>('openai');
+  const [rewriteProvider, setRewriteProviderState] = useState<RewriteProvider>(DEFAULT_TEXT_PROVIDER);
   const [rewriteGeminiApiKey, setRewriteGeminiApiKey] = useState('');
   const [rewriteOpenAiApiKey, setRewriteOpenAiApiKey] = useState('');
   const [rewriteCodexApiKey, setRewriteCodexApiKey] = useState('');
