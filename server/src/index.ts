@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { executeCodexResponses, type CodexExecConfig } from './codexExecProxy.js';
+import { executeCodexResponses, type CodexExecConfig, type CodexProxyResponse } from './codexExecProxy.js';
+import { summarizeCodexResponsesBody } from './codexRequestIntents.js';
 import { FileResponseCache } from './requestCache.js';
 import { loadLocalEnvFiles } from './loadLocalEnv.js';
 import { ProxySessionAuth, parseProxyUsers } from './sessionAuth.js';
@@ -61,6 +62,7 @@ const staticProxyApp = new StaticProxyApp({
   appDir: config.proxyAppDir,
   routePrefix: PROXY_APP_PREFIX
 });
+let codexRequestSequence = 0;
 
 const server = createServer((request, response) => {
   void handleRequest(request, response).catch((error) => {
@@ -205,6 +207,8 @@ async function proxyOpenAiRequest(
   upstreamPath: string,
   currentConfig: ServerConfig
 ): Promise<void> {
+  logProxyRequest('openai', normalizeRequestKind('openai', upstreamPath), requestUrl.pathname);
+
   if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
     sendJson(response, 401, { error: 'Proxy authorization failed.' });
     return;
@@ -292,6 +296,8 @@ async function proxyGeminiRequest(
   upstreamPath: string,
   currentConfig: ServerConfig
 ): Promise<void> {
+  logProxyRequest('gemini', normalizeRequestKind('gemini', upstreamPath), requestUrl.pathname);
+
   if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
     sendJson(response, 401, { error: 'Proxy authorization failed.' });
     return;
@@ -382,22 +388,60 @@ async function proxyCodexRequest(
   upstreamPath: string,
   currentConfig: ServerConfig
 ): Promise<void> {
+  const requestKind = normalizeRequestKind('codex', upstreamPath);
+  const startedAt = Date.now();
+  const sequence = ++codexRequestSequence;
+
   if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
     sendJson(response, 401, { error: 'Proxy authorization failed.' });
+    logProxyCompletion({
+      sequence,
+      provider: 'codex',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=401'
+    });
     return;
   }
 
   if (!currentConfig.codexExec.enabled) {
     sendJson(response, 500, { error: 'CODEX_EXEC_ENABLED is not configured on the proxy server.' });
+    logProxyCompletion({
+      sequence,
+      provider: 'codex',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=500'
+    });
     return;
   }
 
   if (!isAllowedCodexPath(upstreamPath)) {
     sendJson(response, 404, { error: 'Unsupported Codex proxy path.' });
+    logProxyCompletion({
+      sequence,
+      provider: 'codex',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=404'
+    });
     return;
   }
 
   const body = await readRawBody(request);
+  const codexSummary = summarizeCodexResponsesBody(body);
+  logCodexProxyRequest({
+    sequence,
+    pathname: requestUrl.pathname,
+    requestKind,
+    model: codexSummary.model,
+    intent: codexSummary.intent,
+    textChars: codexSummary.textChars,
+    attachmentCount: codexSummary.attachmentCount
+  });
   const accept = readHeaderValue(request.headers.accept);
   const contentType = readHeaderValue(request.headers['content-type']);
   const cacheEntry = responseCache.buildKey({
@@ -417,6 +461,14 @@ async function proxyCodexRequest(
   if (!bypassCache) {
     const cached = await responseCache.get(cacheKey);
     if (cached) {
+      logProxyCompletion({
+        sequence,
+        provider: 'codex',
+        requestKind,
+        cacheStatus: 'HIT',
+        durationMs: Date.now() - startedAt,
+        extras: `intent=${codexSummary.intent}`
+      });
       writeProxyResponse(
         response,
         {
@@ -433,11 +485,32 @@ async function proxyCodexRequest(
     }
   }
 
-  let upstream: ProxyResponseData;
+  let upstream: CodexProxyResponse;
   try {
-    upstream = await executeCodexResponses(body, currentConfig.codexExec);
+    upstream = await executeCodexResponses(body, currentConfig.codexExec, (event) => {
+      if (event.type === 'workspace') {
+        logCodexProxyEvent(
+          sequence,
+          `workspace intent=${event.intent} keep=${event.keepWorkspace ? 'true' : 'false'} dir=${event.workspaceDir}${event.artifactPaths.length > 0 ? ` artifacts=${event.artifactPaths.join(',')}` : ''}`
+        );
+        return;
+      }
+      if (event.type === 'phase') {
+        logCodexProxyEvent(sequence, event.message);
+        return;
+      }
+      logCodexProxyEvent(sequence, `${event.stream} ${event.line}`);
+    });
   } catch (error) {
     console.error('[llm-proxy] Codex exec request failed', error);
+    logProxyCompletion({
+      sequence,
+      provider: 'codex',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: `intent=${codexSummary.intent}`
+    });
     sendJson(response, 502, {
       error: error instanceof Error ? error.message : 'Failed to execute codex exec.'
     });
@@ -451,6 +524,14 @@ async function proxyCodexRequest(
       console.warn('[llm-proxy] Failed to store Codex cache entry', error);
     }
   }
+  logProxyCompletion({
+    sequence,
+    provider: 'codex',
+    requestKind,
+    cacheStatus: bypassCache ? 'BYPASS' : 'MISS',
+    durationMs: Date.now() - startedAt,
+    extras: `intent=${codexSummary.intent} workspace=${upstream.debug.workspaceDir} kept=${upstream.debug.keptWorkspace ? 'true' : 'false'}`
+  });
   writeProxyResponse(response, upstream, bypassCache ? 'BYPASS' : 'MISS', cacheKey, bodyHash);
 }
 
@@ -464,6 +545,55 @@ function isAllowedGeminiPath(pathname: string): boolean {
 
 function isAllowedCodexPath(pathname: string): boolean {
   return pathname === 'responses';
+}
+
+function logProxyRequest(provider: 'openai' | 'gemini' | 'codex', requestKind: string, pathname: string): void {
+  console.log(`[llm-proxy] request provider=${provider} kind=${requestKind} path=${pathname}`);
+}
+
+function logCodexProxyRequest(input: {
+  sequence: number;
+  pathname: string;
+  requestKind: string;
+  model?: string;
+  intent: string;
+  textChars: number;
+  attachmentCount: number;
+}): void {
+  const modelPart = input.model ? ` model=${input.model}` : '';
+  console.log(
+    `[llm-proxy] seq=${input.sequence} start provider=codex kind=${input.requestKind} intent=${input.intent}${modelPart} chars=${input.textChars} attachments=${input.attachmentCount} path=${input.pathname}`
+  );
+}
+
+function logProxyCompletion(input: {
+  sequence?: number;
+  provider: 'openai' | 'gemini' | 'codex';
+  requestKind: string;
+  cacheStatus: 'HIT' | 'MISS' | 'BYPASS' | 'ERROR';
+  durationMs: number;
+  extras?: string;
+}): void {
+  console.log(
+    `[llm-proxy]${typeof input.sequence === 'number' ? ` seq=${input.sequence}` : ''} end provider=${input.provider} kind=${input.requestKind} cache=${input.cacheStatus} durationMs=${input.durationMs}${input.extras ? ` ${input.extras}` : ''}`
+  );
+}
+
+function logCodexProxyEvent(sequence: number, message: string): void {
+  console.log(`[llm-proxy] seq=${sequence} ${message}`);
+}
+
+function normalizeRequestKind(provider: 'openai' | 'gemini' | 'codex', upstreamPath: string): string {
+  if (provider === 'openai' || provider === 'codex') {
+    return upstreamPath || 'unknown';
+  }
+
+  const operationMatch = /:([A-Za-z0-9_]+)$/.exec(upstreamPath);
+  if (operationMatch?.[1]) {
+    return operationMatch[1];
+  }
+
+  return upstreamPath || 'unknown';
 }
 
 async function handleLoginRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -550,14 +680,16 @@ function loadConfig(): ServerConfig {
     codexExec: {
       enabled: normalizeBoolean(env.CODEX_EXEC_ENABLED, false),
       command: normalizeNonEmpty(env.CODEX_EXEC_COMMAND) ?? 'codex',
-      workdir: normalizeNonEmpty(env.CODEX_EXEC_WORKDIR) ?? process.cwd(),
+      workspaceParentDir: normalizeNonEmpty(env.CODEX_EXEC_WORKDIR),
       defaultModel: normalizeNonEmpty(env.CODEX_EXEC_MODEL),
       sandboxMode: normalizeCodexSandboxMode(env.CODEX_EXEC_SANDBOX_MODE),
       profile: normalizeNonEmpty(env.CODEX_EXEC_PROFILE),
-      fullAuto: normalizeBoolean(env.CODEX_EXEC_FULL_AUTO, true),
+      reasoningEffort: normalizeCodexReasoningEffort(env.CODEX_EXEC_REASONING_EFFORT),
+      fullAuto: normalizeBoolean(env.CODEX_EXEC_FULL_AUTO, false),
       dangerouslyBypassApprovals: normalizeBoolean(env.CODEX_EXEC_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX, false),
       skipGitRepoCheck: normalizeBoolean(env.CODEX_EXEC_SKIP_GIT_REPO_CHECK, true),
       additionalWritableDirs: normalizePathList(env.CODEX_EXEC_ADDITIONAL_WRITE_DIRS),
+      keepInteractiveWidgetWorkspaces: normalizeBoolean(env.CODEX_EXEC_KEEP_INTERACTIVE_WIDGET_WORKSPACES, true),
       timeoutMs: normalizePositiveNumber(env.CODEX_EXEC_TIMEOUT_MS, 10 * 60 * 1000)
     },
     cacheEnabled: normalizeBoolean(env.LLM_PROXY_CACHE_ENABLED, true),
@@ -629,6 +761,14 @@ function normalizeCodexSandboxMode(value: string | undefined): CodexExecConfig['
     return normalized;
   }
   return 'workspace-write';
+}
+
+function normalizeCodexReasoningEffort(value: string | undefined): CodexExecConfig['reasoningEffort'] {
+  const normalized = normalizeNonEmpty(value)?.toLowerCase();
+  if (normalized === 'none' || normalized === 'low' || normalized === 'medium' || normalized === 'high' || normalized === 'xhigh') {
+    return normalized;
+  }
+  return 'low';
 }
 
 function normalizePathList(value: string | undefined): string[] {

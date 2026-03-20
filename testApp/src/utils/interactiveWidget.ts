@@ -60,6 +60,7 @@ Requirements:
 }
 
 Important:
+- Protocol marker: interactive_widget_v1
 - The "html" field must be a fragment only, not a full document.
 - Put all styling in "css" and all behavior in "js".
 - The "js" field must work when executed after the HTML has already been inserted into the DOM.

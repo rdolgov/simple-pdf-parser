@@ -26,3 +26,13 @@ export function isOpenAiCompatibleAppProvider(
 ): provider is OpenAiCompatibleProvider {
   return isOpenAiCompatibleProvider(provider);
 }
+
+export type ImageCapableProvider = 'gemini' | 'openai';
+
+export function resolveImageCapableProvider(provider: StructuredExtractProvider): ImageCapableProvider {
+  return provider === 'codex' ? 'gemini' : provider;
+}
+
+export function usesGeminiImageFallback(provider: StructuredExtractProvider): boolean {
+  return provider === 'codex';
+}

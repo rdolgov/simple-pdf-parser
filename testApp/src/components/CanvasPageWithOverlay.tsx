@@ -75,7 +75,13 @@ import {
   hasRuntimeProviderAccess,
   resolveRuntimeProviderApiKey
 } from '../utils/llmClients';
-import { getProviderDisplayName, isOpenAiCompatibleAppProvider, isProxyOnlyProvider } from '../utils/providerMetadata';
+import {
+  getProviderDisplayName,
+  isOpenAiCompatibleAppProvider,
+  isProxyOnlyProvider,
+  resolveImageCapableProvider,
+  usesGeminiImageFallback
+} from '../utils/providerMetadata';
 import { buildSectionContext } from '../utils/sectionContext';
 import {
   buildInteractiveWidgetPrompt,
@@ -726,14 +732,15 @@ export function CanvasPageWithOverlay({
   const runVisionPromptOnDataUri = useCallback(
     async (imageDataUri: string, prompt: string): Promise<string> => {
       const { mimeType, base64Data } = parseDataUri(imageDataUri);
-      const provider = getRewriteProvider();
+      const selectedProvider = getRewriteProvider();
+      const provider = resolveImageCapableProvider(selectedProvider);
 
-      if (isOpenAiCompatibleAppProvider(provider)) {
-        const openAiKey = ensureOpenAiCompatibleApiKey(provider);
+      if (provider === 'openai') {
+        const openAiKey = ensureOpenAiCompatibleApiKey('openai');
         if (!openAiKey) {
           throw new Error(`${getProviderDisplayName(provider)} API key required.`);
         }
-        const configuredModel = getRewriteModel(provider)?.trim();
+        const configuredModel = getRewriteModel(selectedProvider === 'openai' ? 'openai' : provider)?.trim();
         const textModel =
           configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
             ? configuredModel
@@ -741,7 +748,7 @@ export function CanvasPageWithOverlay({
         const response = await createTransportedOpenAiApi({
           apiKey: openAiKey,
           ...(textModel ? { model: textModel } : {})
-        }, provider).generateFromImage(base64Data, mimeType, prompt);
+        }, 'openai').generateFromImage(base64Data, mimeType, prompt);
         return response.text.trim();
       }
 
@@ -858,24 +865,22 @@ export function CanvasPageWithOverlay({
       try {
         onInlineImageGenerationActivityChange?.(1);
         tracksInlineActivity = true;
-        const provider = getRewriteProvider();
-        const response = isOpenAiCompatibleAppProvider(provider)
+        const selectedProvider = getRewriteProvider();
+        const provider = resolveImageCapableProvider(selectedProvider);
+        const response = provider === 'openai'
           ? await (async () => {
-              if (provider === 'codex') {
-                throw new Error('Codex does not support image generation. Use OpenAI or Gemini for this action.');
-              }
-              const openAiKey = ensureOpenAiCompatibleApiKey(provider);
+              const openAiKey = ensureOpenAiCompatibleApiKey('openai');
               if (!openAiKey) {
                 throw new Error(`${getProviderDisplayName(provider)} API key required for image generation.`);
               }
-              const configuredModel = getRewriteModel(provider)?.trim();
+              const configuredModel = getRewriteModel(selectedProvider === 'openai' ? 'openai' : provider)?.trim();
               const imageModel = configuredModel && /^(gpt-image-|dall-e-)/i.test(configuredModel)
                 ? configuredModel
                 : undefined;
               const client = createTransportedOpenAiApi({
                 apiKey: openAiKey,
                 ...(imageModel ? { model: imageModel } : {})
-              }, provider);
+              }, 'openai');
               return client.generateImage(trimmedPrompt);
             })()
           : await (async () => {
@@ -1508,6 +1513,11 @@ export function CanvasPageWithOverlay({
   const overlayAiModel = getRewriteModel(overlayAiProvider);
   const overlayAiKey = isOpenAiCompatibleAppProvider(overlayAiProvider)
     ? resolveRuntimeProviderApiKey(overlayAiProvider, getRewriteApiKey(overlayAiProvider) ?? '')
+    : resolveRuntimeProviderApiKey('gemini', getRewriteApiKey('gemini') ?? geminiApiKey ?? '');
+  const overlayImageProvider = resolveImageCapableProvider(overlayAiProvider);
+  const overlayImageModel = getRewriteModel(overlayImageProvider === 'openai' ? 'openai' : 'gemini');
+  const overlayImageKey = overlayImageProvider === 'openai'
+    ? resolveRuntimeProviderApiKey('openai', getRewriteApiKey('openai') ?? '')
     : resolveRuntimeProviderApiKey('gemini', getRewriteApiKey('gemini') ?? geminiApiKey ?? '');
   const activeTextSelection =
     !focusMode &&
@@ -2398,11 +2408,11 @@ export function CanvasPageWithOverlay({
                           label="Generate image"
                           title={
                             imageErrorMessage ||
-                            (overlayAiProvider === 'codex'
-                              ? 'Codex does not support image generation. Switch to OpenAI or Gemini.'
-                              : `Generate image with ${getProviderDisplayName(overlayAiProvider)}`)
+                            (usesGeminiImageFallback(overlayAiProvider)
+                              ? 'Generate image with Gemini while Codex remains selected for text actions.'
+                              : `Generate image with ${getProviderDisplayName(overlayImageProvider)}`)
                           }
-                          disabled={isLoadingImage || overlayAiProvider === 'codex'}
+                          disabled={isLoadingImage}
                         />
                         <OverlayToolbarButton
                           onClick={() =>
@@ -2635,9 +2645,9 @@ export function CanvasPageWithOverlay({
           imageDataUri={imageExplanationState.imageDataUri}
           position={imageExplanationState.position}
           onClose={handleCloseImageExplanation}
-          apiKey={overlayAiKey || undefined}
-          provider={overlayAiProvider}
-          model={overlayAiModel}
+          apiKey={overlayImageKey || undefined}
+          provider={overlayImageProvider}
+          model={overlayImageModel}
           savedExplanation={imageExplanationState.savedExplanation}
           onSaveExplanation={handleSaveImageExplanation}
           onDeleteExplanation={handleDeleteImageExplanation}
