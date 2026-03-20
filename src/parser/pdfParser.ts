@@ -636,7 +636,7 @@ export class PDFParser {
         images: new Map()
       };
       const extracted = this.parseTextStream(rawContent, fallbackContext, objects, rawContent);
-      const finalizedTextItems = this.finalizeTextItems(extracted.textItems);
+      const finalizedTextItems = this.finalizeTextItems(this.assignPaintOrder(extracted.textItems));
       if (extracted.textItems.length === 0 && extracted.imageItems.length === 0) {
         return { pages: [] };
       }
@@ -693,7 +693,7 @@ export class PDFParser {
 
       const finalizedPage: PDFPage = {
         number: pageNumber,
-        textItems: this.finalizeTextItems(textItems),
+        textItems: this.finalizeTextItems(this.assignPaintOrder(textItems)),
         imageItems,
         lineItems,
         rectItems,
@@ -2004,6 +2004,7 @@ export class PDFParser {
       fontSize: state.fontSize,
       fontWeight: this.extractFontWeight(baseFontName),
       fontStyle: this.extractFontStyle(baseFontName),
+      textHorizontalScale: state.horizontalScale,
       glyphSpans: metrics.glyphSpans
     };
 
@@ -2861,8 +2862,9 @@ export class PDFParser {
       }
     }
 
+    const encodingInfo = extractEncodingInfo(fontObject.dictionarySource, objects);
+
     if (!resource.toUnicodeMap) {
-      const encodingInfo = extractEncodingInfo(fontObject.dictionarySource, objects);
       const encodingMap = buildEncodingMap(fontObject, objects);
 
       if (!encodingInfo) {
@@ -2925,7 +2927,6 @@ export class PDFParser {
       // Build raw glyph name map (code → glyph name) for Type3 glyph resolution.
       // The encodingMap stores unicode characters, but Type3 fonts use custom glyph
       // names (often numeric like "0", "1", "2") that glyphNameToUnicode doesn't recognize.
-      const encodingInfo = extractEncodingInfo(fontObject.dictionarySource, objects);
       if (encodingInfo?.differences) {
         resource.glyphNameMap = encodingInfo.differences;
       }
@@ -3697,6 +3698,13 @@ export class PDFParser {
       }
     }
 
+    return items;
+  }
+
+  private assignPaintOrder(items: PDFTextItem[]): PDFTextItem[] {
+    for (let index = 0; index < items.length; index += 1) {
+      items[index].paintOrder = index;
+    }
     return items;
   }
 

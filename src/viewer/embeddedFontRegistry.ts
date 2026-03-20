@@ -2,13 +2,12 @@ import type { PDFEmbeddedFontResource, PDFTextItem } from '../types.js';
 import { PDFDocument } from '../pdfDocument.js';
 import { canRegisterEmbeddedFontsInCurrentScope, getGlobalFontSet } from './canvasEnvironment.js';
 import { buildSyntheticOpenTypeFromType1C } from './type1COpenTypeBuilder.js';
-import { buildSyntheticOpenTypeFromType1 } from './type1OpenTypeBuilder.js';
 import { parseType1Font, type ParsedType1Font } from './type1FontProgram.js';
 
 export interface RegisteredEmbeddedFont {
   family: string;
   renderMode: 'text' | 'glyph-span' | 'type1-glyph';
-  sourceKind?: 'truetype' | 'type1c' | 'type1-synthetic' | 'type1-raw';
+  sourceKind?: 'truetype' | 'type1c' | 'type1-raw';
   glyphCodeToText?: Map<number, string>;
   type1Font?: ParsedType1Font;
 }
@@ -167,22 +166,6 @@ async function registerEmbeddedFont(
     const parsed = parseType1Font(resource);
     if (!parsed) {
       return undefined;
-    }
-
-    if (canRegisterEmbeddedFonts()) {
-      const synthetic = buildSyntheticOpenTypeFromType1(resource, parsed);
-      if (synthetic) {
-        const family = createEmbeddedFamilyName(resource.baseFontName ?? 'Type1', fontKey);
-        const fontFace = new FontFace(family, toArrayBuffer(synthetic.buffer));
-        await fontFace.load();
-        getBrowserFontSet()?.add?.(fontFace);
-        return {
-          family,
-          renderMode: 'glyph-span',
-          sourceKind: 'type1-synthetic',
-          glyphCodeToText: synthetic.glyphCodeToText
-        };
-      }
     }
 
     return {

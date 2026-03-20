@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { CanvasRenderer } from '../src/viewer/canvasRenderer.js';
 import type { PDFLayout } from '../src/types.js';
 import { PDFDocument } from '../src/pdfDocument.js';
+import { parseType1Font } from '../src/viewer/type1FontProgram.js';
 import { RecordingCanvas, RecordingContext } from './support/recordingCanvas.js';
 
 describe('CanvasRenderer raw Type1 glyph rendering', () => {
@@ -52,5 +53,116 @@ describe('CanvasRenderer raw Type1 glyph rendering', () => {
     expect(context.textDraws.some((draw) => draw.text === 'W')).toBe(false);
     expect(context.pathPaints.some((paint) => paint.kind === 'fill')).toBe(true);
     expect(context.operations.some((entry) => entry.startsWith('bezierCurveTo:'))).toBe(true);
+  });
+
+  it('paints raw Type1 formula glyphs in original PDF paint order even when text items are geometrically reordered', async () => {
+    const sourceDocument = PDFDocument.from(readFileSync('pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf'), {
+      smoothText: false
+    });
+    const page = sourceDocument.getPage(5);
+    expect(page).toBeDefined();
+
+    const base = page!.textItems.find(
+      (item) => item.text === 'W' && item.font === 'CMMI10' && Math.abs((item.baselineStart?.x ?? 0) - 285.89) < 0.5
+    );
+    const superscript = page!.textItems.find(
+      (item) => item.text === 'Q' && item.font === 'CMMI7' && Math.abs((item.baselineStart?.x ?? 0) - 296.69) < 0.5
+    );
+    const subscript = page!.textItems.find(
+      (item) => item.text === 'i' && item.font === 'CMMI7' && Math.abs((item.baselineStart?.x ?? 0) - 295.30) < 0.5
+    );
+
+    expect(base).toBeDefined();
+    expect(superscript).toBeDefined();
+    expect(subscript).toBeDefined();
+    expect(base?.fontResourceKey).toBeDefined();
+    expect(superscript?.fontResourceKey).toBeDefined();
+
+    const fontResources = Object.fromEntries(
+      [base, superscript, subscript]
+        .filter((item): item is NonNullable<typeof item> => Boolean(item?.fontResourceKey))
+        .map((item) => [item.fontResourceKey!, sourceDocument.getFontResource(item.fontResourceKey)!])
+    );
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [
+            { ...superscript!, paintOrder: 1 },
+            { ...base!, paintOrder: 0 },
+            { ...subscript!, paintOrder: 2 }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 500, height: 800 }
+        }
+      ],
+      fontResources
+    };
+
+    const document = new PDFDocument(layout);
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer();
+
+    await renderer.prepareDocumentFonts(document);
+    renderer.render(canvas, document, 1);
+
+    const fills = context.pathPaints.filter((paint) => paint.kind === 'fill');
+    expect(fills).toHaveLength(3);
+    expect(fills[0]!.translateX).toBeCloseTo((base!.baselineStart?.x ?? 0) + 16, 3);
+    expect(fills[1]!.translateX).toBeCloseTo((superscript!.baselineStart?.x ?? 0) + 16, 3);
+    expect(fills[2]!.translateX).toBeCloseTo((subscript!.baselineStart?.x ?? 0) + 16, 3);
+  });
+
+  it('keeps raw Type1 glyph outlines on their native font scale instead of stretching them to the PDF advance width', async () => {
+    const sourceDocument = PDFDocument.from(readFileSync('pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf'), {
+      smoothText: false
+    });
+    const page = sourceDocument.getPage(5);
+    expect(page).toBeDefined();
+
+    const superscript = page!.textItems.find(
+      (item) => item.text === 'Q' && item.font === 'CMMI7' && Math.abs((item.baselineStart?.x ?? 0) - 296.69) < 0.5
+    );
+    expect(superscript).toBeDefined();
+    expect(superscript?.fontResourceKey).toBeDefined();
+    const font = sourceDocument.getFontResource(superscript!.fontResourceKey);
+    const parsedFont = font ? parseType1Font(font) : undefined;
+    expect(parsedFont).toBeDefined();
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [{ ...superscript! }],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 500, height: 800 }
+        }
+      ],
+      fontResources: font
+        ? {
+            [superscript!.fontResourceKey!]: font
+          }
+        : undefined
+    };
+
+    const document = new PDFDocument(layout);
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer();
+
+    await renderer.prepareDocumentFonts(document);
+    renderer.render(canvas, document, 1);
+
+    const fills = context.pathPaints.filter((paint) => paint.kind === 'fill');
+    expect(fills).toHaveLength(1);
+    const expectedScaleX =
+      (superscript!.fontSize ?? 0) * Math.abs(parsedFont!.fontMatrix[0] || 0.001) * Math.abs(superscript!.textHorizontalScale ?? 1);
+    expect(fills[0]!.scaleX).toBeCloseTo(expectedScaleX, 6);
   });
 });

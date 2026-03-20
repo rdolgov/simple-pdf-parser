@@ -242,6 +242,10 @@ function hasIntrinsicGlyphSpacing(item: PDFTextItem): boolean {
 }
 
 function hasCompatibleTextStyle(prev: PDFTextItem, next: PDFTextItem): boolean {
+  if (prev.fontResourceKey && next.fontResourceKey && prev.fontResourceKey !== next.fontResourceKey) {
+    return false;
+  }
+
   if (prev.font && next.font && prev.font !== next.font) {
     return false;
   }

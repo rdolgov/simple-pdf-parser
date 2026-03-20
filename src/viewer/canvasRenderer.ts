@@ -673,10 +673,25 @@ export class CanvasRenderer {
 
     const cmexComposites = detectCmexComposites(sortedItems);
     const scriptAnchorSegments = this.buildScriptAnchorSegments(sortedItems);
+    const hiddenCompositeItems = new Set(
+      [...cmexComposites.hiddenIndices].map((hiddenIndex) => sortedItems[hiddenIndex]).filter((item) => Boolean(item))
+    );
     this.drawCmexComposites(context, cmexComposites.composites, projectPoint, options);
 
-    for (const [index, item] of sortedItems.entries()) {
-      if (cmexComposites.hiddenIndices.has(index)) {
+    const paintItems = page.textItems
+      .map((item, index) => ({ item, index }))
+      .sort((left, right) => {
+        const leftOrder = left.item.paintOrder ?? left.index;
+        const rightOrder = right.item.paintOrder ?? right.index;
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder;
+        }
+        return left.index - right.index;
+      })
+      .map(({ item }) => item);
+
+    for (const item of paintItems) {
+      if (hiddenCompositeItems.has(item)) {
         continue;
       }
 
@@ -694,46 +709,14 @@ export class CanvasRenderer {
       // Use the PDF's specified font size
       const fontSize = item.fontSize ?? 12;
       const embeddedFont = resolveRegisteredEmbeddedFont(documentModel, item);
-      context.font = this.composeFont(
-        embeddedFont?.family ?? item.font,
-        fontSize,
-        options.fontFallback,
-        item.fontWeight,
-        item.fontStyle
-      );
 
       const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
       const scriptAttachmentShift =
-        embeddedFont?.renderMode === 'type1-glyph' || embeddedFont?.sourceKind === 'type1-synthetic'
+        embeddedFont?.renderMode === 'type1-glyph'
           ? 0
           : this.resolveScriptAttachmentShift(item, scriptAnchorSegments, metrics, options.scale);
       const adjustedTextPlacement =
         scriptAttachmentShift !== 0 ? this.offsetTextPlacement(textPlacement, scriptAttachmentShift) : textPlacement;
-      const projectedWidth = textPlacement.projectedWidth;
-      const glyphSpanRun = resolveRenderableGlyphSpanRun(item, {
-        force: embeddedFont?.renderMode === 'glyph-span'
-      });
-      const measureTextInput = this.resolveMeasurementText(item, glyphSpanRun, embeddedFont);
-      const textMetrics = context.measureText(measureTextInput);
-      const measuredWidth = textMetrics.width;
-      const verticalFit = this.resolveVerticalTextFit(
-        item,
-        textMetrics,
-        textPlacement.rotation,
-        options.scale,
-        embeddedFont
-      );
-
-      // Scale horizontally to fit width
-      let scaleX = 1;
-      if (measuredWidth > 0 && projectedWidth > 0) {
-        scaleX = projectedWidth / measuredWidth;
-      }
-      const compactScriptScale = resolveParsedHeightScale(item, embeddedFont);
-      if (compactScriptScale < 1) {
-        scaleX *= compactScriptScale;
-      }
-      const scaleY = verticalFit.scaleY;
 
       const overlapsImage = this.intersectsAnyImage(item.bounds, page.imageItems);
       if (overlapsImage) {
@@ -795,6 +778,39 @@ export class CanvasRenderer {
           continue;
         }
       }
+
+      context.font = this.composeFont(
+        embeddedFont?.family ?? item.font,
+        fontSize,
+        options.fontFallback,
+        item.fontWeight,
+        item.fontStyle
+      );
+
+      const projectedWidth = textPlacement.projectedWidth;
+      const glyphSpanRun = resolveRenderableGlyphSpanRun(item, {
+        force: embeddedFont?.renderMode === 'glyph-span'
+      });
+      const measureTextInput = this.resolveMeasurementText(item, glyphSpanRun, embeddedFont);
+      const textMetrics = context.measureText(measureTextInput);
+      const measuredWidth = textMetrics.width;
+      const verticalFit = this.resolveVerticalTextFit(
+        item,
+        textMetrics,
+        textPlacement.rotation,
+        options.scale,
+        embeddedFont
+      );
+
+      let scaleX = 1;
+      if (measuredWidth > 0 && projectedWidth > 0) {
+        scaleX = projectedWidth / measuredWidth;
+      }
+      const compactScriptScale = resolveParsedHeightScale(item, embeddedFont);
+      if (compactScriptScale < 1) {
+        scaleX *= compactScriptScale;
+      }
+      const scaleY = verticalFit.scaleY;
 
       if (glyphSpanRun) {
         this.drawGlyphSpanTextItem(
@@ -1119,7 +1135,7 @@ export class CanvasRenderer {
 
     const matrixX = Math.abs(type1Font.fontMatrix[0] || 0.001);
     const matrixY = Math.abs(type1Font.fontMatrix[3] || matrixX || 0.001);
-    const baseScaleX = fontSize * scale * matrixX;
+    const baseScaleX = fontSize * scale * matrixX * Math.abs(item.textHorizontalScale ?? 1);
     const baseScaleY = fontSize * scale * matrixY;
     if (!(baseScaleX > 0) || !(baseScaleY > 0)) {
       return false;
@@ -1132,10 +1148,9 @@ export class CanvasRenderer {
     for (const span of spans) {
       const spanAdvance = Math.max(span.advance, 0);
       const offsetX = (consumedAdvance / totalAdvance) * textPlacement.projectedWidth;
-      const spanProjectedWidth = (spanAdvance / totalAdvance) * textPlacement.projectedWidth;
       consumedAdvance += spanAdvance;
 
-      if (!(spanProjectedWidth > 0) || span.glyphCode === undefined) {
+      if (!(spanAdvance > 0) || span.glyphCode === undefined) {
         continue;
       }
 
@@ -1149,16 +1164,13 @@ export class CanvasRenderer {
         continue;
       }
 
-      const glyphNominalWidth = Math.max(glyph.width * baseScaleX, 0);
-      const horizontalFit = glyphNominalWidth > 0 ? spanProjectedWidth / glyphNominalWidth : 1;
-
       context.save();
       context.translate(textPlacement.baseline.x, textPlacement.baseline.y);
       if (needsRotation) {
         context.rotate(textPlacement.rotation);
       }
       context.translate(offsetX, 0);
-      context.scale(baseScaleX * horizontalFit, -baseScaleY);
+      context.scale(baseScaleX, -baseScaleY);
       context.beginPath();
       this.traceType1GlyphPath(context, glyph.pathCommands);
       context.fill();

@@ -91,6 +91,10 @@ export interface PDFTextItem {
   fontSize?: number;
   fontWeight?: 'normal' | 'bold';
   fontStyle?: 'normal' | 'italic';
+  /** Original PDF content-stream order, used for faithful paint-order rendering. */
+  paintOrder?: number;
+  /** Raw PDF Tz text horizontal scale, used by exact glyph renderers. */
+  textHorizontalScale?: number;
   /** Baseline start point in page coordinates, used for rotated text rendering */
   baselineStart?: Vector2D;
   /** Baseline end point in page coordinates, used for rotated text rendering */

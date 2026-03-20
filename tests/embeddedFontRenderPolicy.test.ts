@@ -63,14 +63,7 @@ describe('embeddedFontRenderPolicy', () => {
     expect(heightScale).toBeLessThan(1);
   });
 
-  it('keeps synthetic raw Type1 glyph runs on their original PDF scale and height', () => {
-    const embeddedFont = {
-      family: 'PDFEmbedded-CMMI10-Raw',
-      renderMode: 'glyph-span' as const,
-      sourceKind: 'type1-synthetic' as const,
-      glyphCodeToText: new Map([[81, '\ue051']])
-    };
-
+  it('leaves non-glyph text runs on their raw width scale', () => {
     expect(
       resolveGlyphScaleX(
         0.83,
@@ -80,18 +73,8 @@ describe('embeddedFontRenderPolicy', () => {
           fontSize: 6.9738
         }),
         1,
-        embeddedFont
+        undefined
       )
     ).toBeCloseTo(0.83, 5);
-    expect(
-      resolveParsedHeightScale(
-        createItem({
-          text: 'Q',
-          font: 'CMMI10',
-          fontSize: 6.9738
-        }),
-        embeddedFont
-      )
-    ).toBe(1);
   });
 });
