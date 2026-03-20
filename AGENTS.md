@@ -1,4 +1,7 @@
 # Repository Guidelines
+
+No hacks, do the right architecture, for example when rendering PDF, rely on PDF spec and custom rendering, do not try to hack leverage some browser api to approximate rendering.
+
 Do not run the full test suite for now, it can hang; instead do changes and ask me to run broader verification.
 Exception: for any change that affects PDF rendering or layout (parser output, text geometry, canvas rendering, HTML layout conversion, or viewer rendering), always run `npx vitest run tests/pdfLayout.integration.test.ts`.
 When adding new feature, create new module/file where new code should go, and in general keep the project organize into smaller component/modules.

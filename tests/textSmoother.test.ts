@@ -99,4 +99,60 @@ describe('mergeTextRuns', () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.text).toBe('Introduction');
   });
+
+  it('keeps a real space after an alphanumeric token instead of merging the next word into its trailing capital letter', () => {
+    const items: PDFTextItem[] = [
+      {
+        text: '2.5K',
+        font: 'Times New Roman',
+        fontResourceKey: 'F25',
+        fontSize: 9.9626,
+        bounds: { minX: 430.8978286, minY: 349.54548, maxX: 450.5440758, maxY: 359.50808 },
+        baselineStart: { x: 430.8978286, y: 351.538 },
+        baselineEnd: { x: 450.5440758, y: 351.538 }
+      },
+      {
+        text: 'questions',
+        font: 'Times New Roman',
+        fontResourceKey: 'F25',
+        fontSize: 9.9626,
+        bounds: { minX: 453.4730802, minY: 349.54548, maxX: 491.111783, maxY: 359.50808 },
+        baselineStart: { x: 453.4730802, y: 351.538 },
+        baselineEnd: { x: 491.111783, y: 351.538 }
+      }
+    ];
+
+    const merged = mergeTextRuns(items);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.text).toBe('2.5K questions');
+  });
+
+  it('still merges a standalone title-case split when the leading capital is its own fragment', () => {
+    const items: PDFTextItem[] = [
+      {
+        text: 'A',
+        font: 'Times New Roman',
+        fontResourceKey: 'F25',
+        fontSize: 9.9626,
+        bounds: { minX: 169.8976338, minY: 349.54548, maxX: 177.090631, maxY: 359.50808 },
+        baselineStart: { x: 169.8976338, y: 351.538 },
+        baselineEnd: { x: 177.090631, y: 351.538 }
+      },
+      {
+        text: 'meri',
+        font: 'Times New Roman',
+        fontResourceKey: 'F25',
+        fontSize: 9.9626,
+        bounds: { minX: 176.9113042, minY: 349.54548, maxX: 193.3918472, maxY: 359.50808 },
+        baselineStart: { x: 176.9113042, y: 351.538 },
+        baselineEnd: { x: 193.3918472, y: 351.538 }
+      }
+    ];
+
+    const merged = mergeTextRuns(items);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.text).toBe('Ameri');
+  });
 });

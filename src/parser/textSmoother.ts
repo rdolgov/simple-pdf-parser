@@ -348,11 +348,12 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
   const nextFragment = getLeadingWordFragment(nextText);
   const prevWord = normalizeWordFragment(prevFragment);
   const nextWord = normalizeWordFragment(nextFragment);
+  const standalonePrevFragment = isStandaloneAlphabeticFragment(prevText, prevFragment);
   if (prevWord.length === 0 || nextWord.length === 0) {
     return false;
   }
 
-  const titleCaseSplit = /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
+  const titleCaseSplit = standalonePrevFragment && /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
   const shortContinuation = isLikelyShortWordContinuation(prevWord, nextWord, nextFragment, gap, avgCharWidth);
   const tightShortPrefixSplit = isTightShortPrefixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
   const tightShortSuffixSplit = isTightShortSuffixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
@@ -372,9 +373,11 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
 
   const suffixSplit = /^[a-z]/.test(nextFragment) && COMMON_SUFFIX_FRAGMENTS.has(nextWord);
   const prefixSplit =
+    standalonePrevFragment &&
     /^[a-z]/.test(nextFragment) &&
     (COMMON_PREFIX_FRAGMENTS.has(prevWord) || prevWord.length <= 2);
   const compactSplit =
+    standalonePrevFragment &&
     /^[a-z]/.test(nextFragment) &&
     gap <= Math.max(avgCharWidth * 0.18, 1) &&
     prevWord.length + nextWord.length <= 10;
@@ -465,7 +468,8 @@ function hasLikelyWordBoundary(prevText: string, nextText: string, gap: number, 
   const nextFragment = getLeadingWordFragment(nextText);
   const prevWord = normalizeWordFragment(prevFragment);
   const nextWord = normalizeWordFragment(nextFragment);
-  const titleCaseSplit = /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
+  const standalonePrevFragment = isStandaloneAlphabeticFragment(prevText, prevFragment);
+  const titleCaseSplit = standalonePrevFragment && /^[A-Z]$/.test(prevFragment) && /^[a-z]/.test(nextFragment);
   const shortContinuation = isLikelyShortWordContinuation(prevWord, nextWord, nextFragment, gap, avgCharWidth);
   const tightShortPrefixSplit = isTightShortPrefixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
   const tightShortSuffixSplit = isTightShortSuffixSplit(prevWord, nextWord, nextFragment, gap, avgCharWidth);
@@ -610,6 +614,21 @@ function getLeadingWordFragment(text: string): string {
 function getTrailingWordFragment(text: string): string {
   const match = text.match(/([A-Za-z]+(?:['’][A-Za-z]+)*)[^A-Za-z]*$/);
   return match?.[1] ?? '';
+}
+
+function isStandaloneAlphabeticFragment(text: string, fragment: string): boolean {
+  if (!fragment) {
+    return false;
+  }
+
+  const trimmed = text.trimEnd();
+  const endIndex = trimmed.lastIndexOf(fragment);
+  if (endIndex === -1 || endIndex + fragment.length !== trimmed.length) {
+    return false;
+  }
+
+  const previousChar = trimmed[endIndex - 1];
+  return previousChar === undefined || !/[A-Za-z0-9]/.test(previousChar);
 }
 
 function isLikelyShortWordFragment(prevWord: string, nextWord: string): boolean {
