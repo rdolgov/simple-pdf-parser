@@ -41,4 +41,28 @@ describe('parseType1Font', () => {
     expect(parsed?.glyphs.get('U')?.pathCommands.length ?? 0).toBeGreaterThan(0);
     expect(parsed?.glyphs.get('period')?.pathCommands.length ?? 0).toBeGreaterThan(0);
   });
+
+  it('parses raw Type1 beta charstrings with full integer coordinates before div scaling', () => {
+    const document = PDFDocument.from(readFileSync('pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf'));
+    const cmmi10 = document.getFontResource('F11');
+    expect(cmmi10).toBeDefined();
+
+    const parsed = cmmi10 ? parseType1Font(cmmi10) : undefined;
+    const betaPath = parsed?.glyphs.get('beta')?.pathCommands ?? [];
+    const xValues = betaPath.flatMap((command) => {
+      switch (command.op) {
+        case 'M':
+        case 'L':
+          return [command.x];
+        case 'C':
+          return [command.x1, command.x2, command.x3];
+        default:
+          return [];
+      }
+    });
+
+    expect(xValues.length).toBeGreaterThan(0);
+    expect(Math.min(...xValues)).toBeGreaterThan(20);
+    expect(Math.max(...xValues)).toBeGreaterThan(500);
+  });
 });

@@ -729,7 +729,7 @@ function decodeType1Number(
     }
     const integer = ((b1 << 24) | (b2 << 16) | (b3 << 8) | b4) >> 0;
     return {
-      value: integer / 65536,
+      value: integer,
       next: start + 5
     };
   }
