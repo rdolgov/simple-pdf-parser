@@ -1586,26 +1586,36 @@ export class PDFParser {
     }
 
     const attemptDecode = (source: string): { success: true; value: string } | { success: false; error: unknown } => {
-      let data: Uint8Array = latin1ToUint8(this.stripStreamPadding(source));
-
-      try {
-        for (const filter of filters) {
-          const normalized = filter.toLowerCase();
-          switch (normalized) {
-            case 'flatedecode':
-            case 'flate':
-            case 'fl':
-              data = decodeFlate(data);
-              break;
-            default:
-              throw new Error(`Unsupported filter: ${filter}`);
-          }
-        }
-      } catch (error) {
-        return { success: false, error };
+      const decodeCandidates = [source];
+      const trimmed = this.stripStreamPadding(source);
+      if (trimmed !== source) {
+        decodeCandidates.push(trimmed);
       }
 
-      return { success: true, value: bufferToLatin1(data) };
+      let lastError: unknown;
+      for (const candidate of decodeCandidates) {
+        let data: Uint8Array = latin1ToUint8(candidate);
+
+        try {
+          for (const filter of filters) {
+            const normalized = filter.toLowerCase();
+            switch (normalized) {
+              case 'flatedecode':
+              case 'flate':
+              case 'fl':
+                data = decodeFlate(data);
+                break;
+              default:
+                throw new Error(`Unsupported filter: ${filter}`);
+            }
+          }
+          return { success: true, value: bufferToLatin1(data) };
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      return { success: false, error: lastError };
     };
 
     const firstAttempt = attemptDecode(initialStream);

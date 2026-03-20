@@ -142,6 +142,21 @@ describe('PDF layout integration', () => {
     expect(equationItems.some((item) => item.text === 'fi')).toBe(false);
   });
 
+  it('renders the word2vec Figure 1 form XObject on page 5 instead of dropping the figure', () => {
+    const document = loadWordEmbeddingsDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 5);
+
+    expect(context.pathPaints.length).toBeGreaterThan(20);
+    expect(context.textDraws.some((draw) => draw.text.includes('CBOW'))).toBe(true);
+    expect(context.textDraws.some((draw) => draw.text.includes('Skip-gram'))).toBe(true);
+    expect(context.textDraws.some((draw) => draw.text === 'SUM')).toBe(true);
+    expect(context.textDraws.some((draw) => draw.text === 'w(t-2)')).toBe(true);
+  });
+
   it('keeps word2vec page-1 title-case names and title words intact', () => {
     const document = loadWordEmbeddingsDocument();
     const page = document.getPage(1);

@@ -129,6 +129,27 @@ ET
     expect(text).toContain('April 14, 2025');
   });
 
+  it('preserves the word2vec Figure 1 form XObject geometry and labels on page 5', () => {
+    const fixtureUrl = new URL('../pdfs/1301.3781v3.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(5);
+    const topLabels = page!.textItems
+      .filter((item) => item.bounds.minY >= 670)
+      .sort((left, right) => left.bounds.minX - right.bounds.minX)
+      .map((item) => item.text)
+      .join('')
+      .replace(/\s+/g, '');
+
+    expect(page).toBeDefined();
+    expect(page!.pathItems?.length ?? 0).toBeGreaterThan(20);
+    expect(topLabels).toContain('INPUTPROJECTIONOUTPUTINPUTPROJECTIONOUTPUT');
+    expect(page!.textItems.some((item) => item.text.includes('CBOW'))).toBe(true);
+    expect(page!.textItems.some((item) => item.text.includes('Skip-gram'))).toBe(true);
+    expect(page!.textItems.some((item) => item.text === 'SUM')).toBe(true);
+    expect(page!.textItems.some((item) => item.text === 'w(t-2)')).toBe(true);
+  });
+
   it('detects image positions and sizes for pages with image XObjects', () => {
     const fixtureUrl = new URL('../pdfs/Lakeview Terrace Litigation Notice - April 2025.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);
