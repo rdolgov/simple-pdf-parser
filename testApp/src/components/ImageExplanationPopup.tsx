@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
+import { resolveGeminiBinaryInputModel } from 'pdf-layout-parser';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
 import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
 import { getProviderDisplayName, isOpenAiCompatibleAppProvider } from '../utils/providerMetadata';
@@ -133,7 +134,7 @@ export function ImageExplanationPopup({
           }, provider).generateFromImage(base64Data, mimeType, prompt)
         : await createTransportedGeminiApi({
             apiKey,
-            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
+            imageModel: resolveGeminiBinaryInputModel(model)
           }).generateFromImage(base64Data, mimeType, prompt, { mediaResolution: 'high' });
 
       setExplanation(result.text);

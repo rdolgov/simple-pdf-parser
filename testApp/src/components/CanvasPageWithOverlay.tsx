@@ -3,6 +3,8 @@ import type { MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import {
   findHtmlLogicalUnitById,
   getHtmlLogicalUnitPageSegment,
+  resolveGeminiBinaryInputModel,
+  resolveGeminiTextModel,
   resolveHtmlLogicalUnitForSelection,
   type HtmlDocumentLogicalStructure,
   type HtmlPageLayout,
@@ -758,13 +760,9 @@ export function CanvasPageWithOverlay({
         throw new Error('Gemini API key required.');
       }
       const configuredModel = getRewriteModel('gemini')?.trim();
-      const geminiModel =
-        configuredModel && !/^gpt-/i.test(configuredModel)
-          ? configuredModel
-          : 'gemini-3-pro-preview';
       const response = await createTransportedGeminiApi({
         apiKey: geminiKey,
-        model: geminiModel
+        imageModel: resolveGeminiBinaryInputModel(configuredModel)
       }).generateFromImage(base64Data, mimeType, prompt, { mediaResolution: 'high' });
       return response.text.trim();
     },
@@ -817,10 +815,7 @@ export function CanvasPageWithOverlay({
                   throw new Error('Gemini API key required for rewrite.');
                 }
                 const configuredModel = getRewriteModel('gemini')?.trim();
-                const geminiModel =
-                  configuredModel && !/^gpt-/i.test(configuredModel)
-                    ? configuredModel
-                    : 'gemini-3-pro-preview';
+                const geminiModel = resolveGeminiTextModel(configuredModel);
                 const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel });
                 return client.generateText(prompt);
               })();
@@ -890,8 +885,8 @@ export function CanvasPageWithOverlay({
                 throw new Error('Gemini API key required for image generation.');
               }
               const configuredModel = getRewriteModel('gemini')?.trim();
-              const geminiModel = configuredModel && !/^gpt-/i.test(configuredModel) ? configuredModel : undefined;
-              const client = createTransportedGeminiApi({ apiKey: key, ...(geminiModel ? { model: geminiModel } : {}) });
+              const geminiModel = resolveGeminiBinaryInputModel(configuredModel);
+              const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel, imageModel: geminiModel });
               return client.generateImage(trimmedPrompt);
             })();
 
@@ -991,10 +986,7 @@ export function CanvasPageWithOverlay({
               throw new Error('Gemini API key required');
             }
             const configuredModel = getRewriteModel('gemini')?.trim();
-            const geminiModel =
-              configuredModel && !/^gpt-/i.test(configuredModel)
-                ? configuredModel
-                : 'gemini-3-pro-preview';
+            const geminiModel = resolveGeminiTextModel(configuredModel);
             const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel });
             return client.generateText(prompt);
           })();
@@ -1177,10 +1169,7 @@ export function CanvasPageWithOverlay({
                 throw new Error('Gemini API key required for interactive widgets.');
               }
               const configuredModel = getRewriteModel('gemini')?.trim();
-              const geminiModel =
-                configuredModel && !/^gpt-/i.test(configuredModel)
-                  ? configuredModel
-                  : 'gemini-3-pro-preview';
+              const geminiModel = resolveGeminiTextModel(configuredModel);
               const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel });
               return client.generateText(prompt);
             })();

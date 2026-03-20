@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   describeAiDetectionMode,
   parseAiDetectionMode,
-  shouldAutoRunLayoutDetection,
   shouldAutoRunStructuredExtract
 } from '../testApp/src/utils/aiDetectionActivation';
 
@@ -24,13 +23,10 @@ describe('aiDetectionActivation', () => {
     expect(shouldAutoRunStructuredExtract('manual')).toBe(false);
     expect(shouldAutoRunStructuredExtract('structured')).toBe(true);
     expect(shouldAutoRunStructuredExtract('all')).toBe(true);
-    expect(shouldAutoRunLayoutDetection('manual')).toBe(false);
-    expect(shouldAutoRunLayoutDetection('structured')).toBe(false);
-    expect(shouldAutoRunLayoutDetection('all')).toBe(true);
   });
 
   it('describes the current mode for the UI banner', () => {
-    expect(describeAiDetectionMode('manual')).toContain('?aiDetection=structured');
-    expect(describeAiDetectionMode('all')).toContain('?aiDetection=all');
+    expect(describeAiDetectionMode('manual')).toContain('combined AI extract');
+    expect(describeAiDetectionMode('all')).toContain('combined AI extract');
   });
 });

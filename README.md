@@ -161,6 +161,19 @@ For production:
 - start the Node proxy server
 - the Node server will serve the built app at `/proxy` from `testApp/dist` by default
 
+### Cloudflare Tunnel Deployment
+
+For a public deployment with one local origin for both UI and proxy APIs, use the built Node proxy server behind Cloudflare Tunnel.
+
+- build: `npm run cloudflare:origin:build`
+- run locally on `127.0.0.1`: `PUBLIC_ORIGIN=https://discoverlab.app npm run cloudflare:origin:start`
+- publish that localhost origin with `cloudflared`
+
+Files:
+
+- setup guide: [docs/cloudflare-tunnel.md](/Users/rdolgov/code/simple-pdf-parser/docs/cloudflare-tunnel.md)
+- example tunnel config: [docs/cloudflared-config.example.yml](/Users/rdolgov/code/simple-pdf-parser/docs/cloudflared-config.example.yml)
+
 In the React app sidebar, root-route users can still switch `LLM Transport` to `Proxy server` and use `/api/llm` manually. On the `/proxy` route the app locks to proxy mode automatically.
 
 ### Debug Web App

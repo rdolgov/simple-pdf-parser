@@ -57,7 +57,6 @@ import { useProxyAuthSession } from './hooks/useProxyAuthSession';
 import {
   describeAiDetectionMode,
   parseAiDetectionMode,
-  shouldAutoRunLayoutDetection,
   shouldAutoRunStructuredExtract
 } from './utils/aiDetectionActivation';
 import { applyTransportToRelevanceConfig, hasRuntimeProviderAccess } from './utils/llmClients';
@@ -171,14 +170,13 @@ export default function App(): JSX.Element {
     setInlineSuggestionAnalysisCount((count) => Math.max(0, count + delta));
   }, []);
 
-  // Gemini extraction for detecting references and other elements
+  // Derive interactive layout metadata from the structured extract response.
   const {
     state: geminiExtractionState,
-    triggerExtraction: triggerGeminiExtraction
   } = useGeminiExtraction({
     documentHash: loadedFileHash || null,
-    pdfData: loadedPdfData,
-    autoExtract: shouldAutoRunLayoutDetection(aiDetectionMode),
+    extractDocument,
+    extractState,
     aiDetectionSupport
   });
 
@@ -187,8 +185,7 @@ export default function App(): JSX.Element {
       return;
     }
     await triggerStructuredExtract();
-    await triggerGeminiExtraction();
-  }, [aiDetectionSupport.supported, triggerGeminiExtraction, triggerStructuredExtract]);
+  }, [aiDetectionSupport.supported, triggerStructuredExtract]);
 
   const handleCanvasRenderError = useCallback((message: string) => {
     setState({ status: 'error', message });
@@ -356,20 +353,10 @@ export default function App(): JSX.Element {
     if (extractState.status === 'loading') {
       return {
         visible: true,
-        title: 'Running Structured Extract',
-        message: 'Calling the configured AI provider for table, image, and metadata extraction.',
+        title: 'Running AI Extraction',
+        message: 'Calling the configured AI provider once for tables, images, references, formulas, and layout metadata.',
         progress: null as number | null,
-        detail: loadedFileName ? `Processing ${loadedFileName}` : 'Structured extraction is running.'
-      };
-    }
-
-    if (geminiExtractionState.status === 'loading') {
-      return {
-        visible: true,
-        title: 'Analyzing PDF Layout',
-        message: 'Extracting references, formulas, and page elements for citation/formula interactions.',
-        progress: null as number | null,
-        detail: 'This is only triggered manually or via the aiDetection URL parameter.'
+        detail: loadedFileName ? `Processing ${loadedFileName}` : 'AI extraction is running.'
       };
     }
 
@@ -429,7 +416,6 @@ export default function App(): JSX.Element {
     isOpeningFile,
     loadedFileName,
     extractState.status,
-    geminiExtractionState.status,
     isIndexing,
     indexingProgress.totalChunks,
     indexingProgress.processedChunks,

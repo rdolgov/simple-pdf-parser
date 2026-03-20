@@ -25,18 +25,14 @@ export function shouldAutoRunStructuredExtract(mode: AiDetectionMode): boolean {
   return mode === 'structured' || mode === 'all';
 }
 
-export function shouldAutoRunLayoutDetection(mode: AiDetectionMode): boolean {
-  return mode === 'all';
-}
-
 export function describeAiDetectionMode(mode: AiDetectionMode): string {
   switch (mode) {
     case 'structured':
-      return `Auto-run structured extract only via ?${AI_DETECTION_QUERY_PARAM}=structured`;
+      return `Auto-run one combined AI extract via ?${AI_DETECTION_QUERY_PARAM}=structured`;
     case 'all':
-      return `Auto-run structured extract and layout detection via ?${AI_DETECTION_QUERY_PARAM}=all`;
+      return `Auto-run one combined AI extract via ?${AI_DETECTION_QUERY_PARAM}=all`;
     case 'manual':
     default:
-      return `Manual by default. Use ?${AI_DETECTION_QUERY_PARAM}=structured or ?${AI_DETECTION_QUERY_PARAM}=all to auto-run.`;
+      return `Manual by default. Use ?${AI_DETECTION_QUERY_PARAM}=structured or ?${AI_DETECTION_QUERY_PARAM}=all to auto-run one combined AI extract.`;
   }
 }

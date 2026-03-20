@@ -670,7 +670,7 @@ export function ControlsSidebar({
                   ? 'Model (e.g., gpt-5.2)'
                   : extractProvider === 'codex'
                     ? 'Model (e.g., gpt-5-codex)'
-                    : 'Model (e.g., gemini-3-pro-preview)'
+                    : 'Model (e.g., gemini-3-pro-image-preview)'
               }
               onChange={(event) => handleExtractModelChange(event.target.value)}
             />
@@ -682,11 +682,8 @@ export function ControlsSidebar({
           {!aiDetectionSupport.supported && (
             <span className="focus-error">{aiDetectionSupport.message}</span>
           )}
-          {extractState.status === 'ready' && (
-            <span className="extraction-status">✓ Structured extract ready</span>
-          )}
-          {geminiExtractionState.status === 'ready' && (
-            <span className="extraction-status">✓ Layout detection ready</span>
+          {extractState.status === 'ready' && geminiExtractionState.status === 'ready' && (
+            <span className="extraction-status">✓ AI extraction ready</span>
           )}
           {state.status === 'ready' && aiDetectionSupport.supported && !isAiDetectionRunning && !isAiDetectionReady && (
             <span className="structured-extract-settings-note">
@@ -696,7 +693,7 @@ export function ControlsSidebar({
           {extractState.status === 'error' && (
             <span className="focus-error">{extractState.message}</span>
           )}
-          {geminiExtractionState.status === 'error' && (
+          {geminiExtractionState.status === 'error' && geminiExtractionState.error !== extractState.message && (
             <span className="focus-error">{geminiExtractionState.error}</span>
           )}
           <label className="checkbox-option">

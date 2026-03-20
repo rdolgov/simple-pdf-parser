@@ -1,5 +1,6 @@
 import { PDFDocument } from '../pdfDocument.js';
 import { GeminiAPI, type GeminiApiConfig, type GeminiContentParts } from './geminiApi.js';
+import { resolveGeminiBinaryInputModel } from './geminiModelSelection.js';
 
 export type StructuredExtractFileInput = Blob | File | ArrayBuffer | Uint8Array;
 
@@ -14,6 +15,9 @@ export interface StructuredDataElement {
     [key: string]: unknown;
   };
   Text?: string;
+  SemanticType?: string;
+  StructuredContent?: string | Record<string, unknown>;
+  Description?: string;
   TextSize?: number;
   Font?: {
     family_name?: string;
@@ -111,6 +115,7 @@ type LlmElement = {
   page?: unknown;
   text?: unknown;
   content?: unknown;
+  description?: unknown;
   bbox?: unknown;
   bounding_box?: unknown;
   table_rows?: unknown;
@@ -131,8 +136,6 @@ type ImageAsset = {
   bounds: StructuredBoundsTuple;
 };
 
-const DEFAULT_MODEL = 'gemini-3-pro-preview';
-
 const DEFAULT_PROMPT = [
   'Extract this PDF into structured JSON.',
   'Return only JSON with this exact schema:',
@@ -142,7 +145,7 @@ const DEFAULT_PROMPT = [
   '      "page_number": 1,',
   '      "elements": [',
   '        {',
-  '          "type": "title|h1|h2|h3|paragraph|table|figure|caption|footnote|reference|list|other",',
+  '          "type": "title|authors|heading|paragraph|reference|image|table|formula|caption|list|footnote|other",',
   '          "text": "string",',
   '          "bbox": [x, y, width, height],',
   '          "table_rows": [["cell"]]',
@@ -156,7 +159,10 @@ const DEFAULT_PROMPT = [
   '- bbox uses ratios (0..1) relative to page, with top-left origin.',
   '- Include all readable text blocks.',
   '- Include every table with table_rows when possible.',
-  '- Include every figure/image as type=figure.',
+  '- Include every figure/image/diagram as type=image.',
+  '- Mark displayed equations and inline mathematical expressions that should be interactive as type=formula.',
+  '- Mark bibliography entries and citation-style references as type=reference.',
+  '- Mark author lines as type=authors when identifiable.',
   '- For non-table elements, omit table_rows.',
   '- Do not wrap JSON in markdown fences.'
 ].join('\n');
@@ -177,13 +183,13 @@ export class GeminiStructuredExtract {
       dependencies.client ??
       new GeminiAPI({
         apiKey: config.apiKey,
-        model: config.model,
+        model: resolveGeminiBinaryInputModel(config.model),
         endpoint: config.endpoint,
         apiVersion: config.apiVersion,
         generationConfig: config.generationConfig,
         safetySettings: config.safetySettings
       });
-    this.model = config.model ?? DEFAULT_MODEL;
+    this.model = resolveGeminiBinaryInputModel(config.model);
     this.prompt = config.prompt ?? DEFAULT_PROMPT;
     this.generationConfig = config.generationConfig;
     this.safetySettings = config.safetySettings;
@@ -456,11 +462,21 @@ function toStructuredElement(
     Bounds: bounds,
     attributes: {
       BBox: bounds
-    }
+    },
+    SemanticType: type
   };
 
   if (text) {
     element.Text = text;
+  }
+
+  if (raw.content && typeof raw.content === 'object') {
+    element.StructuredContent = raw.content as Record<string, unknown>;
+  }
+
+  const description = normalizeTextValue(raw.content === raw.description ? undefined : raw.description);
+  if (description) {
+    element.Description = description;
   }
 
   if (pathBase === '//Document/Table') {
@@ -585,6 +601,18 @@ function readPathBase(path: unknown, type: string): string {
     case 'figure':
     case 'image':
       return '//Document/Figure';
+    case 'formula':
+      return '//Document/Formula';
+    case 'reference':
+      return '//Document/Reference';
+    case 'caption':
+      return '//Document/Caption';
+    case 'footnote':
+      return '//Document/Footnote';
+    case 'authors':
+      return '//Document/Authors';
+    case 'list':
+      return '//Document/L';
     default:
       return '//Document/P';
   }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { GeminiAPI } from '../src/query/geminiApi';
+import { DEFAULT_GEMINI_BINARY_INPUT_MODEL } from '../src/query/geminiModelSelection';
 
 describe('GeminiAPI', () => {
   it('does not send mediaResolution inside inlineData for REST image prompts', async () => {
@@ -44,6 +45,44 @@ describe('GeminiAPI', () => {
         data: 'aGVsbG8='
       });
       expect(body.contents[0].parts[1].inlineData.mediaResolution).toBeUndefined();
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
+  });
+
+  it('uses the Gemini binary-input model by default for REST image prompts', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => {
+      return {
+        ok: true,
+        json: async () => ({
+          text: 'ok',
+          candidates: [
+            {
+              content: {
+                parts: [{ text: 'ok' }]
+              }
+            }
+          ]
+        }),
+        text: async () => 'ok'
+      } as unknown as Response;
+    });
+
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const client = new GeminiAPI({
+        apiKey: 'test-key',
+        model: 'gemini-3-pro-preview',
+        endpoint: 'http://localhost:8787/proxy/api/llm/gemini'
+      });
+
+      await client.generateFromImage('aGVsbG8=', 'image/png', 'Explain this');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const requestUrl = String(fetchMock.mock.calls[0]?.[0]);
+      expect(requestUrl).toContain(`/models/${encodeURIComponent(DEFAULT_GEMINI_BINARY_INPUT_MODEL)}:generateContent`);
     } finally {
       vi.stubGlobal('fetch', originalFetch);
     }

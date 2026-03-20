@@ -1,5 +1,9 @@
 import { GoogleGenAI } from '@google/genai';
 import { normalizeProviderApiError } from './apiErrorUtils.js';
+import {
+  DEFAULT_GEMINI_BINARY_INPUT_MODEL,
+  DEFAULT_GEMINI_TEXT_MODEL
+} from './geminiModelSelection.js';
 
 export type GeminiContent = string | GeminiContentParts | GeminiContentParts[];
 
@@ -73,8 +77,8 @@ export interface GeminiGenerateContentResponse {
   candidates?: GeminiCandidate[];
 }
 
-const DEFAULT_GEMINI_MODEL = 'gemini-3-pro-preview';
-const DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3-pro-image-preview';
+const DEFAULT_GEMINI_MODEL = DEFAULT_GEMINI_TEXT_MODEL;
+const DEFAULT_GEMINI_IMAGE_MODEL = DEFAULT_GEMINI_BINARY_INPUT_MODEL;
 const DEFAULT_GEMINI_API_VERSION = 'v1beta';
 const DEFAULT_GEMINI_IMAGE_API_VERSION = 'v1alpha';
 
@@ -205,7 +209,7 @@ export class GeminiAPI {
     return this.generateContent(
       {
         contents,
-        model: options?.model,
+        model: options?.model ?? this.defaultImageModel,
         generationConfig: options?.generationConfig,
         safetySettings: options?.safetySettings
       },

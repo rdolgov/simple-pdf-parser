@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { DEFAULT_GEMINI_BINARY_INPUT_MODEL } from 'pdf-layout-parser';
 import { canUseLocalStorage } from '../utils/storage';
 import { createTransportedStructuredExtractApi, hasRuntimeProviderAccess } from '../utils/llmClients';
 
@@ -21,7 +22,7 @@ const STORAGE_KEYS = {
   model: 'structured-extract-gemini-model'
 } as const;
 
-const DEFAULT_MODEL = 'gemini-3-pro-preview';
+const DEFAULT_MODEL = DEFAULT_GEMINI_BINARY_INPUT_MODEL;
 
 export function StructuredExtractPlayground(): JSX.Element {
   const [apiKey, setApiKey] = useState('');

@@ -7,6 +7,7 @@ import { ProxySessionAuth, parseProxyUsers } from './sessionAuth.js';
 import { StaticProxyApp } from './staticProxyApp.js';
 
 type ServerConfig = {
+  host: string;
   port: number;
   proxyAuthToken?: string;
   corsOrigin: string;
@@ -24,6 +25,7 @@ type ServerConfig = {
   sessionTtlMs: number;
   sessionCookieSecure: boolean;
   proxyAppDir: string;
+  rootRedirectPath?: string;
 };
 
 type ProxyResponseData = {
@@ -69,6 +71,7 @@ const server = createServer((request, response) => {
     console.error('[llm-proxy] Unhandled request error', error);
     if (!response.headersSent) {
       writeCorsHeaders(response, config.corsOrigin);
+      writeSecurityHeaders(response);
       response.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
     }
     response.end(
@@ -79,8 +82,8 @@ const server = createServer((request, response) => {
   });
 });
 
-server.listen(config.port, () => {
-  console.log(`[llm-proxy] Listening on http://localhost:${config.port}`);
+server.listen(config.port, config.host, () => {
+  console.log(`[llm-proxy] Listening on http://${config.host}:${config.port}`);
   console.log('[llm-proxy] OpenAI routes:', `${OPENAI_PROXY_PREFIX}responses`, `and ${PROXY_OPENAI_PROXY_PREFIX}responses`);
   console.log(
     '[llm-proxy] Gemini routes:',
@@ -103,10 +106,12 @@ server.listen(config.port, () => {
       : 'disabled'
   );
   console.log('[llm-proxy] Proxy app route:', `${PROXY_APP_PREFIX} -> ${staticProxyApp.appDir}`);
+  console.log('[llm-proxy] Root redirect:', config.rootRedirectPath ? `/ -> ${config.rootRedirectPath}` : 'disabled');
 });
 
 async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   writeCorsHeaders(response, config.corsOrigin);
+  writeSecurityHeaders(response);
 
   if (request.method === 'OPTIONS') {
     response.writeHead(204);
@@ -190,6 +195,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === 'GET') {
+    if (requestUrl.pathname === '/' && config.rootRedirectPath) {
+      response.writeHead(302, { Location: config.rootRedirectPath });
+      response.end();
+      return;
+    }
     if (await staticProxyApp.tryServe(requestUrl.pathname, response)) {
       return;
     }
@@ -670,6 +680,7 @@ function loadConfig(): ServerConfig {
   const env = process.env;
 
   return {
+    host: normalizeListenHost(env.LLM_PROXY_HOST),
     port: normalizePort(env.PORT),
     proxyAuthToken: normalizeNonEmpty(env.LLM_PROXY_AUTH_TOKEN),
     corsOrigin: normalizeNonEmpty(env.LLM_PROXY_CORS_ORIGIN) ?? '*',
@@ -700,8 +711,13 @@ function loadConfig(): ServerConfig {
     sessionCookieName: normalizeNonEmpty(env.LLM_PROXY_SESSION_COOKIE_NAME) ?? 'llm_proxy_session',
     sessionTtlMs: normalizePositiveNumber(env.LLM_PROXY_SESSION_TTL_MS, 30 * 24 * 60 * 60 * 1000),
     sessionCookieSecure: normalizeBoolean(env.LLM_PROXY_SESSION_COOKIE_SECURE, false),
-    proxyAppDir: normalizeNonEmpty(env.LLM_PROXY_APP_DIR) ?? 'testApp/dist'
+    proxyAppDir: normalizeNonEmpty(env.LLM_PROXY_APP_DIR) ?? 'testApp/dist',
+    rootRedirectPath: normalizeRedirectPath(env.LLM_PROXY_ROOT_REDIRECT_PATH)
   };
+}
+
+function normalizeListenHost(value: string | undefined): string {
+  return normalizeNonEmpty(value) ?? '127.0.0.1';
 }
 
 function normalizePort(value: string | undefined): number {
@@ -732,6 +748,14 @@ function normalizeBoolean(value: string | undefined, fallback: boolean): boolean
     return false;
   }
   return fallback;
+}
+
+function normalizeRedirectPath(value: string | undefined): string | undefined {
+  const normalized = normalizeNonEmpty(value);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
 }
 
 function normalizeOptionalNumber(value: string | undefined): number | undefined {
@@ -859,6 +883,13 @@ function writeCorsHeaders(response: ServerResponse, origin: string): void {
     'Access-Control-Expose-Headers',
     'X-LLM-Proxy-Cache,X-LLM-Proxy-Cache-Key,X-LLM-Proxy-Body-Hash,X-LLM-Proxy-Cached-At'
   );
+}
+
+function writeSecurityHeaders(response: ServerResponse): void {
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  response.setHeader('Referrer-Policy', 'same-origin');
+  response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
 }
 
 function sendJson(response: ServerResponse, statusCode: number, payload: Record<string, unknown>): void {

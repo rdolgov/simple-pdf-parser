@@ -13,17 +13,19 @@ openAI:
   endpoint: "https://api.openai.com/v1/responses"
 
 llmProxy:
+  host: "127.0.0.1"
   port: 8787
   authToken: "OPTIONAL_SHARED_PROXY_TOKEN"
   users: "alice:secret,bob:password" # optional cookie-login users for /proxy
   corsOrigin: "*"
+  rootRedirectPath: "/proxy"
   session:
     cookieName: "llm_proxy_session"
     ttlMs: 2592000000
     secure: false
   app:
     dir: "testApp/dist"
-    routePrefix: "/proxy"
+    routePrefix: "/proxy" # current client route expects /proxy
   cache:
     enabled: true
     dir: ".cache/llm-proxy"
