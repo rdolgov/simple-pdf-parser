@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  closeLassoLoop,
   canvasBoundsToPdfBounds,
   getLassoBounds,
   isValidLassoBounds,
+  isLassoLoopClosed,
   lassoPathToSvg,
   simplifyLassoPoints
 } from '../testApp/src/utils/lassoSelection';
@@ -42,6 +44,11 @@ describe('lasso selection utilities', () => {
       { x: 10, y: 0 },
       { x: 10, y: 10 }
     ])).toMatch(/Z$/);
+    expect(lassoPathToSvg([
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 }
+    ], { closed: false })).not.toMatch(/Z$/);
 
     const pdfBounds = canvasBoundsToPdfBounds(bounds!, 792, 2, 16);
     expect(pdfBounds).toEqual({
@@ -50,5 +57,22 @@ describe('lasso selection utilities', () => {
       maxX: 30,
       maxY: 786
     });
+  });
+
+  it('snaps a nearly closed loop to the starting point', () => {
+    const points = [
+      { x: 20, y: 20 },
+      { x: 80, y: 22 },
+      { x: 78, y: 88 },
+      { x: 24, y: 28 }
+    ];
+
+    expect(isLassoLoopClosed(points, 12)).toBe(true);
+    expect(closeLassoLoop(points, 12)).toEqual([
+      { x: 20, y: 20 },
+      { x: 80, y: 22 },
+      { x: 78, y: 88 },
+      { x: 20, y: 20 }
+    ]);
   });
 });

@@ -1,3 +1,5 @@
+import katex from 'katex';
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -15,6 +17,67 @@ function sanitizeHref(url: string): string | null {
   return null;
 }
 
+function renderMathExpression(expression: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(expression.trim(), {
+      displayMode,
+      throwOnError: false,
+      strict: false,
+      trust: false
+    });
+  } catch {
+    return `<code>${escapeHtml(expression.trim())}</code>`;
+  }
+}
+
+function extractInlineMathPlaceholders(source: string): { text: string; placeholders: string[] } {
+  const placeholders: string[] = [];
+  let result = '';
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (char !== '$' || source[index - 1] === '\\') {
+      result += char;
+      continue;
+    }
+
+    if (next === '$') {
+      const end = source.indexOf('$$', index + 2);
+      if (end === -1) {
+        result += char;
+        continue;
+      }
+      const placeholder = `@@MATH_${placeholders.length}@@`;
+      const expression = source.slice(index + 2, end);
+      placeholders.push(renderMathExpression(expression, true));
+      result += placeholder;
+      index = end + 1;
+      continue;
+    }
+
+    let end = index + 1;
+    while (end < source.length) {
+      if (source[end] === '$' && source[end - 1] !== '\\') {
+        break;
+      }
+      end += 1;
+    }
+    if (end >= source.length || source[end] !== '$') {
+      result += char;
+      continue;
+    }
+
+    const placeholder = `@@MATH_${placeholders.length}@@`;
+    const expression = source.slice(index + 1, end);
+    placeholders.push(renderMathExpression(expression, false));
+    result += placeholder;
+    index = end;
+  }
+
+  return { text: result, placeholders };
+}
+
 function renderInlineMarkdown(source: string): string {
   const codeSegments: string[] = [];
   const withCodePlaceholders = source.replace(/`([^`]+)`/g, (_match, code: string) => {
@@ -22,8 +85,9 @@ function renderInlineMarkdown(source: string): string {
     codeSegments.push(`<code>${escapeHtml(code)}</code>`);
     return placeholder;
   });
+  const mathResult = extractInlineMathPlaceholders(withCodePlaceholders);
 
-  let html = escapeHtml(withCodePlaceholders);
+  let html = escapeHtml(mathResult.text);
 
   html = html.replace(/\[([^\]]+)\]\(((?:[^()\s]+|\([^)]*\))+)\)/g, (_match, label: string, href: string) => {
     const safeHref = sanitizeHref(href);
@@ -39,7 +103,9 @@ function renderInlineMarkdown(source: string): string {
   html = html.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, '$1<em>$2</em>');
   html = html.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?:;]|$)/g, '$1<em>$2</em>');
 
-  return html.replace(/@@CODE_(\d+)@@/g, (_match, index: string) => codeSegments[Number(index)] ?? '');
+  return html
+    .replace(/@@MATH_(\d+)@@/g, (_match, index: string) => mathResult.placeholders[Number(index)] ?? '')
+    .replace(/@@CODE_(\d+)@@/g, (_match, index: string) => codeSegments[Number(index)] ?? '');
 }
 
 function renderParagraph(lines: string[]): string {
@@ -75,6 +141,10 @@ function renderCodeBlock(language: string | null, lines: string[]): string {
     ? ` class="language-${escapeHtml(language.trim().toLowerCase())}"`
     : '';
   return `<pre><code${className}>${escapeHtml(lines.join('\n'))}</code></pre>`;
+}
+
+function renderMathBlock(lines: string[]): string {
+  return `<div class="mini-chat-math-block">${renderMathExpression(lines.join('\n'), true)}</div>`;
 }
 
 export function renderMarkdownToHtml(markdown: string): string {
@@ -123,6 +193,20 @@ export function renderMarkdownToHtml(markdown: string): string {
         index += 1;
       }
       blocks.push(renderBlockquote(quoteLines));
+      continue;
+    }
+
+    if (/^\$\$\s*$/.test(line)) {
+      const mathLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^\$\$\s*$/.test(lines[index] ?? '')) {
+        mathLines.push(lines[index] ?? '');
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      blocks.push(renderMathBlock(mathLines));
       continue;
     }
 

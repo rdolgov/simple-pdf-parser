@@ -1008,6 +1008,12 @@ header p {
   stroke-dasharray: 8 5;
 }
 
+.canvas-lasso-overlay__stroke--draft {
+  stroke: rgba(29, 78, 216, 0.92);
+  stroke-width: 2.75;
+  stroke-dasharray: none;
+}
+
 .canvas-lasso-bounds {
   position: absolute;
   pointer-events: none;
@@ -4319,6 +4325,21 @@ footer code {
   color: #475569;
 }
 
+.mini-chat-markdown .katex {
+  font-size: 1.02em;
+}
+
+.mini-chat-markdown .katex-display,
+.mini-chat-math-block {
+  margin: 0.7rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.mini-chat-math-block {
+  text-align: center;
+}
+
 .mini-chat-loading {
   color: #64748b;
 }
@@ -4852,7 +4873,7 @@ footer code {
 .lasso-action-menu {
   position: absolute;
   width: min(300px, calc(100vw - 32px));
-  padding: 14px;
+  padding: 28px 14px 14px;
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(148, 163, 184, 0.28);
@@ -4860,6 +4881,28 @@ footer code {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   z-index: 1000;
+}
+
+.lasso-action-menu__drag-handle {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  cursor: grab;
+  color: rgba(71, 85, 105, 0.5);
+  transition: color 0.15s ease;
+}
+
+.lasso-action-menu__drag-handle:hover {
+  color: rgba(71, 85, 105, 0.82);
+}
+
+.lasso-action-menu__drag-handle:active {
+  cursor: grabbing;
 }
 
 .lasso-action-menu__preview {

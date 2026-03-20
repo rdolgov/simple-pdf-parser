@@ -31,4 +31,17 @@ describe('markdownRenderer', () => {
     expect(html).not.toContain('href=');
     expect(html).toContain('<p>bad</p>');
   });
+
+  it('renders inline and block LaTeX with katex markup', () => {
+    const html = renderMarkdownToHtml([
+      'The scaling factor is $\\frac{1}{\\sqrt{d_k}}$.',
+      '',
+      '$$',
+      '\\sum_i x_i',
+      '$$'
+    ].join('\n'));
+
+    expect(html).toContain('class="katex"');
+    expect(html).toContain('mini-chat-math-block');
+  });
 });

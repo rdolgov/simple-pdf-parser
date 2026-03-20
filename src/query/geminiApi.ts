@@ -15,9 +15,6 @@ export interface GeminiPart {
 export interface GeminiInlineDataInput {
   mimeType: string;
   data: string;
-  mediaResolution?: {
-    level: 'media_resolution_low' | 'media_resolution_medium' | 'media_resolution_high';
-  };
 }
 
 export interface GeminiToolConfig {
@@ -191,20 +188,13 @@ export class GeminiAPI {
       safetySettings?: Array<Record<string, unknown>>;
     }
   ): Promise<GeminiGenerateResult> {
-    const mediaResolutionLevel = options?.mediaResolution
-      ? (`media_resolution_${options.mediaResolution}` as const)
-      : undefined;
-
     const contents: GeminiContentParts = {
       parts: [
         { text: prompt },
         {
           inlineData: {
             mimeType,
-            data: imageData,
-            ...(mediaResolutionLevel && {
-              mediaResolution: { level: mediaResolutionLevel }
-            })
+            data: imageData
           }
         }
       ]
@@ -537,7 +527,8 @@ function normalizeGeminiRestPart(part: unknown): Record<string, unknown> {
   }
   if (isRecord(part.inlineData)) {
     normalized.inlineData = {
-      ...part.inlineData
+      mimeType: part.inlineData.mimeType,
+      data: part.inlineData.data
     };
   }
 

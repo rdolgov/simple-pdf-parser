@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { createGoogleSearchTool } from 'pdf-layout-parser';
+import 'katex/dist/katex.min.css';
 import {
   type ChatMessage,
   type ChatAnnotationContent,

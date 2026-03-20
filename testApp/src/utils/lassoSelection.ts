@@ -21,6 +21,7 @@ export interface LassoCaptureResult {
 
 const DEFAULT_MIN_POINT_DISTANCE = 5;
 const DEFAULT_MIN_SELECTION_SIZE = 18;
+const DEFAULT_CLOSE_DISTANCE = 18;
 const CONTEXT_PADDING = 48;
 const PANEL_WIDTH = 380;
 const THUMBNAIL_WIDTH = 180;
@@ -79,14 +80,36 @@ export function isValidLassoBounds(bounds: LassoBounds | null, minimumSize = DEF
   return Boolean(bounds && bounds.width >= minimumSize && bounds.height >= minimumSize);
 }
 
-export function lassoPathToSvg(points: LassoPoint[]): string {
+export function isLassoLoopClosed(points: LassoPoint[], closeDistance = DEFAULT_CLOSE_DISTANCE): boolean {
+  if (points.length < 3) {
+    return false;
+  }
+  return distanceBetween(points[0], points[points.length - 1]) <= closeDistance;
+}
+
+export function closeLassoLoop(points: LassoPoint[], closeDistance = DEFAULT_CLOSE_DISTANCE): LassoPoint[] {
+  if (points.length < 3) {
+    return points.slice();
+  }
+
+  const closed = points.slice();
+  if (isLassoLoopClosed(closed, closeDistance)) {
+    closed[closed.length - 1] = { ...closed[0] };
+    return closed;
+  }
+
+  closed.push({ ...closed[0] });
+  return closed;
+}
+
+export function lassoPathToSvg(points: LassoPoint[], options?: { closed?: boolean }): string {
   if (points.length === 0) {
     return '';
   }
 
   return points
     .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
-    .join(' ') + ' Z';
+    .join(' ') + (options?.closed === false ? '' : ' Z');
 }
 
 export function canvasBoundsToPdfBounds(
@@ -112,7 +135,7 @@ export function captureLassoSelectionFromCanvas(payload: {
   canvas: HTMLCanvasElement;
   points: LassoPoint[];
 }): LassoCaptureResult | null {
-  const simplifiedPoints = simplifyLassoPoints(payload.points);
+  const simplifiedPoints = closeLassoLoop(simplifyLassoPoints(payload.points));
   const bounds = getLassoBounds(simplifiedPoints);
 
   if (!isValidLassoBounds(bounds) || simplifiedPoints.length < 3) {

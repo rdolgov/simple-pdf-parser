@@ -99,6 +99,7 @@ import {
 import {
   canvasBoundsToPdfBounds,
   captureLassoSelectionFromCanvas,
+  closeLassoLoop,
   lassoPathToSvg,
   type LassoBounds,
   type LassoPoint
@@ -1251,7 +1252,7 @@ export function CanvasPageWithOverlay({
       return;
     }
 
-    const selectionPoints = lassoDraftPointsRef.current.slice();
+    const selectionPoints = closeLassoLoop(lassoDraftPointsRef.current.slice());
     const captured = captureLassoSelectionFromCanvas({
       canvas,
       points: selectionPoints
@@ -2204,8 +2205,12 @@ export function CanvasPageWithOverlay({
   const hasKeywordHighlights = keywordSearchResults.length > 0;
   const hasSemanticHighlights = semanticSearchResults.length > 0;
   const hasLassoOverlay = lassoDraftPoints.length > 1 || Boolean(lassoSelection);
-  const activeLassoPoints = lassoDraftPoints.length > 1 ? lassoDraftPoints : lassoSelection?.points ?? [];
-  const activeLassoPath = activeLassoPoints.length > 1 ? lassoPathToSvg(activeLassoPoints) : '';
+  const draftLassoPath = lassoDraftPoints.length > 1
+    ? lassoPathToSvg(lassoDraftPoints, { closed: false })
+    : '';
+  const selectedLassoPath = lassoSelection && lassoSelection.points.length > 2
+    ? lassoPathToSvg(lassoSelection.points)
+    : '';
   const activeLassoBounds = lassoSelection?.bounds ?? null;
   const canvasOffsetLeft = canvasRef.current?.offsetLeft ?? 0;
   const canvasOffsetTop = canvasRef.current?.offsetTop ?? 0;
@@ -2311,7 +2316,7 @@ export function CanvasPageWithOverlay({
               Draw around any part of the page, then choose an action.
             </div>
           )}
-          {activeLassoPath && (
+          {draftLassoPath && (
             <div
               className="canvas-lasso-overlay"
               style={{
@@ -2322,8 +2327,23 @@ export function CanvasPageWithOverlay({
               }}
             >
               <svg width="100%" height="100%" viewBox={`0 0 ${canvasRef.current.clientWidth} ${canvasRef.current.clientHeight}`}>
-                <path className="canvas-lasso-overlay__fill" d={activeLassoPath} />
-                <path className="canvas-lasso-overlay__stroke" d={activeLassoPath} />
+                <path className="canvas-lasso-overlay__stroke canvas-lasso-overlay__stroke--draft" d={draftLassoPath} />
+              </svg>
+            </div>
+          )}
+          {selectedLassoPath && (
+            <div
+              className="canvas-lasso-overlay"
+              style={{
+                left: `${canvasOffsetLeft}px`,
+                top: `${canvasOffsetTop}px`,
+                width: `${canvasRef.current.clientWidth}px`,
+                height: `${canvasRef.current.clientHeight}px`
+              }}
+            >
+              <svg width="100%" height="100%" viewBox={`0 0 ${canvasRef.current.clientWidth} ${canvasRef.current.clientHeight}`}>
+                <path className="canvas-lasso-overlay__fill" d={selectedLassoPath} />
+                <path className="canvas-lasso-overlay__stroke" d={selectedLassoPath} />
               </svg>
             </div>
           )}
