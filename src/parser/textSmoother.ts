@@ -378,6 +378,12 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
     /^[a-z]/.test(nextFragment) &&
     gap <= Math.max(avgCharWidth * 0.18, 1) &&
     prevWord.length + nextWord.length <= 10;
+  const tightAlphabeticContinuation =
+    /^[a-z]/.test(nextFragment) &&
+    prevWord.length >= 2 &&
+    nextWord.length >= 4 &&
+    prevWord.length + nextWord.length <= 20 &&
+    gap <= Math.max(avgCharWidth * 0.12, 0.5);
   const tightCompoundSplit =
     /^[a-z]/.test(nextFragment) &&
     prevWord.length >= 3 &&
@@ -403,6 +409,7 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
     titleCaseSplit ||
     prefixSplit ||
     compactSplit ||
+    tightAlphabeticContinuation ||
     tightCompoundSplit
   );
 }
@@ -479,6 +486,11 @@ function hasLikelyWordBoundary(prevText: string, nextText: string, gap: number, 
   }
 
   if (combinedShortWord && gap <= Math.max(avgCharWidth * 0.22, 1)) {
+    return false;
+  }
+
+  const clearWordGapThreshold = Math.max(avgCharWidth * 0.16, 0.5);
+  if (gap < clearWordGapThreshold) {
     return false;
   }
 

@@ -43,4 +43,60 @@ describe('mergeTextRuns', () => {
     expect(merged[1]?.text).toBe('. We');
     expect(merged[1]?.fontResourceKey).toBe('F63');
   });
+
+  it('does not invent a word space when overlapping fragments belong to the same word', () => {
+    const items: PDFTextItem[] = [
+      {
+        text: 'investig',
+        font: 'Times New Roman',
+        fontResourceKey: 'F63',
+        fontSize: 9.9626,
+        bounds: { minX: 259.8148466, minY: 697.13548, maxX: 278.634198, maxY: 707.09808 },
+        baselineStart: { x: 259.8148466, y: 699.128 },
+        baselineEnd: { x: 278.634198, y: 699.128 }
+      },
+      {
+        text: 'ate',
+        font: 'Times New Roman',
+        fontResourceKey: 'F63',
+        fontSize: 9.9626,
+        bounds: { minX: 278.584385, minY: 697.13548, maxX: 290.2007766, maxY: 707.09808 },
+        baselineStart: { x: 278.584385, y: 699.128 },
+        baselineEnd: { x: 290.2007766, y: 699.128 }
+      }
+    ];
+
+    const merged = mergeTextRuns(items);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.text).toBe('investigate');
+  });
+
+  it('keeps tiny positive continuation gaps inside a split word merged', () => {
+    const items: PDFTextItem[] = [
+      {
+        text: 'Intro',
+        font: 'Times New Roman',
+        fontResourceKey: 'R29',
+        fontSize: 10.0389,
+        bounds: { minX: 108.1022, minY: 597.788464, maxX: 129.32908314, maxY: 607.827364 },
+        baselineStart: { x: 108.1022, y: 600.245 },
+        baselineEnd: { x: 129.32908314, y: 600.245 }
+      },
+      {
+        text: 'duction',
+        font: 'Times New Roman',
+        fontResourceKey: 'R29',
+        fontSize: 10.0389,
+        bounds: { minX: 129.65304, minY: 597.788464, maxX: 161.76830678, maxY: 607.827364 },
+        baselineStart: { x: 129.65304, y: 600.245 },
+        baselineEnd: { x: 161.76830678, y: 600.245 }
+      }
+    ];
+
+    const merged = mergeTextRuns(items);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.text).toBe('Introduction');
+  });
 });

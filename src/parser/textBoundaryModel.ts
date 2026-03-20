@@ -207,7 +207,12 @@ function refineItemText(
   lexicon: BoundaryLexicon,
   suspiciousSpaceIndices: Set<number> = new Set()
 ): string {
+  if (containsProtectedUrlLikeText(text)) {
+    return text;
+  }
+
   const dehyphenated = mergeKnownHyphenatedSplits(text, fontKey, lexicon);
+  const hasSuspiciousSpaces = suspiciousSpaceIndices.size > 0;
   let cursor = 0;
   let refined = '';
 
@@ -238,12 +243,18 @@ function refineItemText(
     cursor = end;
   }
 
-  const repairedClusters = repairUncertainWordClusters(refined, fontKey, lexicon);
+  const repairedPunctuation = repairPunctuationSpacing(refined);
+  const repairedRecurringPatterns = repairRecurringFrontMatterPatterns(repairedPunctuation);
+  if (!hasSuspiciousSpaces) {
+    const repairedAttachedJoins = repairAttachedWordJoins(repairedRecurringPatterns, fontKey, lexicon);
+    const repairedMergedPhrases = repairMergedWordPhrases(repairedAttachedJoins, fontKey, lexicon);
+    return repairDigitWordJoins(repairedMergedPhrases, fontKey, lexicon);
+  }
+
+  const repairedClusters = repairUncertainWordClusters(repairedRecurringPatterns, fontKey, lexicon);
   const repairedPossessives = repairAttachedPossessiveContinuations(repairedClusters, fontKey, lexicon);
   const repairedPronouns = repairPronounCarryoverSplits(repairedPossessives, fontKey, lexicon);
-  const repairedRecurringPatterns = repairRecurringFrontMatterPatterns(repairedPronouns);
-  const repairedPunctuation = repairPunctuationSpacing(repairedRecurringPatterns);
-  const repairedAttachedJoins = repairAttachedWordJoins(repairedPunctuation, fontKey, lexicon);
+  const repairedAttachedJoins = repairAttachedWordJoins(repairedPronouns, fontKey, lexicon);
   const mergedRuns = mergeStrongSplitWordRuns(
     mergeCanonicalShortWordPairs(repairedAttachedJoins, fontKey, lexicon),
     fontKey,
@@ -264,6 +275,10 @@ function refineSegment(
   const originalWords = core.split(/\s+/).filter(Boolean);
 
   if (!core.includes(' ') && core.length < 8) {
+    return segment;
+  }
+
+  if (suspiciousSpaceIndices.size === 0 && core.includes(' ')) {
     return segment;
   }
 
@@ -392,7 +407,7 @@ function detectSuspiciousSpaceIndices(item: PDFTextItem): Set<number> {
       next &&
       /[A-Za-z]$/.test(previous.text) &&
       /^[A-Za-z]/.test(next.text) &&
-      (span.synthetic || isSuspiciousSpaceAdvance(span.advance, item.fontSize))
+      isSuspiciousSpaceAdvance(span.advance, item.fontSize)
     ) {
       suspicious.add(offset);
     }
@@ -920,6 +935,8 @@ function repairRecurringFrontMatterPatterns(text: string): string {
     .replace(/\bBayes\s+i\s+and\s+at\s+a\b/g, 'Bayesian data')
     .replace(/\bIn\s+dependentComp\s+on\s+entAnalys\s+is\b/g, 'Independent Component Analysis')
     .replace(/\bI\s+each\b/g, 'I teach')
+    .replace(/\bIteach\b/g, 'I teach')
+    .replace(/\bIgive\b/g, 'I give')
     .replace(/\btionproblems\b/g, 'tion problems')
     .replace(/\bPage\s+svii\{xshow\b/g, 'Pages vii-x show')
     .replace(/\bPage\s+svii-x\s+show\b/g, 'Pages vii-x show')
@@ -946,7 +963,11 @@ function repairRecurringFrontMatterPatterns(text: string): string {
 }
 
 function repairPunctuationSpacing(text: string): string {
-  return text.replace(/([,.;:!?])(?=[A-Za-z])/g, '$1 ');
+  return text.replace(/([,.;:!?])(?=[A-Za-z])/g, (match, punctuation, offset, input) =>
+    shouldPreserveCompactPunctuation(input, Number(offset))
+      ? match
+      : `${punctuation} `
+  );
 }
 
 function repairAttachedWordJoins(
@@ -1021,7 +1042,7 @@ function repairMergedWordPhrases(
     if (
       token?.kind !== 'word' ||
       token.value.length < 8 ||
-      isBackedLexiconWord(token.value, fontKey, lexicon)
+      isTrustedLexiconWord(token.value.toLowerCase())
     ) {
       continue;
     }
@@ -1477,6 +1498,36 @@ function isTrustedLexiconWord(word: string): boolean {
   return COMMON_WORDS.has(word) || TECHNICAL_WORDS.has(word) || SUPPLEMENTAL_TRUSTED_WORDS.has(word);
 }
 
+function containsProtectedUrlLikeText(text: string): boolean {
+  return /(?:https?:\/\/|www\.|[A-Za-z0-9._%+-]+\/[A-Za-z0-9._%+-]+)/i.test(text);
+}
+
+function shouldPreserveCompactPunctuation(text: string, punctuationOffset: number): boolean {
+  const tokenStart = findTokenBoundary(text, punctuationOffset, -1);
+  const tokenEnd = findTokenBoundary(text, punctuationOffset + 1, 1);
+  const token = text.slice(tokenStart, tokenEnd);
+
+  return (
+    /:\/\//.test(token) ||
+    /^www\./i.test(token) ||
+    /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+(?:\/[^\s]*)?$/.test(token)
+  );
+}
+
+function findTokenBoundary(text: string, start: number, direction: -1 | 1): number {
+  let index = start;
+
+  while (index >= 0 && index < text.length) {
+    const char = text[index] ?? '';
+    if (/\s/.test(char)) {
+      return direction === -1 ? index + 1 : index;
+    }
+    index += direction;
+  }
+
+  return direction === -1 ? 0 : text.length;
+}
+
 function isBackedLexiconWord(word: string, fontKey: string, lexicon: BoundaryLexicon): boolean {
   const normalized = word.toLowerCase();
   if (isTrustedLexiconWord(normalized)) {
@@ -1577,7 +1628,11 @@ function reconcileGlyphSpans(item: PDFTextItem, refinedText: string): PDFTextIte
   const baselineAdvance = item.baselineStart && item.baselineEnd
     ? Math.hypot(item.baselineEnd.x - item.baselineStart.x, item.baselineEnd.y - item.baselineStart.y)
     : item.bounds.maxX - item.bounds.minX;
-  const insertedSpaceAdvance = Math.max(0, baselineAdvance - originalAdvance) / insertedSpaces;
+  const residualSpaceAdvance = Math.max(0, baselineAdvance - originalAdvance) / insertedSpaces;
+  const insertedSpaceAdvance = Math.max(
+    residualSpaceAdvance,
+    estimateNaturalSpaceAdvance(item.glyphSpans, item.fontSize)
+  );
 
   const rebuiltSpans: NonNullable<PDFTextItem['glyphSpans']> = [];
   let glyphIndex = 0;
@@ -1596,6 +1651,31 @@ function reconcileGlyphSpans(item: PDFTextItem, refinedText: string): PDFTextIte
   }
 
   return rebuiltSpans;
+}
+
+function estimateNaturalSpaceAdvance(
+  glyphSpans: NonNullable<PDFTextItem['glyphSpans']>,
+  fontSize: number | undefined
+): number {
+  const explicitSpaceAdvances = glyphSpans
+    .filter((span) => span.text === ' ' && span.advance > 0)
+    .map((span) => span.advance)
+    .sort((left, right) => left - right);
+
+  if (explicitSpaceAdvances.length > 0) {
+    return explicitSpaceAdvances[Math.floor(explicitSpaceAdvances.length / 2)] ?? explicitSpaceAdvances[0]!;
+  }
+
+  const letterAdvances = glyphSpans
+    .filter((span) => /^[A-Za-z]$/.test(span.text) && span.advance > 0)
+    .map((span) => span.advance)
+    .sort((left, right) => left - right);
+
+  if (letterAdvances.length > 0) {
+    return Math.max(letterAdvances[Math.floor(letterAdvances.length / 2)]! * 0.75, 0.75);
+  }
+
+  return Math.max((fontSize ?? 0) * 0.33, 0.75);
 }
 
 function getOrCreateWordCounts(
