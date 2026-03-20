@@ -1,5 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { executeCodexResponses, type CodexExecConfig, type CodexProxyResponse } from './codexExecProxy.js';
+import { resolveGeminiProxyUpstreamPath } from './geminiProxyModel.js';
+import {
+  ProxyAsyncJobStore,
+  type ProxyAsyncCacheStatus,
+  type ProxyAsyncJobProvider,
+  type ProxyAsyncJobResponse,
+  type ProxyAsyncJobSnapshot
+} from './proxyAsyncJobs.js';
 import { summarizeCodexResponsesBody } from './codexRequestIntents.js';
 import { FileResponseCache } from './requestCache.js';
 import { loadLocalEnvFiles } from './loadLocalEnv.js';
@@ -15,11 +23,18 @@ type ServerConfig = {
   openAiApiKey?: string;
   geminiBaseUrl: string;
   geminiApiKey?: string;
+  geminiModel: string;
+  geminiBinaryInputModel?: string;
   codexExec: CodexExecConfig;
   cacheEnabled: boolean;
   cacheDir: string;
   cacheTtlMs?: number;
   cacheMaxBodyBytes: number;
+  asyncJobs: {
+    retentionMs: number;
+    maxJobs: number;
+    pollIntervalMs: number;
+  };
   proxyUsers: Map<string, string>;
   sessionCookieName: string;
   sessionTtlMs: number;
@@ -38,9 +53,11 @@ const PROXY_APP_PREFIX = '/proxy';
 const OPENAI_PROXY_PREFIX = '/api/llm/openai/';
 const GEMINI_PROXY_PREFIX = '/api/llm/gemini/';
 const CODEX_PROXY_PREFIX = '/api/llm/codex/';
+const JOBS_PROXY_PREFIX = '/api/llm/jobs/';
 const PROXY_OPENAI_PROXY_PREFIX = '/proxy/api/llm/openai/';
 const PROXY_GEMINI_PROXY_PREFIX = '/proxy/api/llm/gemini/';
 const PROXY_CODEX_PROXY_PREFIX = '/proxy/api/llm/codex/';
+const PROXY_JOBS_PROXY_PREFIX = '/proxy/api/llm/jobs/';
 const HEALTH_PATHS = new Set(['/health', '/api/health', '/proxy/api/health']);
 const AUTH_SESSION_PATHS = new Set(['/api/auth/session', '/proxy/api/auth/session']);
 const AUTH_LOGIN_PATHS = new Set(['/api/auth/login', '/proxy/api/auth/login']);
@@ -54,6 +71,7 @@ const responseCache = new FileResponseCache({
   ttlMs: config.cacheTtlMs,
   maxBodyBytes: config.cacheMaxBodyBytes
 });
+const asyncJobStore = new ProxyAsyncJobStore(config.asyncJobs);
 const sessionAuth = new ProxySessionAuth({
   cookieName: config.sessionCookieName,
   cookieSecure: config.sessionCookieSecure,
@@ -64,7 +82,7 @@ const staticProxyApp = new StaticProxyApp({
   appDir: config.proxyAppDir,
   routePrefix: PROXY_APP_PREFIX
 });
-let codexRequestSequence = 0;
+let proxyRequestSequence = 0;
 
 const server = createServer((request, response) => {
   void handleRequest(request, response).catch((error) => {
@@ -105,6 +123,10 @@ server.listen(config.port, config.host, () => {
       ? `enabled dir=${responseCache.getCacheDir()} ttlMs=${responseCache.getTtlMs() ?? 'none'}`
       : 'disabled'
   );
+  console.log(
+    '[llm-proxy] Async jobs:',
+    `enabled pollIntervalMs=${config.asyncJobs.pollIntervalMs} retentionMs=${config.asyncJobs.retentionMs} maxJobs=${config.asyncJobs.maxJobs}`
+  );
   console.log('[llm-proxy] Proxy app route:', `${PROXY_APP_PREFIX} -> ${staticProxyApp.appDir}`);
   console.log('[llm-proxy] Root redirect:', config.rootRedirectPath ? `/ -> ${config.rootRedirectPath}` : 'disabled');
 });
@@ -131,6 +153,12 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           gemini: Boolean(config.geminiApiKey),
           codex: config.codexExec.enabled
         },
+        modelSelection: {
+          gemini: {
+            textModel: config.geminiModel,
+            binaryInputModel: config.geminiBinaryInputModel ?? null
+          }
+        },
         auth: {
           sharedTokenEnabled: Boolean(config.proxyAuthToken),
           sessionAuthEnabled: sessionAuth.isEnabled(),
@@ -143,6 +171,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           dir: config.cacheDir,
           ttlMs: config.cacheTtlMs ?? null,
           maxBodyBytes: config.cacheMaxBodyBytes
+        },
+        asyncJobs: {
+          pollIntervalMs: config.asyncJobs.pollIntervalMs,
+          retentionMs: config.asyncJobs.retentionMs,
+          maxJobs: config.asyncJobs.maxJobs
         },
         app: {
           routePrefix: PROXY_APP_PREFIX,
@@ -195,6 +228,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === 'GET') {
+    const jobId = stripKnownPrefix(requestUrl.pathname, [JOBS_PROXY_PREFIX, PROXY_JOBS_PROXY_PREFIX]);
+    if (jobId !== null && jobId.length > 0) {
+      handleAsyncJobStatusRequest(request, response, requestUrl, jobId, config);
+      return;
+    }
     if (requestUrl.pathname === '/' && config.rootRedirectPath) {
       response.writeHead(302, { Location: config.rootRedirectPath });
       response.end();
@@ -217,20 +255,47 @@ async function proxyOpenAiRequest(
   upstreamPath: string,
   currentConfig: ServerConfig
 ): Promise<void> {
-  logProxyRequest('openai', normalizeRequestKind('openai', upstreamPath), requestUrl.pathname);
+  const requestKind = normalizeRequestKind('openai', upstreamPath);
+  const startedAt = Date.now();
+  const sequence = ++proxyRequestSequence;
+  logProxyRequest('openai', requestKind, requestUrl.pathname);
 
   if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
     sendJson(response, 401, { error: 'Proxy authorization failed.' });
+    logProxyCompletion({
+      sequence,
+      provider: 'openai',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=401'
+    });
     return;
   }
 
   if (!currentConfig.openAiApiKey) {
     sendJson(response, 500, { error: 'OPENAI_API_KEY is not configured on the proxy server.' });
+    logProxyCompletion({
+      sequence,
+      provider: 'openai',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=500'
+    });
     return;
   }
 
   if (!isAllowedOpenAiPath(upstreamPath)) {
     sendJson(response, 404, { error: 'Unsupported OpenAI proxy path.' });
+    logProxyCompletion({
+      sequence,
+      provider: 'openai',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=404'
+    });
     return;
   }
 
@@ -255,6 +320,13 @@ async function proxyOpenAiRequest(
   if (!bypassCache) {
     const cached = await responseCache.get(cacheKey);
     if (cached) {
+      logProxyCompletion({
+        sequence,
+        provider: 'openai',
+        requestKind,
+        cacheStatus: 'HIT',
+        durationMs: Date.now() - startedAt
+      });
       writeProxyResponse(
         response,
         {
@@ -269,6 +341,47 @@ async function proxyOpenAiRequest(
       );
       return;
     }
+  }
+
+  if (maybeHandleAsyncProxyJob(request, response, requestUrl, {
+    provider: 'openai',
+    requestKind,
+    sequence,
+    startedAt,
+    cacheStatus: bypassCache ? 'BYPASS' : 'MISS',
+    cacheKey,
+    bodyHash,
+    runner: async (logProgress) => {
+      logProgress(`requesting upstream ${upstreamPath}`);
+      let upstreamResponse: Response;
+      try {
+        upstreamResponse = await fetch(upstreamUrl, {
+          method: 'POST',
+          headers: {
+            Accept: accept ?? 'application/json',
+            Authorization: `Bearer ${currentConfig.openAiApiKey}`,
+            'Content-Type': contentType ?? 'application/json'
+          },
+          body
+        });
+      } catch (error) {
+        console.error('[llm-proxy] OpenAI upstream request failed', error);
+        return createJsonErrorResponse(502, 'Failed to reach OpenAI upstream.');
+      }
+
+      logProgress(`received upstream status=${upstreamResponse.status}`);
+      const upstream = await readUpstreamResponse(upstreamResponse);
+      if (isCacheableResponse(upstream.status)) {
+        try {
+          await responseCache.set(cacheKey, upstream);
+        } catch (error) {
+          console.warn('[llm-proxy] Failed to store OpenAI cache entry', error);
+        }
+      }
+      return upstream;
+    }
+  })) {
+    return;
   }
 
   let upstreamResponse: Response;
@@ -284,6 +397,14 @@ async function proxyOpenAiRequest(
     });
   } catch (error) {
     console.error('[llm-proxy] OpenAI upstream request failed', error);
+    logProxyCompletion({
+      sequence,
+      provider: 'openai',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=502'
+    });
     sendJson(response, 502, { error: 'Failed to reach OpenAI upstream.' });
     return;
   }
@@ -296,6 +417,14 @@ async function proxyOpenAiRequest(
       console.warn('[llm-proxy] Failed to store OpenAI cache entry', error);
     }
   }
+  logProxyCompletion({
+    sequence,
+    provider: 'openai',
+    requestKind,
+    cacheStatus: bypassCache ? 'BYPASS' : 'MISS',
+    durationMs: Date.now() - startedAt,
+    extras: `status=${upstream.status}`
+  });
   writeProxyResponse(response, upstream, bypassCache ? 'BYPASS' : 'MISS', cacheKey, bodyHash);
 }
 
@@ -306,35 +435,69 @@ async function proxyGeminiRequest(
   upstreamPath: string,
   currentConfig: ServerConfig
 ): Promise<void> {
-  logProxyRequest('gemini', normalizeRequestKind('gemini', upstreamPath), requestUrl.pathname);
+  const requestKind = normalizeRequestKind('gemini', upstreamPath);
+  const startedAt = Date.now();
+  const sequence = ++proxyRequestSequence;
+  logProxyRequest('gemini', requestKind, requestUrl.pathname);
 
   if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
     sendJson(response, 401, { error: 'Proxy authorization failed.' });
+    logProxyCompletion({
+      sequence,
+      provider: 'gemini',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=401'
+    });
     return;
   }
 
   if (!currentConfig.geminiApiKey) {
     sendJson(response, 500, { error: 'GEMINI_API_KEY is not configured on the proxy server.' });
+    logProxyCompletion({
+      sequence,
+      provider: 'gemini',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=500'
+    });
     return;
   }
 
   if (!isAllowedGeminiPath(upstreamPath)) {
     sendJson(response, 404, { error: 'Unsupported Gemini proxy path.' });
+    logProxyCompletion({
+      sequence,
+      provider: 'gemini',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=404'
+    });
     return;
   }
 
-  const upstreamUrl = new URL(joinUrl(currentConfig.geminiBaseUrl, upstreamPath));
+  const body = await readRawBody(request);
+  const modelSelection = resolveGeminiProxyUpstreamPath(upstreamPath, body, {
+    textModel: currentConfig.geminiModel,
+    binaryInputModel: currentConfig.geminiBinaryInputModel
+  });
+  const resolvedUpstreamPath = modelSelection.upstreamPath;
+  const upstreamUrl = new URL(joinUrl(currentConfig.geminiBaseUrl, resolvedUpstreamPath));
   const searchParams = new URLSearchParams(requestUrl.searchParams);
   searchParams.set('key', currentConfig.geminiApiKey);
   upstreamUrl.search = searchParams.toString();
-
-  const body = await readRawBody(request);
+  console.log(
+    `[llm-proxy] seq=${sequence} gemini model mode=${modelSelection.mode} requested=${modelSelection.requestedModel ?? 'n/a'} selected=${modelSelection.selectedModel ?? 'n/a'}`
+  );
   const accept = readHeaderValue(request.headers.accept);
   const contentType = readHeaderValue(request.headers['content-type']);
   const cacheEntry = responseCache.buildKey({
     provider: 'gemini',
     upstreamBaseUrl: currentConfig.geminiBaseUrl,
-    upstreamPath,
+    upstreamPath: resolvedUpstreamPath,
     queryParams: requestUrl.searchParams,
     method: 'POST',
     accept,
@@ -348,6 +511,13 @@ async function proxyGeminiRequest(
   if (!bypassCache) {
     const cached = await responseCache.get(cacheKey);
     if (cached) {
+      logProxyCompletion({
+        sequence,
+        provider: 'gemini',
+        requestKind,
+        cacheStatus: 'HIT',
+        durationMs: Date.now() - startedAt
+      });
       writeProxyResponse(
         response,
         {
@@ -364,6 +534,47 @@ async function proxyGeminiRequest(
     }
   }
 
+  if (maybeHandleAsyncProxyJob(request, response, requestUrl, {
+    provider: 'gemini',
+    requestKind,
+    sequence,
+    startedAt,
+    cacheStatus: bypassCache ? 'BYPASS' : 'MISS',
+    cacheKey,
+    bodyHash,
+    runner: async (logProgress) => {
+      logProgress(`requesting upstream ${resolvedUpstreamPath}`);
+      let upstreamResponse: Response;
+      try {
+        upstreamResponse = await fetch(upstreamUrl, {
+          method: 'POST',
+          headers: {
+            Accept: accept ?? 'application/json',
+            'Content-Type': contentType ?? 'application/json'
+          },
+          body
+        });
+      } catch (error) {
+        console.error('[llm-proxy] Gemini upstream request failed', error);
+        return createJsonErrorResponse(502, 'Failed to reach Gemini upstream.');
+      }
+
+      logProgress(`received upstream status=${upstreamResponse.status}`);
+      const upstream = await readUpstreamResponse(upstreamResponse);
+      if (isCacheableResponse(upstream.status)) {
+        try {
+          await responseCache.set(cacheKey, upstream);
+        } catch (error) {
+          console.warn('[llm-proxy] Failed to store Gemini cache entry', error);
+        }
+      }
+      return upstream;
+    },
+    completionExtras: () => `model=${modelSelection.selectedModel ?? 'n/a'}`
+  })) {
+    return;
+  }
+
   let upstreamResponse: Response;
   try {
     upstreamResponse = await fetch(upstreamUrl, {
@@ -376,6 +587,14 @@ async function proxyGeminiRequest(
     });
   } catch (error) {
     console.error('[llm-proxy] Gemini upstream request failed', error);
+    logProxyCompletion({
+      sequence,
+      provider: 'gemini',
+      requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=502'
+    });
     sendJson(response, 502, { error: 'Failed to reach Gemini upstream.' });
     return;
   }
@@ -388,6 +607,14 @@ async function proxyGeminiRequest(
       console.warn('[llm-proxy] Failed to store Gemini cache entry', error);
     }
   }
+  logProxyCompletion({
+    sequence,
+    provider: 'gemini',
+    requestKind,
+    cacheStatus: bypassCache ? 'BYPASS' : 'MISS',
+    durationMs: Date.now() - startedAt,
+    extras: `status=${upstream.status} model=${modelSelection.selectedModel ?? 'n/a'}`
+  });
   writeProxyResponse(response, upstream, bypassCache ? 'BYPASS' : 'MISS', cacheKey, bodyHash);
 }
 
@@ -400,7 +627,7 @@ async function proxyCodexRequest(
 ): Promise<void> {
   const requestKind = normalizeRequestKind('codex', upstreamPath);
   const startedAt = Date.now();
-  const sequence = ++codexRequestSequence;
+  const sequence = ++proxyRequestSequence;
 
   if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
     sendJson(response, 401, { error: 'Proxy authorization failed.' });
@@ -495,6 +722,45 @@ async function proxyCodexRequest(
     }
   }
 
+  if (maybeHandleAsyncProxyJob(request, response, requestUrl, {
+    provider: 'codex',
+    requestKind,
+    sequence,
+    startedAt,
+    cacheStatus: bypassCache ? 'BYPASS' : 'MISS',
+    cacheKey,
+    bodyHash,
+    runner: async (logProgress) => {
+      let upstream: CodexProxyResponse;
+      try {
+        upstream = await executeCodexResponses(body, currentConfig.codexExec, (event) => {
+          if (event.type === 'workspace') {
+            const message =
+              `workspace intent=${event.intent} keep=${event.keepWorkspace ? 'true' : 'false'} dir=${event.workspaceDir}` +
+              `${event.artifactPaths.length > 0 ? ` artifacts=${event.artifactPaths.join(',')}` : ''}`;
+            logCodexProxyEvent(sequence, message);
+            logProgress(message);
+            return;
+          }
+          const message = event.type === 'phase' ? event.message : `${event.stream} ${event.line}`;
+          logCodexProxyEvent(sequence, message);
+          logProgress(message);
+        });
+      } catch (error) {
+        console.error('[llm-proxy] Codex exec request failed', error);
+        return createJsonErrorResponse(
+          502,
+          error instanceof Error ? error.message : 'Failed to execute codex exec.'
+        );
+      }
+
+      return upstream;
+    },
+    completionExtras: (job) => `intent=${codexSummary.intent} job=${job.id}`
+  })) {
+    return;
+  }
+
   let upstream: CodexProxyResponse;
   try {
     upstream = await executeCodexResponses(body, currentConfig.codexExec, (event) => {
@@ -543,6 +809,199 @@ async function proxyCodexRequest(
     extras: `intent=${codexSummary.intent} workspace=${upstream.debug.workspaceDir} kept=${upstream.debug.keptWorkspace ? 'true' : 'false'}`
   });
   writeProxyResponse(response, upstream, bypassCache ? 'BYPASS' : 'MISS', cacheKey, bodyHash);
+}
+
+function maybeHandleAsyncProxyJob(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  input: {
+    provider: ProxyAsyncJobProvider;
+    requestKind: string;
+    sequence: number;
+    startedAt: number;
+    cacheStatus: ProxyAsyncCacheStatus;
+    cacheKey: string;
+    bodyHash: string;
+    runner: (logProgress: (message: string) => void) => Promise<ProxyAsyncJobResponse>;
+    completionExtras?: (job: ProxyAsyncJobSnapshot) => string;
+  }
+): boolean {
+  if (!isAsyncPollRequested(request, requestUrl)) {
+    return false;
+  }
+
+  const { job, reused } = asyncJobStore.createOrReuse({
+    provider: input.provider,
+    requestKind: input.requestKind,
+    cacheKey: input.cacheKey,
+    bodyHash: input.bodyHash,
+    cacheStatus: input.cacheStatus,
+    sequence: input.sequence
+  });
+  const pollPath = buildAsyncJobPollPath(requestUrl.pathname, job.id);
+
+  if (reused) {
+    console.log(
+      `[llm-proxy] seq=${input.sequence} job reuse provider=${input.provider} kind=${input.requestKind} job=${job.id} status=${job.state}`
+    );
+  } else {
+    console.log(
+      `[llm-proxy] seq=${input.sequence} job create provider=${input.provider} kind=${input.requestKind} job=${job.id} poll=${pollPath}`
+    );
+    void runAsyncProxyJob(job.id, input);
+  }
+
+  writeAsyncJobAccepted(response, job, pollPath, config.asyncJobs.pollIntervalMs);
+  return true;
+}
+
+async function runAsyncProxyJob(
+  jobId: string,
+  input: {
+    provider: ProxyAsyncJobProvider;
+    requestKind: string;
+    sequence: number;
+    startedAt: number;
+    cacheStatus: ProxyAsyncCacheStatus;
+    runner: (logProgress: (message: string) => void) => Promise<ProxyAsyncJobResponse>;
+    completionExtras?: (job: ProxyAsyncJobSnapshot) => string;
+  }
+): Promise<void> {
+  asyncJobStore.markRunning(jobId, 'job started');
+  try {
+    const response = await input.runner((message) => {
+      asyncJobStore.appendEvent(jobId, message);
+    });
+    asyncJobStore.complete(jobId, response);
+    const snapshot = asyncJobStore.get(jobId);
+    const finalStatus =
+      response.status >= 400
+        ? 'ERROR'
+        : input.cacheStatus;
+    logProxyCompletion({
+      sequence: input.sequence,
+      provider: input.provider,
+      requestKind: input.requestKind,
+      cacheStatus: finalStatus,
+      durationMs: Date.now() - input.startedAt,
+      extras: [
+        `job=${jobId}`,
+        `status=${response.status}`,
+        snapshot && input.completionExtras ? input.completionExtras(snapshot) : ''
+      ].filter(Boolean).join(' ')
+    });
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Async proxy job failed.';
+    console.error('[llm-proxy] Async proxy job failed', error);
+    asyncJobStore.complete(jobId, createJsonErrorResponse(502, message));
+    logProxyCompletion({
+      sequence: input.sequence,
+      provider: input.provider,
+      requestKind: input.requestKind,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - input.startedAt,
+      extras: `job=${jobId} status=502`
+    });
+  }
+}
+
+function handleAsyncJobStatusRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  jobId: string,
+  currentConfig: ServerConfig
+): void {
+  if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
+    sendJson(response, 401, { error: 'Proxy authorization failed.' });
+    return;
+  }
+
+  const job = asyncJobStore.get(jobId);
+  if (!job) {
+    sendJson(response, 404, { error: 'Unknown async proxy job.' });
+    return;
+  }
+
+  const pollPath = buildAsyncJobPollPath(requestUrl.pathname, job.id);
+  if (job.state === 'pending' || job.state === 'running') {
+    writeAsyncJobAccepted(response, job, pollPath, asyncJobStore.getPollIntervalMs());
+    return;
+  }
+
+  const result = asyncJobStore.getResponse(jobId);
+  if (!result) {
+    sendJson(response, 500, { error: 'Async proxy job completed without a response payload.' });
+    return;
+  }
+
+  writeProxyResponse(
+    response,
+    result,
+    job.cacheStatus,
+    job.cacheKey,
+    job.bodyHash,
+    undefined,
+    {
+      'Cache-Control': 'no-store',
+      'X-LLM-Proxy-Job-Id': job.id,
+      'X-LLM-Proxy-Async-Status': job.state
+    }
+  );
+}
+
+function isAsyncPollRequested(request: IncomingMessage, requestUrl: URL): boolean {
+  const header = readHeaderValue(request.headers['x-llm-proxy-async'])?.trim().toLowerCase();
+  if (header === 'poll') {
+    return true;
+  }
+  const query = requestUrl.searchParams.get('async')?.trim().toLowerCase();
+  return query === 'poll';
+}
+
+function buildAsyncJobPollPath(pathname: string, jobId: string): string {
+  const prefix = pathname.startsWith(PROXY_APP_PREFIX) ? PROXY_JOBS_PROXY_PREFIX : JOBS_PROXY_PREFIX;
+  return `${prefix}${encodeURIComponent(jobId)}`;
+}
+
+function writeAsyncJobAccepted(
+  response: ServerResponse,
+  job: ProxyAsyncJobSnapshot,
+  pollPath: string,
+  pollIntervalMs: number
+): void {
+  const retryAfterSeconds = Math.max(1, Math.ceil(pollIntervalMs / 1000));
+  response.writeHead(202, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    Location: pollPath,
+    'Retry-After': String(retryAfterSeconds),
+    'X-LLM-Proxy-Job-Id': job.id,
+    'X-LLM-Proxy-Async-Status': job.state
+  });
+  response.end(JSON.stringify({
+    jobId: job.id,
+    status: job.state,
+    provider: job.provider,
+    requestKind: job.requestKind,
+    pollUrl: pollPath,
+    retryAfterMs: pollIntervalMs,
+    createdAt: new Date(job.createdAt).toISOString(),
+    updatedAt: new Date(job.updatedAt).toISOString(),
+    ...(job.lastEvent ? { lastEvent: job.lastEvent } : {})
+  }));
+}
+
+function createJsonErrorResponse(status: number, error: string): ProxyAsyncJobResponse {
+  return {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8'
+    },
+    body: Buffer.from(JSON.stringify({ error }), 'utf8')
+  };
 }
 
 function isAllowedOpenAiPath(pathname: string): boolean {
@@ -688,6 +1147,8 @@ function loadConfig(): ServerConfig {
     openAiApiKey: normalizeNonEmpty(env.OPENAI_API_KEY),
     geminiBaseUrl: normalizeUrl(env.GEMINI_BASE_URL, 'https://generativelanguage.googleapis.com'),
     geminiApiKey: normalizeNonEmpty(env.GEMINI_API_KEY),
+    geminiModel: normalizeNonEmpty(env.LLM_PROXY_GEMINI_MODEL) ?? 'gemini-3-flash-preview',
+    geminiBinaryInputModel: normalizeNonEmpty(env.LLM_PROXY_GEMINI_BINARY_MODEL),
     codexExec: {
       enabled: normalizeBoolean(env.CODEX_EXEC_ENABLED, false),
       command: normalizeNonEmpty(env.CODEX_EXEC_COMMAND) ?? 'codex',
@@ -707,6 +1168,11 @@ function loadConfig(): ServerConfig {
     cacheDir: normalizeNonEmpty(env.LLM_PROXY_CACHE_DIR) ?? '.cache/llm-proxy',
     cacheTtlMs: normalizeOptionalNumber(env.LLM_PROXY_CACHE_TTL_MS),
     cacheMaxBodyBytes: normalizePositiveNumber(env.LLM_PROXY_CACHE_MAX_BODY_BYTES, 20 * 1024 * 1024),
+    asyncJobs: {
+      retentionMs: normalizePositiveNumber(env.LLM_PROXY_ASYNC_JOB_TTL_MS, 60 * 60 * 1000),
+      maxJobs: normalizePositiveNumber(env.LLM_PROXY_ASYNC_MAX_JOBS, 100),
+      pollIntervalMs: normalizePositiveNumber(env.LLM_PROXY_ASYNC_POLL_INTERVAL_MS, 1500)
+    },
     proxyUsers: parseProxyUsers(env.LLM_PROXY_USERS),
     sessionCookieName: normalizeNonEmpty(env.LLM_PROXY_SESSION_COOKIE_NAME) ?? 'llm_proxy_session',
     sessionTtlMs: normalizePositiveNumber(env.LLM_PROXY_SESSION_TTL_MS, 30 * 24 * 60 * 60 * 1000),
@@ -857,14 +1323,16 @@ function writeProxyResponse(
   cacheStatus: 'HIT' | 'MISS' | 'BYPASS',
   cacheKey: string,
   bodyHash: string,
-  cachedAt?: number
+  cachedAt?: number,
+  extraHeaders?: Record<string, string>
 ): void {
   const headers: Record<string, string> = {
     ...payload.headers,
     'Content-Length': String(payload.body.length),
     'X-LLM-Proxy-Cache': cacheStatus,
     'X-LLM-Proxy-Cache-Key': cacheKey,
-    'X-LLM-Proxy-Body-Hash': bodyHash
+    'X-LLM-Proxy-Body-Hash': bodyHash,
+    ...extraHeaders
   };
 
   if (typeof cachedAt === 'number') {
@@ -878,10 +1346,13 @@ function writeProxyResponse(
 function writeCorsHeaders(response: ServerResponse, origin: string): void {
   response.setHeader('Access-Control-Allow-Origin', origin);
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  response.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type,X-LLM-Proxy-Auth,X-LLM-Proxy-Cache');
+  response.setHeader(
+    'Access-Control-Allow-Headers',
+    'Authorization,Content-Type,X-LLM-Proxy-Auth,X-LLM-Proxy-Cache,X-LLM-Proxy-Async'
+  );
   response.setHeader(
     'Access-Control-Expose-Headers',
-    'X-LLM-Proxy-Cache,X-LLM-Proxy-Cache-Key,X-LLM-Proxy-Body-Hash,X-LLM-Proxy-Cached-At'
+    'Location,Retry-After,X-LLM-Proxy-Cache,X-LLM-Proxy-Cache-Key,X-LLM-Proxy-Body-Hash,X-LLM-Proxy-Cached-At,X-LLM-Proxy-Job-Id,X-LLM-Proxy-Async-Status'
   );
 }
 

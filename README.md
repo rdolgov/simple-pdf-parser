@@ -107,11 +107,16 @@ Server environment variables:
 - `OPENAI_BASE_URL` defaults to `https://api.openai.com/v1`
 - `GEMINI_API_KEY` configures the upstream Gemini key used by the proxy
 - `GEMINI_BASE_URL` defaults to `https://generativelanguage.googleapis.com`
+- `LLM_PROXY_GEMINI_MODEL` defaults to `gemini-3-flash-preview` and is the server-selected Gemini `generateContent` text model
+- `LLM_PROXY_GEMINI_BINARY_MODEL` is optional and, when set, overrides Gemini `generateContent` requests that contain inline binary inputs such as images or PDFs
 - `LLM_PROXY_CORS_ORIGIN` defaults to `*`
 - `LLM_PROXY_CACHE_ENABLED` defaults to `true`
 - `LLM_PROXY_CACHE_DIR` defaults to `.cache/llm-proxy`
 - `LLM_PROXY_CACHE_TTL_MS` is optional; unset means entries do not expire automatically
 - `LLM_PROXY_CACHE_MAX_BODY_BYTES` defaults to `20971520` (20 MB per cached response)
+- `LLM_PROXY_ASYNC_POLL_INTERVAL_MS` defaults to `1500` and controls client polling hints for long-running proxied LLM jobs
+- `LLM_PROXY_ASYNC_JOB_TTL_MS` defaults to `3600000` (1 hour) and controls how long completed async job results stay available for polling
+- `LLM_PROXY_ASYNC_MAX_JOBS` defaults to `100`
 - `LLM_PROXY_APP_DIR` defaults to `testApp/dist` and is used when serving the built app under `/proxy`
 
 The proxy server now auto-loads root-level `.env` and `.env.local` files on startup. Shell environment variables still win over file-loaded values.
@@ -124,6 +129,14 @@ The proxy now persists successful upstream responses on disk and reuses them whe
 - `X-LLM-Proxy-Cached-At: <iso timestamp>` on cache hits
 
 For manual refresh/debugging, send `X-LLM-Proxy-Cache: bypass` or append `?cache=bypass` to skip the local cache for one request.
+
+When the shared client is pointed at the local proxy, long-running Gemini/OpenAI/Codex requests now automatically switch to an async flow:
+
+- initial `POST` returns `202 Accepted`
+- the response includes a poll URL under `/api/llm/jobs/<id>` or `/proxy/api/llm/jobs/<id>`
+- the client polls that URL until the final upstream payload is ready
+
+This avoids Cloudflare `524` timeouts for long public requests while keeping the existing client API shape the same.
 
 Example:
 

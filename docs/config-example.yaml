@@ -31,12 +31,18 @@ llmProxy:
     dir: ".cache/llm-proxy"
     ttlMs: 604800000
     maxBodyBytes: 20971520
+  asyncJobs:
+    pollIntervalMs: 1500
+    ttlMs: 3600000
+    maxJobs: 100
   openAI:
     apiKey: "YOUR_OPENAI_API_KEY"
     baseUrl: "https://api.openai.com/v1"
   gemini:
     apiKey: "YOUR_GEMINI_API_KEY"
     baseUrl: "https://generativelanguage.googleapis.com"
+    model: "gemini-3-flash-preview"
+    binaryInputModel: "gemini-3-pro-image-preview" # optional
 
 testApp:
   llmTransport:

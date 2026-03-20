@@ -1,4 +1,5 @@
 import { normalizeProviderApiError, readFormattedOpenAiErrorBody } from './apiErrorUtils.js';
+import { fetchWithLlmProxyPolling } from './llmProxyPolling.js';
 
 export type OpenAiContent = string | OpenAiContentParts | OpenAiContentParts[];
 
@@ -126,7 +127,7 @@ export class OpenAiAPI {
     const fetchImpl = resolveFetch();
     let response: Response;
     try {
-      response = await fetchImpl(this.endpoint, {
+      response = await fetchWithLlmProxyPolling(fetchImpl, this.endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -178,7 +179,7 @@ export class OpenAiAPI {
 
     let response: Response;
     try {
-      response = await fetchImpl(normalizeImagesEndpoint(this.endpoint), {
+      response = await fetchWithLlmProxyPolling(fetchImpl, normalizeImagesEndpoint(this.endpoint), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

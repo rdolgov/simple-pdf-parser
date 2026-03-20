@@ -33,6 +33,7 @@ Start the origin locally:
 PUBLIC_ORIGIN=https://discoverlab.app \
 LLM_PROXY_USERS='alice:strong-password' \
 GEMINI_API_KEY=... \
+LLM_PROXY_GEMINI_MODEL=gemini-3-flash-preview \
 OPENAI_API_KEY=... \
 npm run cloudflare:origin:start
 ```
@@ -43,6 +44,9 @@ Important environment notes:
 - `LLM_PROXY_HOST` defaults to `127.0.0.1`.
 - `LLM_PROXY_ROOT_REDIRECT_PATH` defaults to `/proxy`.
 - `LLM_PROXY_SESSION_COOKIE_SECURE` defaults to `true` in the Cloudflare origin start script.
+- `LLM_PROXY_GEMINI_MODEL` defaults to `gemini-3-flash-preview` and lets the proxy choose the Gemini text model server-side.
+- `LLM_PROXY_GEMINI_BINARY_MODEL` is optional if you want a separate server-selected Gemini model for image/PDF inputs.
+- Long-running proxied LLM requests now auto-switch to `202 + poll` under `/api/llm/jobs/...`, which avoids Cloudflare `524` timeouts without changing the browser-side app API.
 - `CODEX_EXEC_ENABLED=1` still works in this deployment if you want Codex proxy support.
 
 Expected public flow:

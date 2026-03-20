@@ -5,6 +5,7 @@ import type {
   RelevanceServiceConfig
 } from './relevanceTypes.js';
 import { normalizeProviderApiError, readFormattedOpenAiErrorBody } from './apiErrorUtils.js';
+import { fetchWithLlmProxyPolling } from './llmProxyPolling.js';
 import {
   getOpenAiCompatibleProviderLabel,
   type OpenAiCompatibleProvider
@@ -199,7 +200,7 @@ function createFetchResponsesClient(apiKey: string, endpoint?: string, providerL
       async create(input: Record<string, unknown>) {
         let response: Response;
         try {
-          response = await fetchImpl(targetEndpoint, {
+          response = await fetchWithLlmProxyPolling(fetchImpl, targetEndpoint, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',

@@ -1,5 +1,6 @@
 import { LMStudioAPI, type LMStudioConfig } from './lmStudioApi.js';
 import { normalizeProviderApiError, readFormattedOpenAiErrorBody } from './apiErrorUtils.js';
+import { fetchWithLlmProxyPolling } from './llmProxyPolling.js';
 
 export type EmbeddingProvider = 'lmstudio' | 'openai' | 'gemini';
 export type EmbeddingTaskType = 'retrieval_document' | 'retrieval_query';
@@ -108,7 +109,7 @@ export class EmbeddingAPI {
     const fetchImpl = resolveFetch();
     let response: Response;
     try {
-      response = await fetchImpl(normalizeOpenAiEmbeddingsEndpoint(this.endpoint), {
+      response = await fetchWithLlmProxyPolling(fetchImpl, normalizeOpenAiEmbeddingsEndpoint(this.endpoint), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -182,15 +183,19 @@ export class EmbeddingAPI {
     const fetchImpl = resolveFetch();
     let response: Response;
     try {
-      response = await fetchImpl(buildGeminiBatchEmbeddingsUrl(this.endpoint, this.apiVersion, model, this.apiKey as string), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          requests: inputs.map((text) => buildGeminiEmbeddingRequestBody(text, model, request))
-        })
-      });
+      response = await fetchWithLlmProxyPolling(
+        fetchImpl,
+        buildGeminiBatchEmbeddingsUrl(this.endpoint, this.apiVersion, model, this.apiKey as string),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            requests: inputs.map((text) => buildGeminiEmbeddingRequestBody(text, model, request))
+          })
+        }
+      );
     } catch (error) {
       throw normalizeProviderApiError('Gemini', error);
     }
@@ -221,13 +226,17 @@ export class EmbeddingAPI {
     const fetchImpl = resolveFetch();
     let response: Response;
     try {
-      response = await fetchImpl(buildGeminiSingleEmbeddingUrl(this.endpoint, this.apiVersion, model, this.apiKey as string), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(buildGeminiEmbeddingRequestBody(text, model, request, true))
-      });
+      response = await fetchWithLlmProxyPolling(
+        fetchImpl,
+        buildGeminiSingleEmbeddingUrl(this.endpoint, this.apiVersion, model, this.apiKey as string),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(buildGeminiEmbeddingRequestBody(text, model, request, true))
+        }
+      );
     } catch (error) {
       throw normalizeProviderApiError('Gemini', error);
     }

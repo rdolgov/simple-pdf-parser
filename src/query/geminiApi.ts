@@ -4,6 +4,7 @@ import {
   DEFAULT_GEMINI_BINARY_INPUT_MODEL,
   DEFAULT_GEMINI_TEXT_MODEL
 } from './geminiModelSelection.js';
+import { fetchWithLlmProxyPolling } from './llmProxyPolling.js';
 
 export type GeminiContent = string | GeminiContentParts | GeminiContentParts[];
 
@@ -312,13 +313,17 @@ export class GeminiAPI {
     const fetchImpl = resolveFetch();
     let response: Response;
     try {
-      response = await fetchImpl(buildGeminiGenerateContentUrl(this.endpoint, apiVersion, payload.model, this.apiKey), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(toGeminiRestGenerateContentRequest(payload))
-      });
+      response = await fetchWithLlmProxyPolling(
+        fetchImpl,
+        buildGeminiGenerateContentUrl(this.endpoint, apiVersion, payload.model, this.apiKey),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(toGeminiRestGenerateContentRequest(payload))
+        }
+      );
     } catch (error) {
       throw normalizeProviderApiError('Gemini', error);
     }
