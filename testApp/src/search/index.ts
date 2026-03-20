@@ -1,4 +1,15 @@
 export {
+  keywordSearchDocument,
+  type KeywordSearchResult,
+  type KeywordSearchOptions
+} from './keywordSearch';
+
+export {
+  useKeywordSearch,
+  type UseKeywordSearchReturn
+} from './useKeywordSearch';
+
+export {
   // Types
   type TextChunk,
   type EmbeddedChunk,

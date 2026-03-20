@@ -13,7 +13,7 @@ import type {
   ExtractedTable
 } from '../types';
 import type { TableModel } from '../viewer/htmlStructuredDataRenderer';
-import type { SemanticSearchResult } from '../search';
+import type { KeywordSearchResult, SemanticSearchResult } from '../search';
 import type { GeminiDocumentExtraction } from '../storage/geminiExtractionStorage';
 import { CanvasPageWithOverlay } from './CanvasPageWithOverlay';
 import { StructuredChartOverlay } from './StructuredChartOverlay';
@@ -54,6 +54,8 @@ interface ViewerColumnProps {
   structuredContainerRef: React.RefObject<HTMLDivElement>;
   structuredSelection: StructuredSelection | null;
   onClearStructuredSelection: () => void;
+  keywordSearchResults: KeywordSearchResult[];
+  activeKeywordResultId?: string;
   semanticSearchResults: SemanticSearchResult[];
   activeSemanticResultIndex: number;
   geminiExtraction: GeminiDocumentExtraction | null;
@@ -100,6 +102,8 @@ export function ViewerColumn({
   structuredContainerRef,
   structuredSelection,
   onClearStructuredSelection,
+  keywordSearchResults,
+  activeKeywordResultId,
   semanticSearchResults,
   activeSemanticResultIndex,
   geminiExtraction,
@@ -150,6 +154,8 @@ export function ViewerColumn({
                       focusLayout={focusState.status === 'ready' ? focusState.layout : null}
                       focusProvider={focusProvider}
                       extractedTables={extractedTables}
+                      keywordSearchResults={keywordSearchResults.filter((result) => result.pageNumber === page.number)}
+                      activeKeywordResultId={activeKeywordResultId}
                       semanticSearchResults={semanticSearchResults.filter((r) => r.chunk.pageNumber === page.number)}
                       activeSemanticResultId={semanticSearchResults[activeSemanticResultIndex]?.chunk.id}
                       geminiExtraction={geminiExtraction}

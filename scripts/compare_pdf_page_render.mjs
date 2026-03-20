@@ -198,6 +198,120 @@ async function renderReferencePage({ pdfToCairoPath, pdfPath, pageNumber, scale,
   }
 }
 
+async function identifyImageSize({ magickPath, inputPath }) {
+  const result = await runCommand(magickPath, [
+    'identify',
+    '-format',
+    '%w %h',
+    inputPath
+  ]);
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout || `magick identify failed for ${inputPath}`);
+  }
+
+  const [widthText, heightText] = result.stdout.trim().split(/\s+/);
+  const width = Number(widthText);
+  const height = Number(heightText);
+  if (!(width > 0) || !(height > 0)) {
+    throw new Error(`Unable to parse image size for ${inputPath}: ${result.stdout.trim()}`);
+  }
+
+  return { width, height };
+}
+
+async function normalizeImageCanvas({
+  magickPath,
+  inputPath,
+  outputPath,
+  width,
+  height
+}) {
+  const result = await runCommand(magickPath, [
+    inputPath,
+    '-background',
+    'white',
+    '-gravity',
+    'NorthWest',
+    '-extent',
+    `${width}x${height}`,
+    outputPath
+  ]);
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout || `magick extent failed for ${inputPath}`);
+  }
+}
+
+async function preprocessForCompare({ magickPath, inputPath, outputPath, threshold }) {
+  const args = [inputPath, '-colorspace', 'Gray'];
+  if (threshold) {
+    args.push('-threshold', threshold);
+  }
+  args.push(outputPath);
+  const result = await runCommand(magickPath, args);
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout || `magick preprocess failed for ${inputPath}`);
+  }
+}
+
+async function computeTileDarkness({
+  magickPath,
+  inputPath,
+  x,
+  y,
+  width,
+  height
+}) {
+  const result = await runCommand(magickPath, [
+    inputPath,
+    '-crop',
+    `${width}x${height}+${x}+${y}`,
+    '+repage',
+    '-format',
+    '%[fx:1-mean]',
+    'info:'
+  ]);
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout || `magick tile analysis failed for ${inputPath}`);
+  }
+
+  const darkness = Number(result.stdout.trim());
+  return Number.isFinite(darkness) ? darkness : 0;
+}
+
+async function computeDiffHotspots({
+  magickPath,
+  diffPath,
+  tileSize,
+  limit
+}) {
+  if (!(tileSize > 0) || !(limit > 0)) {
+    return [];
+  }
+
+  const size = await identifyImageSize({ magickPath, inputPath: diffPath });
+  const hotspots = [];
+
+  for (let y = 0; y < size.height; y += tileSize) {
+    for (let x = 0; x < size.width; x += tileSize) {
+      const width = Math.min(tileSize, size.width - x);
+      const height = Math.min(tileSize, size.height - y);
+      const darkness = await computeTileDarkness({
+        magickPath,
+        inputPath: diffPath,
+        x,
+        y,
+        width,
+        height
+      });
+      hotspots.push({ x, y, width, height, darkness });
+    }
+  }
+
+  return hotspots
+    .sort((left, right) => right.darkness - left.darkness)
+    .slice(0, limit);
+}
+
 async function compareImages({ magickPath, referencePath, actualPath, diffPath }) {
   const compareResult = await runCommand(magickPath, [
     'compare',
@@ -248,6 +362,9 @@ async function main() {
     : mkdtempSync(join(tmpdir(), `${pdfBaseName}-compare-`));
   const pdfToCairoPath = resolveToolPath('PDFTOCAIRO_BIN', '/opt/homebrew/bin/pdftocairo', 'pdftocairo');
   const magickPath = resolveToolPath('MAGICK_BIN', '/opt/homebrew/bin/magick', 'magick');
+  const threshold = args.get('threshold');
+  const tileSize = Math.max(0, Math.floor(parseNumber(args.get('tile-size'), 0)));
+  const topTiles = Math.max(0, Math.floor(parseNumber(args.get('top-tiles'), 3)));
 
   mkdirSync(outputRoot, { recursive: true });
 
@@ -275,8 +392,12 @@ async function main() {
 
     const pagePrefix = join(outputRoot, `page-${String(pageNumber).padStart(4, '0')}`);
     const actualPath = `${pagePrefix}-actual.png`;
+    const actualNormalizedPath = `${pagePrefix}-actual-normalized.png`;
+    const actualComparePath = threshold ? `${pagePrefix}-actual-compare.png` : actualNormalizedPath;
     const referenceStem = `${pagePrefix}-reference`;
     const referencePath = `${referenceStem}.png`;
+    const referenceNormalizedPath = `${pagePrefix}-reference-normalized.png`;
+    const referenceComparePath = threshold ? `${pagePrefix}-reference-compare.png` : referenceNormalizedPath;
     const diffPath = `${pagePrefix}-diff.png`;
 
     await captureRenderedPage({
@@ -293,11 +414,49 @@ async function main() {
       scale,
       outputStem: referenceStem
     });
+    const actualSize = await identifyImageSize({ magickPath, inputPath: actualPath });
+    const referenceSize = await identifyImageSize({ magickPath, inputPath: referencePath });
+    const normalizedWidth = Math.max(actualSize.width, referenceSize.width);
+    const normalizedHeight = Math.max(actualSize.height, referenceSize.height);
+    await normalizeImageCanvas({
+      magickPath,
+      inputPath: actualPath,
+      outputPath: actualNormalizedPath,
+      width: normalizedWidth,
+      height: normalizedHeight
+    });
+    await normalizeImageCanvas({
+      magickPath,
+      inputPath: referencePath,
+      outputPath: referenceNormalizedPath,
+      width: normalizedWidth,
+      height: normalizedHeight
+    });
+    if (threshold) {
+      await preprocessForCompare({
+        magickPath,
+        inputPath: actualNormalizedPath,
+        outputPath: actualComparePath,
+        threshold
+      });
+      await preprocessForCompare({
+        magickPath,
+        inputPath: referenceNormalizedPath,
+        outputPath: referenceComparePath,
+        threshold
+      });
+    }
     const comparison = await compareImages({
       magickPath,
-      referencePath,
-      actualPath,
+      referencePath: referenceComparePath,
+      actualPath: actualComparePath,
       diffPath
+    });
+    const hotspots = await computeDiffHotspots({
+      magickPath,
+      diffPath,
+      tileSize,
+      limit: topTiles
     });
 
     results.push({
@@ -305,6 +464,7 @@ async function main() {
       actualPath,
       diffBounds: comparison.diffBounds,
       diffPath,
+      hotspots,
       metric: comparison.metric,
       referencePath
     });
@@ -323,8 +483,19 @@ async function main() {
     process.stdout.write(
       `page ${result.pageNumber}: rmse=${metric} diffBounds=${result.diffBounds || 'n/a'}\n`
     );
+    for (const hotspot of result.hotspots ?? []) {
+      process.stdout.write(
+        `  hotspot ${hotspot.x},${hotspot.y},${hotspot.width},${hotspot.height}: darkness=${hotspot.darkness.toFixed(6)}\n`
+      );
+    }
   }
 
+  if (threshold) {
+    process.stdout.write(`threshold=${threshold}\n`);
+  }
+  if (tileSize > 0 && topTiles > 0) {
+    process.stdout.write(`tileSize=${tileSize} topTiles=${topTiles}\n`);
+  }
   process.stdout.write(`artifacts: ${outputRoot}\n`);
 }
 

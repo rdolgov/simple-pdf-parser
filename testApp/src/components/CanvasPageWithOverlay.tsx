@@ -10,7 +10,7 @@ import {
   type PDFPage
 } from 'pdf-layout-parser';
 import type { CanvasHighlightSelection, CanvasPageRenderState, FocusProvider, ExtractedTable } from '../types';
-import type { SemanticSearchResult } from '../search';
+import type { KeywordSearchResult, SemanticSearchResult } from '../search';
 import { TableViewer, type TableSortState } from './TableViewer';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
 import { ExploreIcon, ImageIcon, LoadingIcon, MathIcon, WidgetIcon } from './OverlayIcons';
@@ -175,6 +175,8 @@ interface CanvasPageWithOverlayProps {
   focusLayout: any;
   focusProvider: FocusProvider;
   extractedTables: ExtractedTable[];
+  keywordSearchResults?: KeywordSearchResult[];
+  activeKeywordResultId?: string;
   semanticSearchResults?: SemanticSearchResult[];
   activeSemanticResultId?: string;
   geminiExtraction?: GeminiDocumentExtraction | null;
@@ -207,6 +209,8 @@ export function CanvasPageWithOverlay({
   focusLayout,
   focusProvider,
   extractedTables,
+  keywordSearchResults = [],
+  activeKeywordResultId,
   semanticSearchResults = [],
   activeSemanticResultId,
   geminiExtraction,
@@ -2180,6 +2184,7 @@ export function CanvasPageWithOverlay({
   const renderStatusMessage =
     renderState === 'ready' ? null : getCanvasRenderStatusMessage(pageNumber, renderState);
   const hasOverlayContent = highlightBlocks.length > 0 || Boolean(tableOverlay);
+  const hasKeywordHighlights = keywordSearchResults.length > 0;
   const hasSemanticHighlights = semanticSearchResults.length > 0;
   const hasLassoOverlay = lassoDraftPoints.length > 1 || Boolean(lassoSelection);
   const activeLassoPoints = lassoDraftPoints.length > 1 ? lassoDraftPoints : lassoSelection?.points ?? [];
@@ -2223,6 +2228,34 @@ export function CanvasPageWithOverlay({
             <div className="canvas-page-render-message-title">{renderStatusMessage?.title}</div>
             <div className="canvas-page-render-message-detail">{renderStatusMessage?.detail}</div>
           </div>
+        </div>
+      )}
+      {canvasRef.current && hasKeywordHighlights && (
+        <div className="canvas-overlay-layer" aria-hidden="true">
+          {keywordSearchResults.flatMap((result) => {
+            const isActive = result.id === activeKeywordResultId;
+            return result.fragments.map((bounds, fragmentIndex) => {
+              const canvasPadding = 16 * zoom;
+              const highlightPadding = isActive ? 4 : 2;
+              const left = bounds.minX * scaleX + canvasPadding - highlightPadding;
+              const top = (page.size.height - bounds.maxY) * scaleY + canvasPadding - highlightPadding;
+              const width = (bounds.maxX - bounds.minX) * scaleX + highlightPadding * 2;
+              const height = (bounds.maxY - bounds.minY) * scaleY + highlightPadding * 2;
+              return (
+                <div
+                  key={`${result.id}:${fragmentIndex}`}
+                  className={`keyword-search-highlight${isActive ? ' keyword-search-highlight--active' : ''}`}
+                  style={{
+                    left: `${left}px`,
+                    top: `${top}px`,
+                    width: `${width}px`,
+                    height: `${height}px`
+                  }}
+                  title={`${result.text} (${result.pageNumber})`}
+                />
+              );
+            });
+          })}
         </div>
       )}
       {/* Semantic search highlights (non-interactive, always visible when present) */}

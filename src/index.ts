@@ -1,5 +1,7 @@
 export * from './pdfDocument.js';
 export * from './parser/pdfParser.js';
+export * from './textItemSubstringBounds.js';
+export * from './textWordGeometry.js';
 export * from './types.js';
 export * from './viewer/canvasRenderer.js';
 export * from './viewer/embeddedFontRegistry.js';
