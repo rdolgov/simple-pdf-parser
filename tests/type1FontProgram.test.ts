@@ -24,4 +24,21 @@ describe('parseType1Font', () => {
     );
     expect(consecutiveMoves).toBe(false);
   });
+
+  it('parses StandardEncoding body fonts so raw Type1 prose glyphs do not collapse to .notdef', () => {
+    const document = PDFDocument.from(readFileSync('pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf'));
+    const bodyFont = document.getFontResource('F63');
+    expect(bodyFont).toBeDefined();
+
+    const parsed = bodyFont ? parseType1Font(bodyFont) : undefined;
+    expect(parsed?.fontName).toContain('NimbusRomNo9L-Regu');
+    expect(parsed?.encoding.get(71)).toBe('G');
+    expect(parsed?.encoding.get(80)).toBe('P');
+    expect(parsed?.encoding.get(85)).toBe('U');
+    expect(parsed?.encoding.get(115)).toBe('s');
+    expect(parsed?.encoding.get(46)).toBe('period');
+    expect(parsed?.glyphs.get('G')?.pathCommands.length ?? 0).toBeGreaterThan(0);
+    expect(parsed?.glyphs.get('U')?.pathCommands.length ?? 0).toBeGreaterThan(0);
+    expect(parsed?.glyphs.get('period')?.pathCommands.length ?? 0).toBeGreaterThan(0);
+  });
 });

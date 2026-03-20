@@ -1,4 +1,5 @@
 import type { PDFEmbeddedFontResource, Type3PathCommand } from '../types.js';
+import { resolveStandardEncodingGlyphName } from './cffStandardStrings.js';
 
 export interface ParsedType1Glyph {
   glyphName: string;
@@ -48,7 +49,7 @@ export function parseType1Font(resource: PDFEmbeddedFontResource): ParsedType1Fo
   const cleartextSource = cleartextEnd === -1 ? sourceText : sourceText.slice(0, cleartextEnd);
   const fontMatrix = parseFontMatrix(cleartextSource) ?? DEFAULT_FONT_MATRIX;
   const fontBBox = parseFontBBox(cleartextSource);
-  const encoding = parseType1Encoding(cleartextSource);
+  const encoding = parseType1Encoding(cleartextSource, resource);
 
   if (cleartextEnd === -1) {
     return undefined;
@@ -130,25 +131,68 @@ function parseFontName(source: string): string | undefined {
   return match?.[1];
 }
 
-function parseType1Encoding(source: string): Map<number, string> {
+function parseType1Encoding(source: string, resource?: PDFEmbeddedFontResource): Map<number, string> {
   const encoding = new Map<number, string>();
   for (let code = 0; code < 256; code += 1) {
     encoding.set(code, '.notdef');
   }
 
   const sectionIndex = source.indexOf('/Encoding');
-  if (sectionIndex === -1) {
-    return encoding;
+  const section = sectionIndex === -1
+    ? ''
+    : source.slice(sectionIndex, Math.min(source.length, sectionIndex + 6000));
+
+  const programBaseEncoding = parseNamedType1Encoding(section);
+  if (programBaseEncoding) {
+    applyNamedType1Encoding(encoding, programBaseEncoding);
+  }
+  if (resource?.baseEncoding) {
+    applyNamedType1Encoding(encoding, resource.baseEncoding);
   }
 
-  const section = source.slice(sectionIndex, Math.min(source.length, sectionIndex + 6000));
-  const putPattern = /dup\s+(\d+)\s+\/([^\s]+)\s+put/g;
-  let match: RegExpExecArray | null;
-  while ((match = putPattern.exec(section)) !== null) {
-    encoding.set(Number(match[1]) & 0xff, match[2]);
+  if (section) {
+    const putPattern = /dup\s+(\d+)\s+\/([^\s]+)\s+put/g;
+    let match: RegExpExecArray | null;
+    while ((match = putPattern.exec(section)) !== null) {
+      encoding.set(Number(match[1]) & 0xff, match[2]);
+    }
+  }
+
+  if (resource?.glyphNames) {
+    for (const [code, glyphName] of Object.entries(resource.glyphNames)) {
+      const numericCode = Number(code);
+      if (!Number.isFinite(numericCode) || !glyphName) {
+        continue;
+      }
+      encoding.set(numericCode & 0xff, glyphName);
+    }
   }
 
   return encoding;
+}
+
+function parseNamedType1Encoding(section: string): string | undefined {
+  if (!section) {
+    return undefined;
+  }
+
+  const match = section.match(/\/Encoding\s+\/?([A-Za-z0-9]+)\s+def\b/);
+  return match?.[1];
+}
+
+function applyNamedType1Encoding(target: Map<number, string>, encodingName: string): void {
+  switch (encodingName) {
+    case 'StandardEncoding':
+      for (let code = 0; code < 256; code += 1) {
+        const glyphName = resolveStandardEncodingGlyphName(code);
+        if (glyphName) {
+          target.set(code, glyphName);
+        }
+      }
+      break;
+    default:
+      break;
+  }
 }
 
 function parseLenIV(source: string): number {

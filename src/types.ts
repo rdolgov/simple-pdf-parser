@@ -74,6 +74,10 @@ export interface PDFEmbeddedFontResource {
   objectKey: string;
   baseFontName?: string;
   subtype?: string;
+  /** Optional named base encoding from the PDF font dictionary or font program. */
+  baseEncoding?: string;
+  /** Optional code -> glyph-name overrides from the PDF font dictionary. */
+  glyphNames?: Record<number, string>;
   fontFileKey?: string;
   fontFileKind?: 'FontFile' | 'FontFile2' | 'FontFile3';
   fontFileSubtype?: string;

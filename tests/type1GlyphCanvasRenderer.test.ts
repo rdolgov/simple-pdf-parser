@@ -165,4 +165,44 @@ describe('CanvasRenderer raw Type1 glyph rendering', () => {
       (superscript!.fontSize ?? 0) * Math.abs(parsedFont!.fontMatrix[0] || 0.001) * Math.abs(superscript!.textHorizontalScale ?? 1);
     expect(fills[0]!.scaleX).toBeCloseTo(expectedScaleX, 6);
   });
+
+  it('renders StandardEncoding raw Type1 prose as vector glyph paths instead of falling back to browser text', async () => {
+    const sourceDocument = PDFDocument.from(readFileSync('pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf'));
+    const page = sourceDocument.getPage(7);
+    const bodyLine = page?.textItems.find((item) => item.text.includes('P100 GPUs. For our base models using'));
+    expect(bodyLine).toBeDefined();
+    expect(bodyLine?.fontResourceKey).toBeDefined();
+
+    const font = bodyLine?.fontResourceKey ? sourceDocument.getFontResource(bodyLine.fontResourceKey) : undefined;
+    expect(font).toBeDefined();
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          textItems: [{ ...bodyLine! }],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 700, height: 500 }
+        }
+      ],
+      fontResources: font && bodyLine?.fontResourceKey
+        ? {
+            [bodyLine.fontResourceKey]: font
+          }
+        : undefined
+    };
+
+    const document = new PDFDocument(layout);
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer();
+
+    await renderer.prepareDocumentFonts(document);
+    renderer.render(canvas, document, 1);
+
+    expect(context.textDraws.some((draw) => draw.text.includes('P100 GPUs'))).toBe(false);
+    expect(context.pathPaints.filter((paint) => paint.kind === 'fill').length).toBeGreaterThan(20);
+  });
 });

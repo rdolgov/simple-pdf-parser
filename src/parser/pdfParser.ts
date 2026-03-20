@@ -2864,6 +2864,15 @@ export class PDFParser {
 
     const encodingInfo = extractEncodingInfo(fontObject.dictionarySource, objects);
 
+    if (resource.embeddedFont && encodingInfo) {
+      if (encodingInfo.baseEncoding) {
+        resource.embeddedFont.baseEncoding = encodingInfo.baseEncoding;
+      }
+      if (encodingInfo.differences && encodingInfo.differences.size > 0) {
+        resource.embeddedFont.glyphNames = Object.fromEntries(encodingInfo.differences.entries());
+      }
+    }
+
     if (!resource.toUnicodeMap) {
       const encodingMap = buildEncodingMap(fontObject, objects);
 
