@@ -22,15 +22,33 @@ export function InteractiveWidgetPopup({
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
   const [panelSize, setPanelSize] = useState<{ width: number; height: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const isDraggingRef = useRef(false);
   const isResizingRef = useRef(false);
   const dragStartRef = useRef<{ mouseX: number; mouseY: number; elemX: number; elemY: number } | null>(null);
   const resizeStartRef = useRef<{ mouseX: number; mouseY: number; width: number; height: number } | null>(null);
+  const fitFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     setDragPosition(null);
     setPanelSize(null);
   }, [position.top, position.left, title, srcDoc]);
+
+  const requestWidgetRefit = useCallback(() => {
+    if (fitFrameRef.current !== null) {
+      cancelAnimationFrame(fitFrameRef.current);
+    }
+
+    fitFrameRef.current = requestAnimationFrame(() => {
+      fitFrameRef.current = requestAnimationFrame(() => {
+        fitFrameRef.current = null;
+        const iframeWindow = iframeRef.current?.contentWindow as (Window & {
+          __interactiveWidgetRefit?: () => void;
+        }) | null;
+        iframeWindow?.__interactiveWidgetRefit?.();
+      });
+    });
+  }, []);
 
   const handlePointerStart = useCallback((event: ReactMouseEvent) => {
     const target = event.target as HTMLElement;
@@ -108,6 +126,35 @@ export function InteractiveWidgetPopup({
     };
   }, []);
 
+  useEffect(() => {
+    requestWidgetRefit();
+  }, [panelSize, requestWidgetRefit, srcDoc]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      requestWidgetRefit();
+    });
+    resizeObserver.observe(container);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [requestWidgetRefit]);
+
+  useEffect(() => {
+    return () => {
+      if (fitFrameRef.current !== null) {
+        cancelAnimationFrame(fitFrameRef.current);
+        fitFrameRef.current = null;
+      }
+    };
+  }, []);
+
   const handleContainerClick = useCallback((event: ReactMouseEvent) => {
     event.stopPropagation();
   }, []);
@@ -148,11 +195,13 @@ export function InteractiveWidgetPopup({
           <div className="interactive-widget-error">{error}</div>
         ) : (
           <iframe
+            ref={iframeRef}
             className="interactive-widget-frame"
             title={title}
             sandbox="allow-scripts"
             referrerPolicy="no-referrer"
             srcDoc={srcDoc}
+            onLoad={requestWidgetRefit}
           />
         )}
       </div>

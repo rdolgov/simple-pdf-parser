@@ -185,6 +185,7 @@ export function buildInteractiveWidgetSrcDoc(spec: InteractiveWidgetSpec): strin
         const viewport = document.getElementById("widget-viewport");
         const frame = document.getElementById("widget-frame");
         const root = document.getElementById("widget-root");
+        const docElement = document.documentElement;
 
         let fitFrame = 0;
         const scheduleFit = () => {
@@ -198,6 +199,8 @@ export function buildInteractiveWidgetSrcDoc(spec: InteractiveWidgetSpec): strin
               }
 
               root.style.removeProperty("--widget-scale");
+              root.style.removeProperty("--widget-content-width");
+              root.style.removeProperty("--widget-content-height");
               root.style.transform = "scale(1)";
               root.style.width = "max-content";
               root.style.minHeight = "0";
@@ -219,6 +222,7 @@ export function buildInteractiveWidgetSrcDoc(spec: InteractiveWidgetSpec): strin
             });
           });
         };
+        window.__interactiveWidgetRefit = scheduleFit;
 
         try {
           ${safeJs}
@@ -244,16 +248,29 @@ export function buildInteractiveWidgetSrcDoc(spec: InteractiveWidgetSpec): strin
           });
         }
 
-        if (viewport && "ResizeObserver" in window) {
+        if ("ResizeObserver" in window) {
           const resizeObserver = new ResizeObserver(scheduleFit);
-          resizeObserver.observe(viewport);
+          if (viewport) {
+            resizeObserver.observe(viewport);
+          }
+          if (frame) {
+            resizeObserver.observe(frame);
+          }
+          if (root) {
+            resizeObserver.observe(root);
+          }
           resizeObserver.observe(document.body);
+          resizeObserver.observe(docElement);
         }
 
         document.addEventListener("input", scheduleFit, true);
         document.addEventListener("change", scheduleFit, true);
+        document.addEventListener("transitionend", scheduleFit, true);
         window.addEventListener("load", scheduleFit);
         window.addEventListener("resize", scheduleFit);
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener("resize", scheduleFit);
+        }
         scheduleFit();
       })();
     </script>
