@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { KeyboardEvent, FocusEvent } from 'react';
-import type { IndexingProgress, SemanticSearchResult } from '../search';
+import type { KeyboardEvent, FocusEvent, MouseEvent as ReactMouseEvent } from 'react';
+import type { IndexingProgress, KeywordSearchResult, SemanticSearchResult } from '../search';
 import type { ExtractState, GeminiExtractionState } from '../hooks';
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 import {
@@ -26,9 +26,15 @@ interface SemanticSearchBarProps {
   onClearSearch: () => void;
   searchResults: SemanticSearchResult[];
   isSearching: boolean;
+  onKeywordSearch: (query: string) => Promise<KeywordSearchResult[]>;
+  onClearKeywordSearch: () => void;
+  keywordSearchResults: KeywordSearchResult[];
+  isKeywordSearching: boolean;
   disabled?: boolean;
   activeResultIndex: number;
   onNavigateResult: (index: number) => void;
+  activeKeywordResultIndex: number;
+  onNavigateKeywordResult: (index: number) => void;
   documentId?: string;
   extractState: ExtractState;
   geminiExtractionState: GeminiExtractionState;
@@ -53,9 +59,15 @@ export function SemanticSearchBar({
   onClearSearch,
   searchResults,
   isSearching,
+  onKeywordSearch,
+  onClearKeywordSearch,
+  keywordSearchResults,
+  isKeywordSearching,
   disabled = false,
   activeResultIndex,
   onNavigateResult,
+  activeKeywordResultIndex,
+  onNavigateKeywordResult,
   documentId,
   extractState,
   geminiExtractionState,
@@ -63,17 +75,26 @@ export function SemanticSearchBar({
   aiDetectionModeDescription,
   onRunAiDetection
 }: SemanticSearchBarProps): JSX.Element {
-  const [query, setQuery] = useState('');
+  const [searchMode, setSearchMode] = useState<'semantic' | 'keyword'>('semantic');
+  const [semanticQuery, setSemanticQuery] = useState('');
+  const [keywordQuery, setKeywordQuery] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
-  const [lastSearchedQuery, setLastSearchedQuery] = useState('');
+  const [lastSemanticQuery, setLastSemanticQuery] = useState('');
+  const [lastKeywordQuery, setLastKeywordQuery] = useState('');
   const [showHistory, setShowHistory] = useState(false);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const hasResults = searchResults.length > 0;
+  const isSemanticMode = searchMode === 'semantic';
+  const query = isSemanticMode ? semanticQuery : keywordQuery;
+  const hasResults = isSemanticMode ? searchResults.length > 0 : keywordSearchResults.length > 0;
+  const lastSearchedQuery = isSemanticMode ? lastSemanticQuery : lastKeywordQuery;
   const queryChanged = query.trim() !== lastSearchedQuery;
+  const isActiveSearching = isSemanticMode ? isSearching : isKeywordSearching;
+  const activeResultsCount = isSemanticMode ? searchResults.length : keywordSearchResults.length;
+  const currentResultIndex = isSemanticMode ? activeResultIndex : activeKeywordResultIndex;
   const isAiDetectionRunning = extractState.status === 'loading' || geminiExtractionState.status === 'loading';
   const isAiDetectionReady = extractState.status === 'ready' && geminiExtractionState.status === 'ready';
   const aiDetectionButtonLabel = !aiDetectionSupport.supported
@@ -96,7 +117,7 @@ export function SemanticSearchBar({
 
   // Close history dropdown when clicking outside
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (event: globalThis.MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setShowHistory(false);
       }
@@ -112,44 +133,71 @@ export function SemanticSearchBar({
 
   const handleSubmit = useCallback(async () => {
     const trimmed = query.trim();
-    if (!trimmed || isSearching || !isIndexed) {
+    if (!trimmed || isActiveSearching || (isSemanticMode && !isIndexed)) {
       return;
     }
 
-    // If query hasn't changed and we have results, navigate to next
     if (!queryChanged && hasResults) {
-      const nextIndex = (activeResultIndex + 1) % searchResults.length;
-      onNavigateResult(nextIndex);
+      if (isSemanticMode) {
+        const nextIndex = (activeResultIndex + 1) % searchResults.length;
+        onNavigateResult(nextIndex);
+      } else {
+        const nextIndex = (activeKeywordResultIndex + 1) % keywordSearchResults.length;
+        onNavigateKeywordResult(nextIndex);
+      }
       return;
     }
 
-    // Otherwise perform new search
     setShowHistory(false);
-    await onSearch(trimmed);
-    setLastSearchedQuery(trimmed);
+    if (isSemanticMode) {
+      onClearKeywordSearch();
+      await onSearch(trimmed);
+      setLastSemanticQuery(trimmed);
+      await addSearchToHistory(trimmed, documentId);
+      refreshHistory();
+      return;
+    }
 
-    // Add to history
-    await addSearchToHistory(trimmed, documentId);
-    refreshHistory();
-  }, [query, isSearching, isIndexed, onSearch, queryChanged, hasResults, activeResultIndex, searchResults.length, onNavigateResult, documentId, refreshHistory]);
+    onClearSearch();
+    await onKeywordSearch(trimmed);
+    setLastKeywordQuery(trimmed);
+  }, [
+    query,
+    isActiveSearching,
+    isSemanticMode,
+    isIndexed,
+    queryChanged,
+    hasResults,
+    activeResultIndex,
+    searchResults.length,
+    onNavigateResult,
+    activeKeywordResultIndex,
+    keywordSearchResults.length,
+    onNavigateKeywordResult,
+    onClearKeywordSearch,
+    onSearch,
+    documentId,
+    refreshHistory,
+    onClearSearch,
+    onKeywordSearch
+  ]);
 
   const handleHistoryClick = useCallback(async (entry: SearchHistoryEntry) => {
-    setQuery(entry.query);
+    setSemanticQuery(entry.query);
     setShowHistory(false);
     setHistoryIndex(-1);
 
-    // Execute search immediately
     if (isIndexed && !isSearching) {
+      onClearKeywordSearch();
       await onSearch(entry.query);
-      setLastSearchedQuery(entry.query);
-      // Move to top of history
+      setLastSemanticQuery(entry.query);
       await addSearchToHistory(entry.query, documentId);
       refreshHistory();
     }
-  }, [isIndexed, isSearching, onSearch, documentId, refreshHistory]);
+  }, [isIndexed, isSearching, onClearKeywordSearch, onSearch, documentId, refreshHistory]);
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>) => {
-    if (showHistory && searchHistory.length > 0) {
+    if (isSemanticMode && showHistory && searchHistory.length > 0) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         setHistoryIndex((prev) => Math.min(prev + 1, searchHistory.length - 1));
@@ -177,19 +225,41 @@ export function SemanticSearchBar({
         setShowHistory(false);
         setHistoryIndex(-1);
       } else {
-        setQuery('');
-        onClearSearch();
+        if (isSemanticMode) {
+          setSemanticQuery('');
+          setLastSemanticQuery('');
+          onClearSearch();
+        } else {
+          setKeywordQuery('');
+          setLastKeywordQuery('');
+          onClearKeywordSearch();
+        }
         inputRef.current?.blur();
       }
     }
-  }, [handleSubmit, onClearSearch, showHistory, searchHistory, historyIndex, handleHistoryClick]);
+  }, [
+    handleSubmit,
+    isSemanticMode,
+    onClearSearch,
+    onClearKeywordSearch,
+    showHistory,
+    searchHistory,
+    historyIndex,
+    handleHistoryClick
+  ]);
 
   const handleClear = useCallback(() => {
-    setQuery('');
-    setLastSearchedQuery('');
-    onClearSearch();
+    if (isSemanticMode) {
+      setSemanticQuery('');
+      setLastSemanticQuery('');
+      onClearSearch();
+    } else {
+      setKeywordQuery('');
+      setLastKeywordQuery('');
+      onClearKeywordSearch();
+    }
     inputRef.current?.focus();
-  }, [onClearSearch]);
+  }, [isSemanticMode, onClearSearch, onClearKeywordSearch]);
 
   const handleToggleExpand = useCallback(() => {
     setIsExpanded((prev) => !prev);
@@ -199,11 +269,11 @@ export function SemanticSearchBar({
   }, [isExpanded]);
 
   const handleInputFocus = useCallback(() => {
-    if (searchHistory.length > 0) {
+    if (isSemanticMode && searchHistory.length > 0) {
       setShowHistory(true);
       setHistoryIndex(-1);
     }
-  }, [searchHistory.length]);
+  }, [isSemanticMode, searchHistory.length]);
 
   const handleInputBlur = useCallback((event: FocusEvent<HTMLInputElement>) => {
     // Don't close if clicking within the container (history dropdown)
@@ -215,7 +285,7 @@ export function SemanticSearchBar({
     setTimeout(() => setShowHistory(false), 150);
   }, []);
 
-  const handleDeleteHistory = useCallback(async (event: React.MouseEvent, id: string) => {
+  const handleDeleteHistory = useCallback(async (event: ReactMouseEvent<HTMLButtonElement>, id: string) => {
     event.stopPropagation();
     await deleteSearchFromHistory(id);
     refreshHistory();
@@ -231,12 +301,26 @@ export function SemanticSearchBar({
     }
   }, [showHistory, refreshHistory]);
 
-  // Auto-expand when there are results
   useEffect(() => {
-    if (searchResults.length > 0) {
+    if (searchResults.length > 0 || keywordSearchResults.length > 0) {
       setIsExpanded(true);
     }
-  }, [searchResults.length]);
+  }, [searchResults.length, keywordSearchResults.length]);
+
+  const handleModeChange = useCallback((mode: 'semantic' | 'keyword') => {
+    if (mode === searchMode) {
+      return;
+    }
+    setSearchMode(mode);
+    setShowHistory(false);
+    setHistoryIndex(-1);
+    if (mode === 'semantic') {
+      onClearKeywordSearch();
+    } else {
+      onClearSearch();
+    }
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [searchMode, onClearKeywordSearch, onClearSearch]);
 
   const progressPercent = indexingProgress.totalChunks > 0
     ? Math.round((indexingProgress.processedChunks / indexingProgress.totalChunks) * 100)
@@ -268,31 +352,58 @@ export function SemanticSearchBar({
           className="semantic-search-toggle"
           onClick={handleToggleExpand}
           aria-label={isExpanded ? 'Collapse search' : 'Expand search'}
-          title="Semantic Search"
+          title="Search"
         >
           <SearchIcon />
         </button>
 
-        {/* Search Input */}
         <div className={`semantic-search-input-wrapper ${isExpanded ? 'semantic-search-input-wrapper--visible' : ''}`}>
+          <div className="semantic-search-mode-toggle" role="tablist" aria-label="Search mode">
+            <button
+              type="button"
+              className={`semantic-search-mode-btn${isSemanticMode ? ' semantic-search-mode-btn--active' : ''}`}
+              onClick={() => handleModeChange('semantic')}
+              role="tab"
+              aria-selected={isSemanticMode}
+            >
+              Semantic
+            </button>
+            <button
+              type="button"
+              className={`semantic-search-mode-btn${!isSemanticMode ? ' semantic-search-mode-btn--active' : ''}`}
+              onClick={() => handleModeChange('keyword')}
+              role="tab"
+              aria-selected={!isSemanticMode}
+            >
+              Keyword
+            </button>
+          </div>
+
           <input
             ref={inputRef}
             type="text"
             className="semantic-search-input"
-            placeholder={isIndexed ? 'Search document...' : 'Index document first...'}
+            placeholder={
+              isSemanticMode
+                ? (isIndexed ? 'Search document semantically...' : 'Index document first...')
+                : 'Find exact words on the page...'
+            }
             value={query}
             onChange={(e) => {
-              setQuery(e.target.value);
+              if (isSemanticMode) {
+                setSemanticQuery(e.target.value);
+              } else {
+                setKeywordQuery(e.target.value);
+              }
               setHistoryIndex(-1);
             }}
             onKeyDown={handleKeyDown}
             onFocus={handleInputFocus}
             onBlur={handleInputBlur}
-            disabled={disabled || !isIndexed || isSearching}
+            disabled={disabled || isActiveSearching || (isSemanticMode && !isIndexed)}
           />
 
-          {/* History Toggle Button */}
-          {isIndexed && searchHistory.length > 0 && (
+          {isSemanticMode && isIndexed && searchHistory.length > 0 && (
             <button
               type="button"
               className={`semantic-search-history-btn ${showHistory ? 'semantic-search-history-btn--active' : ''}`}
@@ -319,14 +430,13 @@ export function SemanticSearchBar({
             type="button"
             className="semantic-search-submit"
             onClick={handleSubmit}
-            disabled={!query.trim() || !isIndexed || isSearching}
+            disabled={!query.trim() || isActiveSearching || (isSemanticMode && !isIndexed)}
             aria-label="Search"
           >
-            {isSearching ? <LoadingIcon /> : <ArrowIcon />}
+            {isActiveSearching ? <LoadingIcon /> : <ArrowIcon />}
           </button>
 
-          {/* Search History Dropdown */}
-          {showHistory && searchHistory.length > 0 && (
+          {isSemanticMode && showHistory && searchHistory.length > 0 && (
             <div className="semantic-search-history">
               <div className="semantic-search-history-header">
                 <HistoryIcon />
@@ -358,8 +468,7 @@ export function SemanticSearchBar({
           )}
         </div>
 
-        {/* Index Button */}
-        {!isIndexed && !isIndexing && (
+        {isSemanticMode && !isIndexed && !isIndexing && (
           <button
             type="button"
             className="semantic-search-index-btn"
@@ -372,8 +481,7 @@ export function SemanticSearchBar({
           </button>
         )}
 
-        {/* Indexing Progress */}
-        {isIndexing && (
+        {isSemanticMode && isIndexing && (
           <div className="semantic-search-progress">
             <div className="semantic-search-progress-bar">
               <div
@@ -387,15 +495,13 @@ export function SemanticSearchBar({
           </div>
         )}
 
-        {/* Results Count with position */}
-        {isIndexed && searchResults.length > 0 && (
+        {activeResultsCount > 0 && (
           <div className="semantic-search-results-count">
-            {activeResultIndex + 1} / {searchResults.length}
+            {currentResultIndex + 1} / {activeResultsCount}
           </div>
         )}
 
-        {/* Indexed Badge */}
-        {isIndexed && !isIndexing && searchResults.length === 0 && !query && (
+        {isSemanticMode && isIndexed && !isIndexing && searchResults.length === 0 && !semanticQuery && (
           <div className="semantic-search-indexed-badge" title={`${indexingProgress.totalChunks} chunks indexed`}>
             <CheckIcon />
             <span>Indexed</span>

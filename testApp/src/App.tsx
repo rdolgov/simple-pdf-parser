@@ -41,7 +41,6 @@ import { GlobalErrorDialog } from './components/GlobalErrorDialog';
 import { GlobalProgressOverlay } from './components/GlobalProgressOverlay';
 import { findChapterBounds, getHeadingLevel, collectChapterText, collectChapterBlocks } from './utils/structured';
 import { useKeywordSearch, useSemanticSearch } from './search';
-import { KeywordSearchBar } from './components/KeywordSearchBar';
 import { SemanticSearchBar } from './components/SemanticSearchBar';
 import {
   useZoom,
@@ -1024,43 +1023,38 @@ export default function App(): JSX.Element {
     <div className="app-shell">
       {/* Semantic Search Bar - Only show when document is loaded */}
       {state.status === 'ready' && (
-        <>
-          <KeywordSearchBar
-            onSearch={keywordSearchFn}
-            onClearSearch={clearKeywordSearchResults}
-            searchResults={keywordSearchResults}
-            isSearching={isKeywordSearching}
-            disabled={state.status !== 'ready'}
-            activeResultIndex={activeKeywordResultIndex}
-            onNavigateResult={handleNavigateKeywordResult}
-          />
-          <SemanticSearchBar
-            isIndexed={isIndexed}
-            isIndexing={isIndexing}
-            indexingProgress={indexingProgress}
-            zoomIndicator={zoomIndicator}
-            canUseZoom={canUseZoom}
-            onZoomIn={handleZoomIn}
-            onZoomOut={handleZoomOut}
-            onZoomReset={handleZoomReset}
-            isLassoMode={lassoMode}
-            onToggleLasso={handleToggleLassoMode}
-            onStartIndexing={startIndexing}
-            onSearch={semanticSearchFn}
-            onClearSearch={clearSemanticResults}
-            searchResults={sortedSemanticResults}
-            isSearching={isSearching}
-            disabled={state.status !== 'ready'}
-            activeResultIndex={activeSemanticResultIndex}
-            onNavigateResult={handleNavigateSemanticResult}
-            documentId={loadedFileHash || loadedFileName || 'document'}
-            extractState={extractState}
-            geminiExtractionState={geminiExtractionState}
-            aiDetectionSupport={aiDetectionSupport}
-            aiDetectionModeDescription={aiDetectionModeDescription}
-            onRunAiDetection={handleRunAiDetection}
-          />
-        </>
+        <SemanticSearchBar
+          isIndexed={isIndexed}
+          isIndexing={isIndexing}
+          indexingProgress={indexingProgress}
+          zoomIndicator={zoomIndicator}
+          canUseZoom={canUseZoom}
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          onZoomReset={handleZoomReset}
+          isLassoMode={lassoMode}
+          onToggleLasso={handleToggleLassoMode}
+          onStartIndexing={startIndexing}
+          onSearch={semanticSearchFn}
+          onClearSearch={clearSemanticResults}
+          searchResults={sortedSemanticResults}
+          isSearching={isSearching}
+          onKeywordSearch={keywordSearchFn}
+          onClearKeywordSearch={clearKeywordSearchResults}
+          keywordSearchResults={keywordSearchResults}
+          isKeywordSearching={isKeywordSearching}
+          disabled={state.status !== 'ready'}
+          activeResultIndex={activeSemanticResultIndex}
+          onNavigateResult={handleNavigateSemanticResult}
+          activeKeywordResultIndex={activeKeywordResultIndex}
+          onNavigateKeywordResult={handleNavigateKeywordResult}
+          documentId={loadedFileHash || loadedFileName || 'document'}
+          extractState={extractState}
+          geminiExtractionState={geminiExtractionState}
+          aiDetectionSupport={aiDetectionSupport}
+          aiDetectionModeDescription={aiDetectionModeDescription}
+          onRunAiDetection={handleRunAiDetection}
+        />
       )}
       {state.status === 'idle' ? (
         <EmptyView

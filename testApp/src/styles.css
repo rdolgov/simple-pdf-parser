@@ -1571,111 +1571,6 @@ header p {
 }
 
 /* ============================================================================
-   Keyword Search Bar
-   ============================================================================ */
-
-.keyword-search-bar {
-  position: fixed;
-  top: 72px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 999;
-  pointer-events: auto;
-  max-width: calc(100vw - 24px);
-}
-
-.keyword-search-bar__inner {
-  display: grid;
-  grid-template-columns: auto minmax(260px, 420px) auto auto auto;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 12px;
-  max-width: min(calc(100vw - 24px), 920px);
-  background: linear-gradient(135deg, rgba(255, 253, 244, 0.98), rgba(255, 247, 237, 0.96));
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-radius: 14px;
-  border: 1px solid rgba(251, 146, 60, 0.28);
-  box-shadow:
-    0 8px 24px rgba(124, 45, 18, 0.12),
-    0 2px 8px rgba(15, 23, 42, 0.06);
-}
-
-.keyword-search-bar__label {
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #9a3412;
-}
-
-.keyword-search-bar__input {
-  min-width: 0;
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(251, 146, 60, 0.28);
-  background: rgba(255, 255, 255, 0.9);
-  color: #111827;
-  font-size: 14px;
-}
-
-.keyword-search-bar__input:focus {
-  outline: none;
-  border-color: rgba(217, 119, 6, 0.8);
-  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.18);
-}
-
-.keyword-search-bar__button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 36px;
-  padding: 0 12px;
-  border: none;
-  border-radius: 10px;
-  background: #d97706;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.keyword-search-bar__button:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.keyword-search-bar__button--ghost {
-  background: rgba(255, 255, 255, 0.8);
-  color: #7c2d12;
-  border: 1px solid rgba(251, 146, 60, 0.24);
-}
-
-.keyword-search-bar__status {
-  min-width: 72px;
-  text-align: right;
-  font-size: 12px;
-  font-weight: 700;
-  color: #7c2d12;
-}
-
-@media (max-width: 900px) {
-  .keyword-search-bar {
-    top: 126px;
-  }
-
-  .keyword-search-bar__inner {
-    grid-template-columns: 1fr auto auto;
-  }
-
-  .keyword-search-bar__label,
-  .keyword-search-bar__status {
-    grid-column: 1 / -1;
-    text-align: left;
-  }
-}
-
-/* ============================================================================
    Semantic Search Bar
    ============================================================================ */
 
@@ -1734,19 +1629,60 @@ header p {
   align-items: center;
   gap: 4px;
   max-width: 0;
+  min-width: 0;
   overflow: hidden;
   opacity: 0;
   transition: all 0.25s ease;
 }
 
 .semantic-search-input-wrapper--visible {
-  max-width: 320px;
+  max-width: 560px;
   opacity: 1;
   overflow: visible;
 }
 
+.semantic-search-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.92);
+  flex-shrink: 0;
+}
+
+.semantic-search-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.semantic-search-mode-btn:hover {
+  background: rgba(148, 163, 184, 0.12);
+  color: #1e293b;
+}
+
+.semantic-search-mode-btn--active {
+  background: rgba(59, 130, 246, 0.14);
+  color: #1d4ed8;
+}
+
 .semantic-search-input {
-  width: 240px;
+  width: 220px;
+  min-width: 0;
+  flex: 1 1 220px;
   padding: 8px 12px;
   border: 1px solid rgba(148, 163, 184, 0.4);
   border-radius: 8px;
@@ -2002,6 +1938,7 @@ header p {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   padding: 0;
@@ -2146,6 +2083,29 @@ header p {
 .semantic-search-history-delete svg {
   width: 12px;
   height: 12px;
+}
+
+@media (max-width: 900px) {
+  .semantic-search-bar {
+    top: 12px;
+  }
+
+  .semantic-search-input-wrapper--visible {
+    max-width: min(calc(100vw - 56px), 100%);
+  }
+
+  .semantic-search-mode-toggle {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .semantic-search-mode-btn {
+    flex: 1 1 0;
+  }
+
+  .semantic-search-input {
+    flex-basis: 160px;
+  }
 }
 
 /* Keyword search highlight on canvas */
