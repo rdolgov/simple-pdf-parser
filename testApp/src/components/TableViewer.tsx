@@ -205,7 +205,10 @@ export function TableViewer({
     if (!container) {
       return;
     }
-    const parentRect = getOverlayParentRect(container);
+    const viewportBounds = getOverlayViewportBounds(container, {
+      width: container.offsetWidth,
+      height: container.offsetHeight
+    });
 
     if (target.closest('.table-viewer-resize-handle')) {
       event.preventDefault();
@@ -234,8 +237,8 @@ export function TableViewer({
     dragStartRef.current = {
       mouseX: event.clientX,
       mouseY: event.clientY,
-      elemX: clamp(container.offsetLeft, 0, Math.max(0, parentRect.width - container.offsetWidth)),
-      elemY: clamp(container.offsetTop, 0, Math.max(0, parentRect.height - container.offsetHeight))
+      elemX: clamp(container.offsetLeft, viewportBounds.minLeft, viewportBounds.maxLeft),
+      elemY: clamp(container.offsetTop, viewportBounds.minTop, viewportBounds.maxTop)
     };
   }, []);
 
@@ -245,13 +248,17 @@ export function TableViewer({
       if (!container) {
         return;
       }
-      const parentRect = getOverlayParentRect(container);
-
       if (isResizingRef.current && resizeStartRef.current && dragStartRef.current) {
+        const viewportBounds = getOverlayViewportBounds(container, {
+          width: resizeStartRef.current.width,
+          height: resizeStartRef.current.height,
+          left: dragStartRef.current.elemX,
+          top: dragStartRef.current.elemY
+        });
         const nextWidth = resizeStartRef.current.width + (event.clientX - resizeStartRef.current.mouseX);
         const nextHeight = resizeStartRef.current.height + (event.clientY - resizeStartRef.current.mouseY);
-        const maxWidth = Math.max(320, parentRect.width - dragStartRef.current.elemX);
-        const maxHeight = Math.max(220, parentRect.height - dragStartRef.current.elemY);
+        const maxWidth = Math.max(320, viewportBounds.maxWidth);
+        const maxHeight = Math.max(220, viewportBounds.maxHeight);
         setPanelSize({
           width: clamp(nextWidth, 320, maxWidth),
           height: clamp(nextHeight, 220, maxHeight)
@@ -265,11 +272,13 @@ export function TableViewer({
 
       const deltaX = event.clientX - dragStartRef.current.mouseX;
       const deltaY = event.clientY - dragStartRef.current.mouseY;
-      const maxLeft = Math.max(0, parentRect.width - container.offsetWidth);
-      const maxTop = Math.max(0, parentRect.height - container.offsetHeight);
+      const dragBounds = getOverlayViewportBounds(container, {
+        width: container.offsetWidth,
+        height: container.offsetHeight
+      });
       setDragPosition({
-        left: clamp(dragStartRef.current.elemX + deltaX, 0, maxLeft),
-        top: clamp(dragStartRef.current.elemY + deltaY, 0, maxTop)
+        left: clamp(dragStartRef.current.elemX + deltaX, dragBounds.minLeft, dragBounds.maxLeft),
+        top: clamp(dragStartRef.current.elemY + deltaY, dragBounds.minTop, dragBounds.maxTop)
       });
     };
 
@@ -441,17 +450,50 @@ export function TableViewer({
   );
 }
 
-function getOverlayParentRect(element: HTMLElement): { width: number; height: number } {
-  const parent = element.offsetParent;
-  if (parent instanceof HTMLElement) {
-    return {
-      width: parent.clientWidth,
-      height: parent.clientHeight
-    };
+function getOverlayViewportBounds(
+  element: HTMLElement,
+  options: {
+    width: number;
+    height: number;
+    left?: number;
+    top?: number;
   }
+): {
+  minLeft: number;
+  maxLeft: number;
+  minTop: number;
+  maxTop: number;
+  maxWidth: number;
+  maxHeight: number;
+} {
+  const parent = element.offsetParent;
+  const parentRect = parent instanceof HTMLElement
+    ? parent.getBoundingClientRect()
+    : { left: 0, top: 0 };
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+  const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+  const width = options.width;
+  const height = options.height;
+  const left = options.left ?? element.offsetLeft;
+  const top = options.top ?? element.offsetTop;
+  const keepVisibleX = Math.min(72, Math.max(40, Math.round(width * 0.18)));
+  const keepVisibleY = Math.min(72, Math.max(40, Math.round(height * 0.18)));
+
+  const minLeft = keepVisibleX - parentRect.left - width;
+  const maxLeft = viewportWidth - keepVisibleX - parentRect.left;
+  const minTop = keepVisibleY - parentRect.top - height;
+  const maxTop = viewportHeight - keepVisibleY - parentRect.top;
+
+  const maxWidth = viewportWidth - parentRect.left - Math.max(0, left) - 24;
+  const maxHeight = viewportHeight - parentRect.top - Math.max(0, top) - 24;
+
   return {
-    width: window.innerWidth,
-    height: window.innerHeight
+    minLeft,
+    maxLeft,
+    minTop,
+    maxTop,
+    maxWidth,
+    maxHeight
   };
 }
 
