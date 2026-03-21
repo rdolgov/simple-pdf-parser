@@ -19,6 +19,7 @@ import { FileResponseCache } from './requestCache.js';
 import { loadLocalEnvFiles } from './loadLocalEnv.js';
 import { ProxySessionAuth, parseProxyUsers } from './sessionAuth.js';
 import { StaticProxyApp } from './staticProxyApp.js';
+import { formatDurationFields } from './logDuration.js';
 import {
   executeImageAnalysisTask,
   executeImageGenerationTask,
@@ -732,7 +733,7 @@ async function handleTextTaskRequest(
             currentConfig
           );
           logProgress(
-            `task-done provider=${provider} task=${taskType} model=${result.model} durationMs=${Date.now() - taskStartedAt} response="${summarizeTextForLog(result.text)}"`
+            `task-done provider=${provider} task=${taskType} model=${result.model} ${formatDurationFields(Date.now() - taskStartedAt)} response="${summarizeTextForLog(result.text)}"`
           );
           await taskStore.recordInteraction({
             actor,
@@ -831,7 +832,7 @@ async function handleRelevanceTaskRequest(
             currentConfig
           );
           logProgress(
-            `task-done provider=${provider} task=analyze-relevance model=${result.model ?? model ?? provider} durationMs=${Date.now() - taskStartedAt} annotations=${Array.isArray(result.annotations) ? result.annotations.length : 0}`
+            `task-done provider=${provider} task=analyze-relevance model=${result.model ?? model ?? provider} ${formatDurationFields(Date.now() - taskStartedAt)} annotations=${Array.isArray(result.annotations) ? result.annotations.length : 0}`
           );
           await taskStore.recordInteraction({
             actor,
@@ -961,7 +962,7 @@ async function handleBuildSemanticIndexTaskRequest(
             }
           );
           logProgress(
-            `task-done provider=${provider} task=build-semantic-index model=${index.model} durationMs=${Date.now() - taskStartedAt} chunkCount=${index.chunkCount}`
+            `task-done provider=${provider} task=build-semantic-index model=${index.model} ${formatDurationFields(Date.now() - taskStartedAt)} chunkCount=${index.chunkCount}`
           );
           await taskStore.setSemanticIndex(authorizedDocument.id, fingerprint, index);
           await taskStore.recordInteraction({
@@ -1086,7 +1087,7 @@ async function handleSearchSemanticTaskRequest(
             currentConfig
           );
           logProgress(
-            `task-done provider=${provider} task=search-semantic model=${result.model} durationMs=${Date.now() - taskStartedAt} hits=${result.results.length}`
+            `task-done provider=${provider} task=search-semantic model=${result.model} ${formatDurationFields(Date.now() - taskStartedAt)} hits=${result.results.length}`
           );
           await taskStore.recordInteraction({
             actor,
@@ -1191,7 +1192,7 @@ async function handleImageAnalysisTaskRequest(
             currentConfig
           );
           logProgress(
-            `task-done provider=${provider} task=analyze-image model=${result.model} durationMs=${Date.now() - taskStartedAt} response="${summarizeTextForLog(result.text)}"`
+            `task-done provider=${provider} task=analyze-image model=${result.model} ${formatDurationFields(Date.now() - taskStartedAt)} response="${summarizeTextForLog(result.text)}"`
           );
           await taskStore.recordInteraction({
             actor,
@@ -1293,7 +1294,7 @@ async function handleImageGenerationTaskRequest(
             currentConfig
           );
           logProgress(
-            `task-done provider=${provider} task=${taskType} model=${result.model} durationMs=${Date.now() - taskStartedAt} mime=${result.mimeType} imageData=${result.dataUri.startsWith('data:') ? 'inline' : 'url'}`
+            `task-done provider=${provider} task=${taskType} model=${result.model} ${formatDurationFields(Date.now() - taskStartedAt)} mime=${result.mimeType} imageData=${result.dataUri.startsWith('data:') ? 'inline' : 'url'}`
           );
           await taskStore.recordInteraction({
             actor,
@@ -2609,7 +2610,7 @@ function logProxyCompletion(input: {
   extras?: string;
 }): void {
   console.log(
-    `[llm-proxy]${typeof input.sequence === 'number' ? ` seq=${input.sequence}` : ''} end provider=${input.provider} kind=${input.requestKind} cache=${input.cacheStatus} durationMs=${input.durationMs}${input.extras ? ` ${input.extras}` : ''}`
+    `[llm-proxy]${typeof input.sequence === 'number' ? ` seq=${input.sequence}` : ''} end provider=${input.provider} kind=${input.requestKind} cache=${input.cacheStatus} ${formatDurationFields(input.durationMs)}${input.extras ? ` ${input.extras}` : ''}`
   );
 }
 

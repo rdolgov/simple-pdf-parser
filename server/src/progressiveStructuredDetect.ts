@@ -3,6 +3,7 @@ import { basename, join } from 'node:path';
 import { splitPdfIntoPages } from './pdfPageSplit.js';
 import { buildPdfPageBatches } from './pdfPageBatching.js';
 import { decideStructuredDetectSplit } from './structuredDetectSplitPolicy.js';
+import { formatDurationFields } from './logDuration.js';
 import {
   executeStructuredDetectTask,
   type TaskServerProvidersConfig,
@@ -70,7 +71,7 @@ export async function executeStructuredDetectTaskProgressive(
   }
 
   console.log(
-    `[structured-detect] split tool=${split.tool} pages=${split.pageFiles.length} dir=${split.workspaceDir} durationMs=${Date.now() - splitStartedAt}`
+    `[structured-detect] split tool=${split.tool} pages=${split.pageFiles.length} dir=${split.workspaceDir} ${formatDurationFields(Date.now() - splitStartedAt)}`
   );
   for (let pageIndex = 0; pageIndex < split.pageFiles.length; pageIndex += 1) {
     const fileStat = await stat(split.pageFiles[pageIndex]!);
@@ -157,7 +158,7 @@ export async function executeStructuredDetectTaskProgressive(
       });
       completedPages += batch.pageCount;
       console.log(
-        `[structured-detect] batch-done pages=${formatPageRange(batch.startPage, batch.pageCount)} bytes=${batch.byteSize} durationMs=${Date.now() - startedAt} model=${batchResult.model}`
+        `[structured-detect] batch-done pages=${formatPageRange(batch.startPage, batch.pageCount)} bytes=${batch.byteSize} ${formatDurationFields(Date.now() - startedAt)} model=${batchResult.model}`
       );
       await publishProgress();
     }
