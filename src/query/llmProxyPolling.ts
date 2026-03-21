@@ -38,7 +38,7 @@ export async function fetchWithLlmProxyPolling(
   const timeoutMs = Math.max(1_000, options?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   let pollDelayMs = normalizePollDelayMs(accepted.retryAfterMs) ?? DEFAULT_POLL_INTERVAL_MS;
   const pollRequestInit = buildPollRequestInit(init);
-  const pollUrl = new URL(accepted.pollUrl, requestUrl).toString();
+  const pollUrl = buildPollUrl(accepted.pollUrl, requestUrl);
 
   while (true) {
     if (Date.now() - startedAt > timeoutMs) {
@@ -81,6 +81,16 @@ function buildPollRequestInit(init: RequestInit | undefined): RequestInit {
     signal: init?.signal,
     cache: 'no-store'
   };
+}
+
+function buildPollUrl(pollUrl: string, requestUrl: string): string {
+  const resolvedPollUrl = new URL(pollUrl, requestUrl);
+  const originalUrl = new URL(requestUrl, resolvedPollUrl);
+  const originalKey = normalizeNonEmpty(originalUrl.searchParams.get('key'));
+  if (originalKey && !resolvedPollUrl.searchParams.has('key')) {
+    resolvedPollUrl.searchParams.set('key', originalKey);
+  }
+  return resolvedPollUrl.toString();
 }
 
 function copyHeader(source: Headers, target: Headers, name: string): void {

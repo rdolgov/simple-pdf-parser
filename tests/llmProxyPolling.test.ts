@@ -7,6 +7,7 @@ describe('fetchWithLlmProxyPolling', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/jobs/job-1')) {
+        expect(new URL(url).searchParams.get('key')).toBe('proxy-token');
         if ((fetchMock.mock.calls.length ?? 0) === 2) {
           return new Response(JSON.stringify({
             jobId: 'job-1',
@@ -47,7 +48,7 @@ describe('fetchWithLlmProxyPolling', () => {
       });
     });
 
-    const response = await fetchWithLlmProxyPolling(fetchMock as unknown as typeof fetch, 'http://localhost:8787/proxy/api/llm/gemini/v1beta/models/gemini-3-pro-preview:generateContent', {
+    const response = await fetchWithLlmProxyPolling(fetchMock as unknown as typeof fetch, 'http://localhost:8787/proxy/api/llm/gemini/v1beta/models/gemini-3-pro-preview:generateContent?key=proxy-token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
