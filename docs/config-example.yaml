@@ -43,6 +43,12 @@ llmProxy:
     baseUrl: "https://generativelanguage.googleapis.com"
     model: "gemini-3-flash-preview"
     binaryInputModel: "gemini-3-pro-image-preview" # optional
+    analytics:
+      dir: ".cache/llm-proxy-analytics"
+      retentionDays: 14
+      dailyMaxCalls: 1000
+      dailyMaxTokens: 1000000
+      backofficePath: "/proxy/backoffice/gemini-analytics" # server-rendered, session-only
 
 testApp:
   llmTransport:

@@ -120,6 +120,20 @@ describe('text boundary model', () => {
     expect(refined[2]?.text).not.toContain('www. cambridge. org');
   });
 
+  it('preserves email addresses without inserting spaces around domain punctuation', () => {
+    const items: PDFTextItem[] = [
+      buildItem('avaswani@google.com', wordGlyphs('avaswani@google.com'), 420),
+      buildItem('aidan@cs.toronto.edu', wordGlyphs('aidan@cs.toronto.edu'), 400),
+      buildItem('lukaszkaiser@google.com', wordGlyphs('lukaszkaiser@google.com'), 380)
+    ];
+
+    const refined = refineLexicalTextBoundaries(items);
+
+    expect(refined[0]?.text).toBe('avaswani@google.com');
+    expect(refined[1]?.text).toBe('aidan@cs.toronto.edu');
+    expect(refined[2]?.text).toBe('lukaszkaiser@google.com');
+  });
+
   it('does not let repeated merged tokens self-validate through frequency counts', () => {
     const items: PDFTextItem[] = [
       buildItem('The conditionalentropy of', wordGlyphs('The conditionalentropy of'), 420),

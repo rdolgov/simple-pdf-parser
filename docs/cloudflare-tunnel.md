@@ -46,6 +46,9 @@ Important environment notes:
 - `LLM_PROXY_SESSION_COOKIE_SECURE` defaults to `true` in the Cloudflare origin start script.
 - `LLM_PROXY_GEMINI_MODEL` defaults to `gemini-3-flash-preview` and lets the proxy choose the Gemini text model server-side.
 - `LLM_PROXY_GEMINI_BINARY_MODEL` is optional if you want a separate server-selected Gemini model for image/PDF inputs.
+- `LLM_PROXY_GEMINI_DAILY_MAX_CALLS` defaults to `1000` and hard-blocks new Gemini upstream calls once the day cap is reached.
+- `LLM_PROXY_GEMINI_DAILY_MAX_TOKENS` defaults to `1000000` and hard-blocks new Gemini upstream calls once the recorded daily token cap is reached.
+- `/proxy/backoffice/gemini-analytics` exposes the server-side Gemini usage dashboard for a small hardcoded username allowlist.
 - Long-running proxied LLM requests now auto-switch to `202 + poll` under `/api/llm/jobs/...`, which avoids Cloudflare `524` timeouts without changing the browser-side app API.
 - `CODEX_EXEC_ENABLED=1` still works in this deployment if you want Codex proxy support.
 

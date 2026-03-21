@@ -109,6 +109,11 @@ Server environment variables:
 - `GEMINI_BASE_URL` defaults to `https://generativelanguage.googleapis.com`
 - `LLM_PROXY_GEMINI_MODEL` defaults to `gemini-3-flash-preview` and is the server-selected Gemini `generateContent` text model
 - `LLM_PROXY_GEMINI_BINARY_MODEL` is optional and, when set, overrides Gemini `generateContent` requests that contain inline binary inputs such as images or PDFs
+- `LLM_PROXY_GEMINI_ANALYTICS_DIR` defaults to `.cache/llm-proxy-analytics`
+- `LLM_PROXY_GEMINI_ANALYTICS_RETENTION_DAYS` defaults to `14`
+- `LLM_PROXY_GEMINI_DAILY_MAX_CALLS` defaults to `1000`
+- `LLM_PROXY_GEMINI_DAILY_MAX_TOKENS` defaults to `1000000`
+- `/proxy/backoffice/gemini-analytics` is a server-rendered Gemini usage backoffice restricted to a hardcoded username allowlist
 - `LLM_PROXY_CORS_ORIGIN` defaults to `*`
 - `LLM_PROXY_CACHE_ENABLED` defaults to `true`
 - `LLM_PROXY_CACHE_DIR` defaults to `.cache/llm-proxy`

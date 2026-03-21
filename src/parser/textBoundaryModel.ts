@@ -1499,7 +1499,10 @@ function isTrustedLexiconWord(word: string): boolean {
 }
 
 function containsProtectedUrlLikeText(text: string): boolean {
-  return /(?:https?:\/\/|www\.|[A-Za-z0-9._%+-]+\/[A-Za-z0-9._%+-]+)/i.test(text);
+  return (
+    /(?:https?:\/\/|www\.|[A-Za-z0-9._%+-]+\/[A-Za-z0-9._%+-]+)/i.test(text) ||
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/.test(text)
+  );
 }
 
 function shouldPreserveCompactPunctuation(text: string, punctuationOffset: number): boolean {

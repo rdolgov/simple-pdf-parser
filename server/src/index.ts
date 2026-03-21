@@ -1,6 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { isBackofficeAllowedUser, listBackofficeAllowedUsers } from './backofficeUsers.js';
 import { executeCodexResponses, type CodexExecConfig, type CodexProxyResponse } from './codexExecProxy.js';
+import { renderGeminiBackofficeHtml } from './geminiBackoffice.js';
+import { GeminiAnalyticsStore } from './geminiAnalyticsStore.js';
 import { resolveGeminiProxyUpstreamPath } from './geminiProxyModel.js';
+import { extractGeminiUsageMetadata } from './geminiUsageMetadata.js';
 import {
   ProxyAsyncJobStore,
   type ProxyAsyncCacheStatus,
@@ -25,6 +29,12 @@ type ServerConfig = {
   geminiApiKey?: string;
   geminiModel: string;
   geminiBinaryInputModel?: string;
+  geminiAnalytics: {
+    dataDir: string;
+    retentionDays: number;
+    dailyMaxCalls: number;
+    dailyMaxTotalTokens: number;
+  };
   codexExec: CodexExecConfig;
   cacheEnabled: boolean;
   cacheDir: string;
@@ -62,6 +72,14 @@ const HEALTH_PATHS = new Set(['/health', '/api/health', '/proxy/api/health']);
 const AUTH_SESSION_PATHS = new Set(['/api/auth/session', '/proxy/api/auth/session']);
 const AUTH_LOGIN_PATHS = new Set(['/api/auth/login', '/proxy/api/auth/login']);
 const AUTH_LOGOUT_PATHS = new Set(['/api/auth/logout', '/proxy/api/auth/logout']);
+const BACKOFFICE_ANALYTICS_HTML_PATHS = new Set([
+  '/backoffice/gemini-analytics',
+  '/proxy/backoffice/gemini-analytics'
+]);
+const BACKOFFICE_ANALYTICS_API_PATHS = new Set([
+  '/api/backoffice/gemini-analytics',
+  '/proxy/api/backoffice/gemini-analytics'
+]);
 
 loadLocalEnvFiles();
 const config = loadConfig();
@@ -72,6 +90,7 @@ const responseCache = new FileResponseCache({
   maxBodyBytes: config.cacheMaxBodyBytes
 });
 const asyncJobStore = new ProxyAsyncJobStore(config.asyncJobs);
+const geminiAnalyticsStore = new GeminiAnalyticsStore(config.geminiAnalytics);
 const sessionAuth = new ProxySessionAuth({
   cookieName: config.sessionCookieName,
   cookieSecure: config.sessionCookieSecure,
@@ -127,6 +146,14 @@ server.listen(config.port, config.host, () => {
     '[llm-proxy] Async jobs:',
     `enabled pollIntervalMs=${config.asyncJobs.pollIntervalMs} retentionMs=${config.asyncJobs.retentionMs} maxJobs=${config.asyncJobs.maxJobs}`
   );
+  console.log(
+    '[llm-proxy] Gemini analytics:',
+    `dir=${config.geminiAnalytics.dataDir} retentionDays=${config.geminiAnalytics.retentionDays} dailyMaxCalls=${config.geminiAnalytics.dailyMaxCalls} dailyMaxTotalTokens=${config.geminiAnalytics.dailyMaxTotalTokens}`
+  );
+  console.log(
+    '[llm-proxy] Backoffice:',
+    `${[...BACKOFFICE_ANALYTICS_HTML_PATHS].join(', ')} users=${listBackofficeAllowedUsers().join(',') || 'none'}`
+  );
   console.log('[llm-proxy] Proxy app route:', `${PROXY_APP_PREFIX} -> ${staticProxyApp.appDir}`);
   console.log('[llm-proxy] Root redirect:', config.rootRedirectPath ? `/ -> ${config.rootRedirectPath}` : 'disabled');
 });
@@ -157,6 +184,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
           gemini: {
             textModel: config.geminiModel,
             binaryInputModel: config.geminiBinaryInputModel ?? null
+          }
+        },
+        analytics: {
+          gemini: {
+            dataDir: config.geminiAnalytics.dataDir,
+            retentionDays: config.geminiAnalytics.retentionDays,
+            dailyMaxCalls: config.geminiAnalytics.dailyMaxCalls,
+            dailyMaxTotalTokens: config.geminiAnalytics.dailyMaxTotalTokens,
+            backofficeUsers: listBackofficeAllowedUsers()
           }
         },
         auth: {
@@ -191,6 +227,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       ok: true,
       ...sessionAuth.getSessionStatus(request)
     });
+    return;
+  }
+
+  if (request.method === 'GET' && BACKOFFICE_ANALYTICS_API_PATHS.has(requestUrl.pathname)) {
+    await handleGeminiBackofficeApiRequest(request, response);
+    return;
+  }
+
+  if (request.method === 'GET' && BACKOFFICE_ANALYTICS_HTML_PATHS.has(requestUrl.pathname)) {
+    await handleGeminiBackofficeHtmlRequest(request, response);
     return;
   }
 
@@ -453,6 +499,8 @@ async function proxyGeminiRequest(
     return;
   }
 
+  const actor = resolveRequestActor(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth);
+
   if (!currentConfig.geminiApiKey) {
     sendJson(response, 500, { error: 'GEMINI_API_KEY is not configured on the proxy server.' });
     logProxyCompletion({
@@ -543,24 +591,18 @@ async function proxyGeminiRequest(
     cacheKey,
     bodyHash,
     runner: async (logProgress) => {
-      logProgress(`requesting upstream ${resolvedUpstreamPath}`);
-      let upstreamResponse: Response;
-      try {
-        upstreamResponse = await fetch(upstreamUrl, {
-          method: 'POST',
-          headers: {
-            Accept: accept ?? 'application/json',
-            'Content-Type': contentType ?? 'application/json'
-          },
-          body
-        });
-      } catch (error) {
-        console.error('[llm-proxy] Gemini upstream request failed', error);
-        return createJsonErrorResponse(502, 'Failed to reach Gemini upstream.');
-      }
-
-      logProgress(`received upstream status=${upstreamResponse.status}`);
-      const upstream = await readUpstreamResponse(upstreamResponse);
+      const upstream = await executeGeminiUpstreamRequest({
+        actor,
+        requestKind,
+        model: modelSelection.selectedModel ?? modelSelection.requestedModel ?? 'unknown',
+        sequence,
+        upstreamUrl,
+        upstreamPath: resolvedUpstreamPath,
+        accept,
+        contentType,
+        body,
+        logProgress
+      });
       if (isCacheableResponse(upstream.status)) {
         try {
           await responseCache.set(cacheKey, upstream);
@@ -575,31 +617,17 @@ async function proxyGeminiRequest(
     return;
   }
 
-  let upstreamResponse: Response;
-  try {
-    upstreamResponse = await fetch(upstreamUrl, {
-      method: 'POST',
-      headers: {
-        Accept: accept ?? 'application/json',
-        'Content-Type': contentType ?? 'application/json'
-      },
-      body
-    });
-  } catch (error) {
-    console.error('[llm-proxy] Gemini upstream request failed', error);
-    logProxyCompletion({
-      sequence,
-      provider: 'gemini',
-      requestKind,
-      cacheStatus: 'ERROR',
-      durationMs: Date.now() - startedAt,
-      extras: 'status=502'
-    });
-    sendJson(response, 502, { error: 'Failed to reach Gemini upstream.' });
-    return;
-  }
-
-  const upstream = await readUpstreamResponse(upstreamResponse);
+  const upstream = await executeGeminiUpstreamRequest({
+    actor,
+    requestKind,
+    model: modelSelection.selectedModel ?? modelSelection.requestedModel ?? 'unknown',
+    sequence,
+    upstreamUrl,
+    upstreamPath: resolvedUpstreamPath,
+    accept,
+    contentType,
+    body
+  });
   if (isCacheableResponse(upstream.status)) {
     try {
       await responseCache.set(cacheKey, upstream);
@@ -811,6 +839,78 @@ async function proxyCodexRequest(
   writeProxyResponse(response, upstream, bypassCache ? 'BYPASS' : 'MISS', cacheKey, bodyHash);
 }
 
+async function executeGeminiUpstreamRequest(input: {
+  actor: string;
+  requestKind: string;
+  model: string;
+  sequence: number;
+  upstreamUrl: URL;
+  upstreamPath: string;
+  accept: string | undefined;
+  contentType: string | undefined;
+  body: Buffer;
+  logProgress?: (message: string) => void;
+}): Promise<ProxyAsyncJobResponse> {
+  const startedAt = Date.now();
+  const begin = await geminiAnalyticsStore.beginRequest({
+    actor: input.actor,
+    model: input.model,
+    requestKind: input.requestKind
+  });
+
+  if (!begin.allowed) {
+    input.logProgress?.(`blocked by Gemini daily limits day=${begin.day}`);
+    return createJsonErrorResponse(429, begin.reason, {
+      code: 'GEMINI_DAILY_LIMIT_REACHED',
+      day: begin.day,
+      usage: begin.snapshot.totals
+    }, {
+      'Retry-After': '3600'
+    });
+  }
+
+  input.logProgress?.(`requesting upstream ${input.upstreamPath} actor=${input.actor}`);
+
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(input.upstreamUrl, {
+      method: 'POST',
+      headers: {
+        Accept: input.accept ?? 'application/json',
+        'Content-Type': input.contentType ?? 'application/json'
+      },
+      body: input.body
+    });
+  } catch (error) {
+    console.error('[llm-proxy] Gemini upstream request failed', error);
+    await geminiAnalyticsStore.finalizeRequest({
+      reservationId: begin.reservationId,
+      status: 502,
+      durationMs: Date.now() - startedAt,
+      usage: null
+    });
+    return createJsonErrorResponse(502, 'Failed to reach Gemini upstream.');
+  }
+
+  input.logProgress?.(`received upstream status=${upstreamResponse.status}`);
+  const upstream = await readUpstreamResponse(upstreamResponse);
+  const usage = extractGeminiUsageMetadata(upstream.body);
+  if (usage) {
+    input.logProgress?.(
+      `usage input=${usage.inputTokens} output=${usage.outputTokens} total=${usage.totalTokens}`
+    );
+  }
+
+  await geminiAnalyticsStore.finalizeRequest({
+    reservationId: begin.reservationId,
+    status: upstream.status,
+    durationMs: Date.now() - startedAt,
+    usage
+  });
+
+  return upstream;
+}
+
 function maybeHandleAsyncProxyJob(
   request: IncomingMessage,
   response: ServerResponse,
@@ -994,13 +1094,19 @@ function writeAsyncJobAccepted(
   }));
 }
 
-function createJsonErrorResponse(status: number, error: string): ProxyAsyncJobResponse {
+function createJsonErrorResponse(
+  status: number,
+  error: string,
+  extraBody: Record<string, unknown> = {},
+  extraHeaders: Record<string, string> = {}
+): ProxyAsyncJobResponse {
   return {
     status,
     headers: {
-      'Content-Type': 'application/json; charset=utf-8'
+      'Content-Type': 'application/json; charset=utf-8',
+      ...extraHeaders
     },
-    body: Buffer.from(JSON.stringify({ error }), 'utf8')
+    body: Buffer.from(JSON.stringify({ error, ...extraBody }), 'utf8')
   };
 }
 
@@ -1063,6 +1169,58 @@ function normalizeRequestKind(provider: 'openai' | 'gemini' | 'codex', upstreamP
   }
 
   return upstreamPath || 'unknown';
+}
+
+async function handleGeminiBackofficeApiRequest(
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
+  const username = requireBackofficeUser(request, response);
+  if (!username) {
+    return;
+  }
+
+  const overview = await geminiAnalyticsStore.getOverview();
+  sendJson(response, 200, {
+    ok: true,
+    username,
+    overview
+  });
+}
+
+async function handleGeminiBackofficeHtmlRequest(
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
+  const username = requireBackofficeUser(request, response);
+  if (!username) {
+    return;
+  }
+
+  const overview = await geminiAnalyticsStore.getOverview();
+  response.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store'
+  });
+  response.end(renderGeminiBackofficeHtml(overview));
+}
+
+function requireBackofficeUser(
+  request: IncomingMessage,
+  response: ServerResponse
+): string | null {
+  const session = sessionAuth.getSessionFromRequest(request);
+  if (!session) {
+    sendJson(response, 401, { error: 'Backoffice access requires a logged-in proxy session.' });
+    return null;
+  }
+
+  if (!isBackofficeAllowedUser(session.username)) {
+    sendJson(response, 403, { error: 'Backoffice access is not enabled for this user.' });
+    return null;
+  }
+
+  return session.username;
 }
 
 async function handleLoginRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -1135,6 +1293,35 @@ function isAuthorized(
   return !auth.isEnabled() && !expectedToken;
 }
 
+function resolveRequestActor(
+  request: IncomingMessage,
+  requestUrl: URL,
+  expectedToken: string | undefined,
+  auth: ProxySessionAuth
+): string {
+  const session = auth.getSessionFromRequest(request);
+  if (session) {
+    return session.username;
+  }
+
+  const headerValue = request.headers.authorization?.trim();
+  if (expectedToken && headerValue === `Bearer ${expectedToken}`) {
+    return 'shared-token';
+  }
+
+  const alternateHeader = request.headers['x-llm-proxy-auth'];
+  if (expectedToken && typeof alternateHeader === 'string' && alternateHeader.trim() === expectedToken) {
+    return 'shared-token';
+  }
+
+  const queryToken = requestUrl.searchParams.get('key')?.trim();
+  if (expectedToken && queryToken === expectedToken) {
+    return 'shared-token';
+  }
+
+  return 'anonymous';
+}
+
 function loadConfig(): ServerConfig {
   const env = process.env;
 
@@ -1149,6 +1336,12 @@ function loadConfig(): ServerConfig {
     geminiApiKey: normalizeNonEmpty(env.GEMINI_API_KEY),
     geminiModel: normalizeNonEmpty(env.LLM_PROXY_GEMINI_MODEL) ?? 'gemini-3-flash-preview',
     geminiBinaryInputModel: normalizeNonEmpty(env.LLM_PROXY_GEMINI_BINARY_MODEL),
+    geminiAnalytics: {
+      dataDir: normalizeNonEmpty(env.LLM_PROXY_GEMINI_ANALYTICS_DIR) ?? '.cache/llm-proxy-analytics',
+      retentionDays: normalizePositiveNumber(env.LLM_PROXY_GEMINI_ANALYTICS_RETENTION_DAYS, 14),
+      dailyMaxCalls: normalizePositiveNumber(env.LLM_PROXY_GEMINI_DAILY_MAX_CALLS, 1000),
+      dailyMaxTotalTokens: normalizePositiveNumber(env.LLM_PROXY_GEMINI_DAILY_MAX_TOKENS, 1_000_000)
+    },
     codexExec: {
       enabled: normalizeBoolean(env.CODEX_EXEC_ENABLED, false),
       command: normalizeNonEmpty(env.CODEX_EXEC_COMMAND) ?? 'codex',
