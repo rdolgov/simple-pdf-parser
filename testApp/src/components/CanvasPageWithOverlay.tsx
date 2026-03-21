@@ -2472,8 +2472,12 @@ export function CanvasPageWithOverlay({
                     [tableId]: next
                   }))
                 }
-                ensureGeminiApiKey={ensureGeminiApiKey}
-                focusProvider={focusProvider}
+                chartProvider={overlayAiProvider}
+                chartModel={overlayAiModel}
+                chartApiKey={overlayAiKey}
+                imageProvider={overlayImageProvider}
+                imageModel={overlayImageModel}
+                imageApiKey={overlayImageKey}
                 onClose={() => setTableOverlay(null)}
               />
             )}

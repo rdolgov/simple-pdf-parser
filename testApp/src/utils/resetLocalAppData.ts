@@ -21,7 +21,7 @@ const APP_INDEXED_DB_NAMES = [
   'search-history-db',
   'math-cache-db',
   'image-explanation-cache-db',
-  'ai-chart-cache-db'
+  'table-visualization-cache-db'
 ] as const;
 
 export interface ResetLocalAppDataResult {

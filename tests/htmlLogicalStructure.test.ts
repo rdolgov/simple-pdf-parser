@@ -119,6 +119,51 @@ describe('html logical structure', () => {
     expect(subsectionSelection.sectionUnit?.title).toBe('Attention Heads');
     expect(subsectionSelection.sectionUnit?.parentId).toBe(methodsSection?.id);
   });
+
+  it('prefers the whole section when a headed subsection is compact', () => {
+    const layout: HtmlDocumentLayout = {
+      pages: [
+        {
+          number: 1,
+          width: 612,
+          height: 792,
+          content: [
+            headingBlock('3.3 Position-wise Feed-Forward Networks', 2, bounds(72, 720, 520, 750)),
+            paragraphBlock(
+              'In addition to attention sub-layers, each layer contains a fully connected feed-forward network applied to each position separately and identically.',
+              bounds(72, 660, 520, 704)
+            ),
+            paragraphBlock(
+              'This consists of two linear transformations with a ReLU activation in between.',
+              bounds(72, 612, 520, 646)
+            )
+          ]
+        }
+      ]
+    };
+
+    const structure = buildHtmlLogicalStructure(layout, {
+      minTopicChars: 80,
+      maxTopicChars: 220,
+      maxTopicParagraphs: 1
+    });
+
+    const topicUnits = structure.units.filter((unit) => unit.kind === 'topic');
+    const sectionUnits = structure.units.filter((unit) => unit.kind === 'section');
+    expect(topicUnits).toHaveLength(2);
+    expect(sectionUnits).toHaveLength(1);
+
+    const paragraphSelection = resolveHtmlLogicalUnitForSelection(structure, {
+      pageNumber: 1,
+      blockIndex: 1,
+      blockType: 'paragraph'
+    });
+
+    expect(paragraphSelection.scope).toBe('section');
+    expect(paragraphSelection.logicalUnit?.kind).toBe('section');
+    expect(paragraphSelection.logicalUnit?.title).toBe('3.3 Position-wise Feed-Forward Networks');
+    expect(paragraphSelection.logicalUnit?.paragraphCount).toBe(2);
+  });
 });
 
 function headingBlock(text: string, level: 1 | 2 | 3 | 4 | 5 | 6, blockBounds: ReturnType<typeof bounds>) {

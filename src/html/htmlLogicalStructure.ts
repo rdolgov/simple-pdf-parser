@@ -104,6 +104,9 @@ const DEFAULT_OPTIONS: Required<HtmlLogicalStructureOptions> = {
 
 const LOGICAL_STRUCTURE_SCHEMA_VERSION = 1;
 const ROOT_SECTION_ID = 'section-root';
+const SHORT_SECTION_MAX_PARAGRAPHS = 3;
+const SHORT_SECTION_MAX_CHARS = 1400;
+const SHORT_SECTION_MAX_BLOCKS = 6;
 
 const TRANSITION_PREFIXES = [
   'however',
@@ -312,6 +315,13 @@ export function resolveHtmlLogicalUnitForSelection(
 
   const topicUnit = findHtmlLogicalUnitById(structure, assignment?.topicId);
   if (topicUnit) {
+    if (shouldPreferSectionForParagraphSelection(sectionUnit, topicUnit)) {
+      return {
+        scope: 'section',
+        logicalUnit: sectionUnit,
+        sectionUnit
+      };
+    }
     return {
       scope: 'topic',
       logicalUnit: topicUnit,
@@ -551,4 +561,27 @@ function buildLogicalBlockKey(pageNumber: number, blockIndex: number): string {
 
 function isTextBlock(block: HtmlContentBlock | undefined | null): block is TextBlock {
   return block !== null && block !== undefined && (block.type === 'paragraph' || block.type === 'heading');
+}
+
+function shouldPreferSectionForParagraphSelection(
+  sectionUnit: HtmlLogicalTextUnit | null,
+  topicUnit: HtmlLogicalTextUnit | null
+): boolean {
+  if (!sectionUnit || !topicUnit || topicUnit.parentId !== sectionUnit.id) {
+    return false;
+  }
+
+  const isCompactSubsection =
+    (sectionUnit.headingLevel ?? 0) >= 2 ||
+    (!!sectionUnit.parentId && sectionUnit.parentId !== ROOT_SECTION_ID);
+  const topicIsStrictlySmaller = topicUnit.paragraphCount < sectionUnit.paragraphCount;
+
+  return (
+    isCompactSubsection &&
+    topicIsStrictlySmaller &&
+    sectionUnit.paragraphCount > 0 &&
+    sectionUnit.paragraphCount <= SHORT_SECTION_MAX_PARAGRAPHS &&
+    sectionUnit.charLength <= SHORT_SECTION_MAX_CHARS &&
+    sectionUnit.blockCount <= SHORT_SECTION_MAX_BLOCKS
+  );
 }

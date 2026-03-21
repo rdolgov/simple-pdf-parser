@@ -2350,8 +2350,7 @@ header p {
   min-height: 220px;
   display: flex;
   flex-direction: column;
-  resize: both;
-  overflow: visible; /* Allow toolbar to be visible above the block */
+  overflow: visible;
 }
 
 .canvas-overlay-table-block .canvas-overlay-highlight-inner {
@@ -2366,6 +2365,44 @@ header p {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(241, 245, 249, 0.92));
   border-radius: 8px;
   min-height: 100%;
+}
+
+.table-viewer-drag-handle {
+  position: absolute;
+  top: -26px;
+  left: 14px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(71, 85, 105, 0.82);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+  cursor: grab;
+}
+
+.table-viewer-drag-handle:active {
+  cursor: grabbing;
+}
+
+.table-viewer-resize-handle {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: rgba(71, 85, 105, 0.82);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+  cursor: nwse-resize;
 }
 
 .canvas-overlay-table-shell {
@@ -2495,7 +2532,76 @@ header p {
 }
 
 .table-chart-view--chartjs {
-  height: 240px;
+  min-height: 240px;
+  height: 100%;
+}
+
+.table-chart-view--image {
+  min-height: 240px;
+}
+
+.table-chart-heading {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #0f172a;
+  text-align: center;
+}
+
+.table-chart-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.table-chart-actions--centered {
+  justify-content: center;
+}
+
+.table-chart-regenerate-button {
+  border: 1px solid rgba(37, 99, 235, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  color: #1d4ed8;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.table-chart-regenerate-button:hover {
+  background: rgba(219, 234, 254, 0.9);
+  border-color: rgba(37, 99, 235, 0.42);
+}
+
+.table-chart-canvas-shell {
+  position: relative;
+  flex: 1;
+  min-height: 240px;
+}
+
+.table-chart-canvas-shell canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.table-chart-image-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  overflow: hidden;
+}
+
+.table-chart-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
 }
 
 .table-chart-row {

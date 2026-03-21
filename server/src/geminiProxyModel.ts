@@ -28,9 +28,9 @@ export function resolveGeminiProxyUpstreamPath(
   }
 
   const requestedModel = decodeURIComponent(match[2] ?? '').trim() || null;
-  const hasBinaryInput = requestContainsBinaryInlineData(body);
-  const selectedModel = hasBinaryInput
-    ? normalizeOptionalModel(config.binaryInputModel) ?? normalizeOptionalModel(config.textModel)
+  const needsBinaryOrImageModel = requestNeedsBinaryOrImageModel(body);
+  const selectedModel = needsBinaryOrImageModel
+    ? normalizeOptionalModel(config.binaryInputModel) ?? requestedModel
     : normalizeOptionalModel(config.textModel);
 
   if (!selectedModel) {
@@ -38,7 +38,7 @@ export function resolveGeminiProxyUpstreamPath(
       upstreamPath,
       requestedModel,
       selectedModel: requestedModel,
-      mode: hasBinaryInput ? 'binary' : 'text'
+      mode: needsBinaryOrImageModel ? 'binary' : 'text'
     };
   }
 
@@ -49,7 +49,7 @@ export function resolveGeminiProxyUpstreamPath(
       upstreamPath,
       requestedModel,
       selectedModel,
-      mode: hasBinaryInput ? 'binary' : 'text'
+      mode: needsBinaryOrImageModel ? 'binary' : 'text'
     };
   }
 
@@ -57,14 +57,18 @@ export function resolveGeminiProxyUpstreamPath(
     upstreamPath: `${match[1]}${encodeURIComponent(selectedModel)}${match[3]}`,
     requestedModel,
     selectedModel,
-    mode: hasBinaryInput ? 'binary' : 'text'
+    mode: needsBinaryOrImageModel ? 'binary' : 'text'
   };
 }
 
-function requestContainsBinaryInlineData(body: Buffer): boolean {
+function requestNeedsBinaryOrImageModel(body: Buffer): boolean {
   const payload = tryParseJsonObject(body);
   if (!payload) {
     return false;
+  }
+
+  if (requestAsksForImageOutput(payload)) {
+    return true;
   }
 
   const contents = Array.isArray(payload.contents)
@@ -106,6 +110,42 @@ function requestContainsBinaryInlineData(body: Buffer): boolean {
   return false;
 }
 
+function requestAsksForImageOutput(payload: Record<string, unknown>): boolean {
+  const generationConfig = readGenerationConfig(payload);
+  if (!generationConfig) {
+    return false;
+  }
+
+  const responseModalities = Array.isArray(generationConfig.responseModalities)
+    ? generationConfig.responseModalities
+    : Array.isArray(generationConfig.response_modalities)
+      ? generationConfig.response_modalities
+      : [];
+
+  return responseModalities.some((value: unknown) => typeof value === 'string' && value.trim().toUpperCase() === 'IMAGE');
+}
+
+function readGenerationConfig(
+  payload: Record<string, unknown>
+): {
+  responseModalities?: unknown;
+  response_modalities?: unknown;
+} | null {
+  if (isRecord(payload.generationConfig)) {
+    return payload.generationConfig as {
+      responseModalities?: unknown;
+      response_modalities?: unknown;
+    };
+  }
+  if (isRecord(payload.generation_config)) {
+    return payload.generation_config as {
+      responseModalities?: unknown;
+      response_modalities?: unknown;
+    };
+  }
+  return null;
+}
+
 function readInlineData(part: object): { mimeType?: string | null } | null {
   const record = part as {
     inlineData?: { mimeType?: string | null } | null;
@@ -143,4 +183,8 @@ function normalizeOptionalModel(value: string | null | undefined): string | unde
 
 function normalizeModelId(value: string | null | undefined): string {
   return normalizeOptionalModel(value)?.replace(/^models\//i, '').toLowerCase() ?? '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

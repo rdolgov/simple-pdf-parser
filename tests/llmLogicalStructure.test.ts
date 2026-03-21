@@ -102,6 +102,64 @@ describe('llm logical structure', () => {
     expect(selection.logicalUnit?.paragraphCount).toBe(3);
     expect(selection.sectionUnit?.title).toBe('Methods');
   });
+
+  it('prefers the enclosing section over a smaller llm topic when the subsection is short', () => {
+    const layout: HtmlDocumentLayout = {
+      pages: [
+        {
+          number: 1,
+          width: 612,
+          height: 792,
+          content: [
+            headingBlock('3.3 Position-wise Feed-Forward Networks', 2, bounds(72, 720, 520, 750)),
+            paragraphBlock(
+              'In addition to attention sub-layers, each layer contains a fully connected feed-forward network.',
+              bounds(72, 662, 520, 702)
+            ),
+            paragraphBlock(
+              'This consists of two linear transformations with a ReLU activation in between.',
+              bounds(72, 620, 520, 652)
+            )
+          ]
+        }
+      ]
+    };
+
+    const baseStructure = buildHtmlLogicalStructure(layout, {
+      minTopicChars: 60,
+      maxTopicChars: 220,
+      maxTopicParagraphs: 1
+    });
+    const batch = collectHtmlLogicalSectionBatches(layout, baseStructure)[0];
+    const groups = normalizeHtmlLogicalTopicGroups(batch, [
+      {
+        title: 'Feed-forward network setup',
+        blockIds: [batch.paragraphs[0].id]
+      },
+      {
+        title: 'Two linear layers',
+        blockIds: [batch.paragraphs[1].id]
+      }
+    ]);
+
+    const structure = buildHtmlLogicalStructureFromTopicGroups(layout, baseStructure, groups, {
+      provider: 'gemini',
+      model: 'gemini-3-flash-preview',
+      promptVersion: 'test-v1',
+      batchCount: 1
+    });
+
+    const selection = resolveHtmlLogicalUnitForSelection(structure, {
+      pageNumber: 1,
+      blockIndex: 1,
+      blockType: 'paragraph'
+    });
+
+    expect(selection.scope).toBe('section');
+    expect(selection.logicalUnit?.kind).toBe('section');
+    expect(selection.logicalUnit?.title).toBe('3.3 Position-wise Feed-Forward Networks');
+    expect(selection.sectionUnit?.title).toBe('3.3 Position-wise Feed-Forward Networks');
+  });
 });
 
 function headingBlock(text: string, level: 1 | 2 | 3 | 4 | 5 | 6, blockBounds: ReturnType<typeof bounds>) {

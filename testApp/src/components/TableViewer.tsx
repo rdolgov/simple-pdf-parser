@@ -1,19 +1,666 @@
-import type { ExtractedTable, FocusProvider } from '../types';
-export type TableSortState = { column: number; direction: 'asc' | 'desc' } | null;
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import Chart from 'chart.js/auto';
 import type { ChartConfiguration } from 'chart.js';
-import { generateAiChartFromTable } from '../utils/aiChartGenerator';
+import type { StructuredExtractProvider } from 'pdf-layout-parser';
+import type { ExtractedTable } from '../types';
+import {
+  deleteCachedTableVisualization,
+  generateTableVisualizationCacheKey,
+  getCachedChartImage,
+  getCachedInteractiveChart,
+  setCachedChartImage,
+  setCachedInteractiveChart
+} from '../storage/tableVisualizationCache';
+import {
+  generateAiInteractiveTableChart,
+  generateAiTableChartImage
+} from '../utils/aiTableVisualization';
+import { getProviderDisplayName, type ImageCapableProvider } from '../utils/providerMetadata';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
-import { generateTableCacheKey, getCachedAiChart, setCachedAiChart } from '../storage/aiChartCache';
 
-type ViewMode = 'table' | 'chart' | 'ai-chart';
+export type TableSortState = { column: number; direction: 'asc' | 'desc' } | null;
 
-type AiChartState =
+type ViewMode = 'table' | 'interactive-chart' | 'chart-image';
+
+type InteractiveChartState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; config: ChartConfiguration; note?: string; source: 'ai' | 'mock' };
+  | { status: 'ready'; config: ChartConfiguration; title?: string; note?: string; model: string };
+
+type ChartImageState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'ready'; dataUri: string; mimeType?: string; prompt?: string; model: string };
+
+type TableViewerProps = {
+  table: ExtractedTable;
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  pageHeight: number;
+  scaleX: number;
+  scaleY: number;
+  sortState: TableSortState;
+  onSortChange: (tableId: string, next: TableSortState) => void;
+  chartProvider: StructuredExtractProvider;
+  chartModel?: string;
+  chartApiKey: string;
+  imageProvider: ImageCapableProvider;
+  imageModel?: string;
+  imageApiKey: string;
+  onClose: () => void;
+};
+
+export function TableViewer({
+  table,
+  bounds,
+  pageHeight,
+  scaleX,
+  scaleY,
+  sortState,
+  onSortChange,
+  chartProvider,
+  chartModel,
+  chartApiKey,
+  imageProvider,
+  imageModel,
+  imageApiKey,
+  onClose
+}: TableViewerProps): JSX.Element {
+  const [localSort, setLocalSort] = useState<TableSortState>(sortState);
+  const [viewMode, setViewMode] = useState<ViewMode>('table');
+  const [interactiveChartState, setInteractiveChartState] = useState<InteractiveChartState>({ status: 'idle' });
+  const [chartImageState, setChartImageState] = useState<ChartImageState>({ status: 'idle' });
+  const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
+  const [panelSize, setPanelSize] = useState<{ width: number; height: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const chartInstanceRef = useRef<Chart | null>(null);
+  const isDraggingRef = useRef(false);
+  const isResizingRef = useRef(false);
+  const dragStartRef = useRef<{ mouseX: number; mouseY: number; elemX: number; elemY: number } | null>(null);
+  const resizeStartRef = useRef<{ mouseX: number; mouseY: number; width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    setLocalSort(sortState);
+  }, [sortState]);
+
+  useEffect(() => {
+    setViewMode('table');
+    setInteractiveChartState({ status: 'idle' });
+    setChartImageState({ status: 'idle' });
+    setDragPosition(null);
+    setPanelSize(null);
+    if (chartInstanceRef.current) {
+      chartInstanceRef.current.destroy();
+      chartInstanceRef.current = null;
+    }
+  }, [table.id, bounds.minX, bounds.minY, bounds.maxX, bounds.maxY, scaleX, scaleY, pageHeight]);
+
+  const canvasPadding = 16 * scaleX;
+  const initialLeft = bounds.minX * scaleX + canvasPadding - 12;
+  const initialTop = (pageHeight - bounds.maxY) * scaleY + canvasPadding - 12;
+  const initialWidth = Math.max((bounds.maxX - bounds.minX) * scaleX + 24, 320);
+  const initialHeight = Math.max((bounds.maxY - bounds.minY) * scaleY + 24, 220);
+  const currentPosition = dragPosition ?? { top: initialTop, left: initialLeft };
+  const currentSize = panelSize ?? { width: initialWidth, height: initialHeight };
+
+  const rows = useMemo<Array<Array<{ text: string; kind: 'td' | 'th' }>>>(() => {
+    if (!table.cells || table.cells.length === 0) {
+      return [];
+    }
+    const maxRow = Math.max(...table.cells.map((cell) => cell.row), 0);
+    const maxCol = Math.max(...table.cells.map((cell) => cell.col), 0);
+    const nextRows: Array<Array<{ text: string; kind: 'td' | 'th' }>> = [];
+    for (let rowIndex = 1; rowIndex <= maxRow; rowIndex += 1) {
+      const row: Array<{ text: string; kind: 'td' | 'th' }> = [];
+      for (let colIndex = 1; colIndex <= maxCol; colIndex += 1) {
+        const cell = table.cells.find((candidate) => candidate.row === rowIndex && candidate.col === colIndex);
+        row.push({
+          text: cell?.text ?? '',
+          kind: rowIndex === 1 ? 'th' : 'td'
+        });
+      }
+      nextRows.push(row);
+    }
+    return nextRows;
+  }, [table.cells]);
+
+  const sortedRows = useMemo(() => sortTableRows(rows, localSort), [rows, localSort]);
+  const hasChartableData = rows.length >= 2 && rows.some((row, rowIndex) => rowIndex > 0 && row.some((cell) => cell.text.trim().length > 0));
+
+  const handleSort = (column: number) => {
+    const next = toggleSortState(localSort, column);
+    onSortChange(table.id, next);
+    setLocalSort(next);
+  };
+
+  const interactiveChartCacheKey = useMemo(
+    () =>
+      generateTableVisualizationCacheKey({
+        tableId: table.id,
+        provider: chartProvider,
+        model: chartModel,
+        variant: 'interactive-chart',
+        cells: table.cells ?? []
+      }),
+    [chartModel, chartProvider, table.cells, table.id]
+  );
+
+  const chartImageCacheKey = useMemo(
+    () =>
+      generateTableVisualizationCacheKey({
+        tableId: table.id,
+        provider: imageProvider,
+        model: imageModel,
+        variant: 'chart-image',
+        cells: table.cells ?? []
+      }),
+    [imageModel, imageProvider, table.cells, table.id]
+  );
+
+  const requestInteractiveChart = useCallback(async (forceRefresh = false) => {
+    if (interactiveChartState.status === 'loading') {
+      return;
+    }
+    if (!hasChartableData) {
+      setInteractiveChartState({ status: 'error', message: 'Not enough table data to generate a chart.' });
+      return;
+    }
+    if (!chartApiKey.trim()) {
+      setInteractiveChartState({
+        status: 'error',
+        message: `${getProviderDisplayName(chartProvider)} access is required to generate a chart.`
+      });
+      return;
+    }
+
+    setInteractiveChartState({ status: 'loading' });
+
+    try {
+      if (forceRefresh) {
+        await deleteCachedTableVisualization(interactiveChartCacheKey);
+      } else {
+        const cached = await getCachedInteractiveChart(interactiveChartCacheKey);
+        if (cached) {
+          setInteractiveChartState({
+            status: 'ready',
+            config: cached.config,
+            title: cached.title,
+            note: cached.note,
+            model: chartModel?.trim() || 'default-model'
+          });
+          return;
+        }
+      }
+
+      const result = await generateAiInteractiveTableChart({
+        table,
+        provider: chartProvider,
+        apiKey: chartApiKey,
+        ...(chartModel?.trim() ? { model: chartModel.trim() } : {})
+      });
+      setInteractiveChartState({
+        status: 'ready',
+        config: result.config,
+        title: result.title,
+        note: result.note,
+        model: result.model
+      });
+      await setCachedInteractiveChart(interactiveChartCacheKey, {
+        config: result.config,
+        title: result.title,
+        note: result.note
+      });
+    } catch (error) {
+      await deleteCachedTableVisualization(interactiveChartCacheKey);
+      setInteractiveChartState({
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Failed to generate interactive chart.'
+      });
+    }
+  }, [chartApiKey, chartModel, chartProvider, hasChartableData, interactiveChartCacheKey, interactiveChartState.status, table]);
+
+  const requestChartImage = useCallback(async (forceRefresh = false) => {
+    if (chartImageState.status === 'loading') {
+      return;
+    }
+    if (!hasChartableData) {
+      setChartImageState({ status: 'error', message: 'Not enough table data to generate a chart image.' });
+      return;
+    }
+    if (!imageApiKey.trim()) {
+      setChartImageState({
+        status: 'error',
+        message: `${getProviderDisplayName(imageProvider)} access is required to generate a chart image.`
+      });
+      return;
+    }
+
+    setChartImageState({ status: 'loading' });
+
+    try {
+      if (forceRefresh) {
+        await deleteCachedTableVisualization(chartImageCacheKey);
+      } else {
+        const cached = await getCachedChartImage(chartImageCacheKey);
+        if (cached) {
+          setChartImageState({
+            status: 'ready',
+            dataUri: cached.dataUri,
+            mimeType: cached.mimeType,
+            prompt: cached.prompt,
+            model: imageModel?.trim() || 'default-model'
+          });
+          return;
+        }
+      }
+
+      const result = await generateAiTableChartImage({
+        table,
+        provider: imageProvider,
+        apiKey: imageApiKey,
+        ...(imageModel?.trim() ? { model: imageModel.trim() } : {})
+      });
+      setChartImageState({
+        status: 'ready',
+        dataUri: result.dataUri,
+        mimeType: result.mimeType,
+        prompt: result.prompt,
+        model: result.model
+      });
+      await setCachedChartImage(chartImageCacheKey, {
+        dataUri: result.dataUri,
+        mimeType: result.mimeType,
+        prompt: result.prompt
+      });
+    } catch (error) {
+      await deleteCachedTableVisualization(chartImageCacheKey);
+      setChartImageState({
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Failed to generate chart image.'
+      });
+    }
+  }, [chartImageCacheKey, chartImageState.status, hasChartableData, imageApiKey, imageModel, imageProvider, table]);
+
+  useEffect(() => {
+    if (viewMode === 'interactive-chart' && interactiveChartState.status === 'idle') {
+      void requestInteractiveChart();
+    }
+  }, [interactiveChartState.status, requestInteractiveChart, viewMode]);
+
+  useEffect(() => {
+    if (viewMode === 'chart-image' && chartImageState.status === 'idle') {
+      void requestChartImage();
+    }
+  }, [chartImageState.status, requestChartImage, viewMode]);
+
+  const activeChartConfig = viewMode === 'interactive-chart' && interactiveChartState.status === 'ready'
+    ? interactiveChartState.config
+    : null;
+
+  useEffect(() => {
+    if (!activeChartConfig) {
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+        chartInstanceRef.current = null;
+      }
+      return;
+    }
+
+    const canvas = chartCanvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!context) {
+      return;
+    }
+
+    if (chartInstanceRef.current) {
+      chartInstanceRef.current.destroy();
+    }
+    chartInstanceRef.current = new Chart(context, activeChartConfig);
+
+    return () => {
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+        chartInstanceRef.current = null;
+      }
+    };
+  }, [activeChartConfig]);
+
+  const handlePointerStart = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    const parentRect = getOverlayParentRect(container);
+
+    if (target.closest('.table-viewer-resize-handle')) {
+      event.preventDefault();
+      isResizingRef.current = true;
+      resizeStartRef.current = {
+        mouseX: event.clientX,
+        mouseY: event.clientY,
+        width: container.offsetWidth,
+        height: container.offsetHeight
+      };
+      dragStartRef.current = {
+        mouseX: 0,
+        mouseY: 0,
+        elemX: container.offsetLeft,
+        elemY: container.offsetTop
+      };
+      return;
+    }
+
+    if (!target.closest('.table-viewer-drag-handle')) {
+      return;
+    }
+
+    event.preventDefault();
+    isDraggingRef.current = true;
+    dragStartRef.current = {
+      mouseX: event.clientX,
+      mouseY: event.clientY,
+      elemX: clamp(container.offsetLeft, 0, Math.max(0, parentRect.width - container.offsetWidth)),
+      elemY: clamp(container.offsetTop, 0, Math.max(0, parentRect.height - container.offsetHeight))
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleMouseMove = (event: MouseEvent) => {
+      const container = containerRef.current;
+      if (!container) {
+        return;
+      }
+      const parentRect = getOverlayParentRect(container);
+
+      if (isResizingRef.current && resizeStartRef.current && dragStartRef.current) {
+        const nextWidth = resizeStartRef.current.width + (event.clientX - resizeStartRef.current.mouseX);
+        const nextHeight = resizeStartRef.current.height + (event.clientY - resizeStartRef.current.mouseY);
+        const maxWidth = Math.max(320, parentRect.width - dragStartRef.current.elemX);
+        const maxHeight = Math.max(220, parentRect.height - dragStartRef.current.elemY);
+        setPanelSize({
+          width: clamp(nextWidth, 320, maxWidth),
+          height: clamp(nextHeight, 220, maxHeight)
+        });
+        return;
+      }
+
+      if (!isDraggingRef.current || !dragStartRef.current) {
+        return;
+      }
+
+      const deltaX = event.clientX - dragStartRef.current.mouseX;
+      const deltaY = event.clientY - dragStartRef.current.mouseY;
+      const maxLeft = Math.max(0, parentRect.width - container.offsetWidth);
+      const maxTop = Math.max(0, parentRect.height - container.offsetHeight);
+      setDragPosition({
+        left: clamp(dragStartRef.current.elemX + deltaX, 0, maxLeft),
+        top: clamp(dragStartRef.current.elemY + deltaY, 0, maxTop)
+      });
+    };
+
+    const handleMouseUp = () => {
+      isDraggingRef.current = false;
+      isResizingRef.current = false;
+      dragStartRef.current = null;
+      resizeStartRef.current = null;
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!chartInstanceRef.current || viewMode !== 'interactive-chart' || interactiveChartState.status !== 'ready') {
+      return;
+    }
+    chartInstanceRef.current.resize();
+  }, [currentSize.height, currentSize.width, interactiveChartState.status, viewMode]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="canvas-overlay-highlight-block canvas-overlay-table-block"
+      style={{
+        left: `${currentPosition.left}px`,
+        top: `${currentPosition.top}px`,
+        width: `${currentSize.width}px`,
+        height: `${currentSize.height}px`
+      }}
+      onMouseDown={handlePointerStart}
+    >
+      <div className="table-viewer-drag-handle" aria-hidden="true">
+        <DragHandleIcon />
+      </div>
+      <OverlayToolbar onClose={onClose}>
+        <OverlayToolbarButton
+          onClick={() => setViewMode('table')}
+          icon={<TableIcon />}
+          label="Table view"
+          variant={viewMode === 'table' ? 'primary' : 'default'}
+        />
+        <OverlayToolbarButton
+          onClick={() => {
+            setViewMode('interactive-chart');
+            if (interactiveChartState.status === 'error') {
+              void requestInteractiveChart(true);
+            }
+          }}
+          icon={<InteractiveChartIcon />}
+          label="AI chart"
+          title={`Generate an interactive chart with ${getProviderDisplayName(chartProvider)}`}
+          variant={viewMode === 'interactive-chart' ? 'primary' : 'default'}
+        />
+        <OverlayToolbarButton
+          onClick={() => {
+            setViewMode('chart-image');
+            if (chartImageState.status === 'error') {
+              void requestChartImage(true);
+            }
+          }}
+          icon={<ImageChartIcon />}
+          label="Infographic"
+          title={`Generate an infographic-style chart image with ${getProviderDisplayName(imageProvider)}`}
+          variant={viewMode === 'chart-image' ? 'primary' : 'default'}
+        />
+        <span className="overlay-toolbar-divider" />
+      </OverlayToolbar>
+      <div className="canvas-overlay-highlight-inner">
+        <div className="canvas-overlay-table-content">
+          {viewMode === 'table' && (
+            <>
+              {rows.length === 0 ? (
+                <div className="canvas-overlay-table-placeholder">Table detected, but no cell data is available.</div>
+              ) : (
+                <table className="canvas-overlay-table">
+                  <tbody>
+                    {sortedRows.map((row, rowIndex) => (
+                      <tr key={rowIndex}>
+                        {row.map((cell, colIndex) => {
+                          const CellTag = cell.kind === 'th' ? 'th' : 'td';
+                          const isHeader = cell.kind === 'th';
+                          const isSorted = isHeader && localSort?.column === colIndex;
+                          const indicator = isHeader
+                            ? isSorted
+                              ? localSort?.direction === 'asc'
+                                ? '▲'
+                                : '▼'
+                              : '⇅'
+                            : null;
+                          return (
+                            <CellTag
+                              key={`${rowIndex}-${colIndex}`}
+                              className={isHeader ? 'table-sortable-header' : undefined}
+                            >
+                              {isHeader ? (
+                                <button
+                                  type="button"
+                                  className="table-sort-button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleSort(colIndex);
+                                  }}
+                                  aria-label={`Sort by column ${colIndex + 1}`}
+                                >
+                                  <span className="table-sort-label">{cell.text || '\u00A0'}</span>
+                                  {indicator && (
+                                    <span
+                                      className={`table-sort-indicator${isSorted ? '' : ' table-sort-indicator--off'}`}
+                                    >
+                                      {indicator}
+                                    </span>
+                                  )}
+                                </button>
+                              ) : (
+                                cell.text || '\u00A0'
+                              )}
+                            </CellTag>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
+          {viewMode === 'interactive-chart' && (
+            <div className="table-chart-view table-chart-view--chartjs" role="img" aria-label="AI generated interactive chart">
+              {!hasChartableData && (
+                <div className="canvas-overlay-table-placeholder">Not enough numeric table structure to chart.</div>
+              )}
+              {hasChartableData && interactiveChartState.status === 'loading' && (
+                <div className="canvas-overlay-table-placeholder">
+                  Generating interactive chart with {getProviderDisplayName(chartProvider)}…
+                </div>
+              )}
+              {hasChartableData && interactiveChartState.status === 'error' && (
+                <div className="canvas-overlay-table-placeholder">
+                  <div style={{ marginBottom: 8 }}>{interactiveChartState.message}</div>
+                  <div className="table-chart-actions table-chart-actions--centered">
+                    <button
+                      type="button"
+                      className="table-chart-regenerate-button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void requestInteractiveChart(true);
+                      }}
+                    >
+                      Regenerate chart
+                    </button>
+                  </div>
+                </div>
+              )}
+              {hasChartableData && interactiveChartState.status === 'ready' && (
+                <>
+                  <div className="table-chart-actions">
+                    <button
+                      type="button"
+                      className="table-chart-regenerate-button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void requestInteractiveChart(true);
+                      }}
+                    >
+                      Regenerate chart
+                    </button>
+                  </div>
+                  {interactiveChartState.title && (
+                    <div className="table-chart-heading">{interactiveChartState.title}</div>
+                  )}
+                  <div className="table-chart-canvas-shell">
+                    <canvas ref={chartCanvasRef} />
+                  </div>
+                  {interactiveChartState.note && <div className="table-chart-note">{interactiveChartState.note}</div>}
+                </>
+              )}
+            </div>
+          )}
+          {viewMode === 'chart-image' && (
+            <div className="table-chart-view table-chart-view--image" role="img" aria-label="AI generated infographic chart image">
+              {!hasChartableData && (
+                <div className="canvas-overlay-table-placeholder">Not enough numeric table structure to chart.</div>
+              )}
+              {hasChartableData && chartImageState.status === 'loading' && (
+                <div className="canvas-overlay-table-placeholder">
+                  Generating infographic with {getProviderDisplayName(imageProvider)}…
+                </div>
+              )}
+              {hasChartableData && chartImageState.status === 'error' && (
+                <div className="canvas-overlay-table-placeholder">
+                  <div style={{ marginBottom: 8 }}>{chartImageState.message}</div>
+                  <div className="table-chart-actions table-chart-actions--centered">
+                    <button
+                      type="button"
+                      className="table-chart-regenerate-button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void requestChartImage(true);
+                      }}
+                    >
+                      Regenerate image
+                    </button>
+                  </div>
+                </div>
+              )}
+              {hasChartableData && chartImageState.status === 'ready' && (
+                <>
+                  <div className="table-chart-actions">
+                    <button
+                      type="button"
+                      className="table-chart-regenerate-button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void requestChartImage(true);
+                      }}
+                    >
+                      Regenerate image
+                    </button>
+                  </div>
+                  <div className="table-chart-image-frame">
+                    <img className="table-chart-image" src={chartImageState.dataUri} alt="AI generated infographic chart" />
+                  </div>
+                  {chartImageState.prompt && <div className="table-chart-note">{chartImageState.prompt}</div>}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="table-viewer-resize-handle" aria-hidden="true">
+        <ResizeHandleIcon />
+      </div>
+    </div>
+  );
+}
+
+function getOverlayParentRect(element: HTMLElement): { width: number; height: number } {
+  const parent = element.offsetParent;
+  if (parent instanceof HTMLElement) {
+    return {
+      width: parent.clientWidth,
+      height: parent.clientHeight
+    };
+  }
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (max <= min) {
+    return min;
+  }
+  return Math.min(Math.max(value, min), max);
+}
 
 function toggleSortState(current: TableSortState, column: number): TableSortState {
   if (!current || current.column !== column) {
@@ -32,399 +679,12 @@ function sortTableRows(
   const header = rows[0];
   const body = rows.slice(1);
   const direction = sortState.direction === 'asc' ? 1 : -1;
-  const sortedBody = [...body].sort((a, b) => {
-    const left = a[sortState.column]?.text ?? '';
-    const right = b[sortState.column]?.text ?? '';
+  const sortedBody = [...body].sort((leftRow, rightRow) => {
+    const left = leftRow[sortState.column]?.text ?? '';
+    const right = rightRow[sortState.column]?.text ?? '';
     return left.localeCompare(right) * direction;
   });
   return [header, ...sortedBody];
-}
-
-type TableViewerProps = {
-  table: ExtractedTable;
-  bounds: { minX: number; minY: number; maxX: number; maxY: number };
-  pageHeight: number;
-  scaleX: number;
-  scaleY: number;
-  sortState: TableSortState;
-  onSortChange: (tableId: string, next: TableSortState) => void;
-  ensureGeminiApiKey: () => string | null;
-  focusProvider: FocusProvider;
-  onClose: () => void;
-};
-
-export function TableViewer({
-  table,
-  bounds,
-  pageHeight,
-  scaleX,
-  scaleY,
-  sortState,
-  onSortChange,
-  ensureGeminiApiKey,
-  focusProvider,
-  onClose
-}: TableViewerProps): JSX.Element {
-  const [localSort, setLocalSort] = useState<TableSortState>(sortState);
-  const [viewMode, setViewMode] = useState<ViewMode>('table');
-  const [aiChartState, setAiChartState] = useState<AiChartState>({ status: 'idle' });
-  const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const chartInstanceRef = useRef<Chart | null>(null);
-
-  useEffect(() => {
-    setLocalSort(sortState);
-  }, [sortState]);
-
-  useEffect(() => {
-    setViewMode('table');
-    setAiChartState({ status: 'idle' });
-    if (chartInstanceRef.current) {
-      chartInstanceRef.current.destroy();
-      chartInstanceRef.current = null;
-    }
-  }, [table.id]);
-
-  // Account for canvas padding (16px matches DEFAULT_OPTIONS.pagePadding in canvasRenderer)
-  const canvasPadding = 16 * scaleX; // scaleX = zoom
-  const left = bounds.minX * scaleX + canvasPadding - 12;
-  const top = (pageHeight - bounds.maxY) * scaleY + canvasPadding - 12;
-  const width = (bounds.maxX - bounds.minX) * scaleX + 24;
-  const height = (bounds.maxY - bounds.minY) * scaleY + 24;
-
-  const rows: Array<Array<{ text: string; kind: 'td' | 'th' }>> = [];
-  if (table.cells && table.cells.length > 0) {
-    const maxRow = Math.max(...table.cells.map((cell) => cell.row), 0);
-    const maxCol = Math.max(...table.cells.map((cell) => cell.col), 0);
-    for (let rowIndex = 1; rowIndex <= maxRow; rowIndex += 1) {
-      const row: Array<{ text: string; kind: 'td' | 'th' }> = [];
-      for (let colIndex = 1; colIndex <= maxCol; colIndex += 1) {
-        const cell = table.cells.find((candidate) => candidate.row === rowIndex && candidate.col === colIndex);
-        row.push({
-          text: cell?.text ?? '',
-          kind: rowIndex === 1 ? 'th' : 'td'
-        });
-      }
-      rows.push(row);
-    }
-  }
-
-  const sortedRows = sortTableRows(rows, localSort);
-
-  const headers = sortedRows[0] ?? [];
-  const chartColumns =
-    sortedRows.length > 1
-      ? headers.map((headerCell, columnIndex) => {
-          const columnLabel = headerCell?.text || `Column ${columnIndex + 1}`;
-          const numericValues = sortedRows
-            .slice(1)
-            .map((row) => Number.parseFloat(row[columnIndex]?.text ?? ''))
-            .filter((value) => !Number.isNaN(value));
-          const nonEmptyCount = sortedRows
-            .slice(1)
-            .filter((row) => (row[columnIndex]?.text ?? '').trim().length > 0).length;
-          const value =
-            numericValues.length > 0
-              ? numericValues.reduce((sum, current) => sum + current, 0)
-              : nonEmptyCount;
-          return { label: columnLabel, value };
-        })
-      : [];
-  const localChartConfig = useMemo<ChartConfiguration | null>(
-    () => {
-      if (chartColumns.length === 0) {
-        return null;
-      }
-      return {
-        type: 'bar',
-        data: {
-          labels: chartColumns.map((point) => point.label),
-          datasets: [
-            {
-              label: 'Column totals',
-              data: chartColumns.map((point) => point.value),
-              backgroundColor: 'rgba(37, 99, 235, 0.6)',
-              borderColor: 'rgba(37, 99, 235, 0.9)',
-              borderWidth: 1
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          scales: {
-            y: {
-              beginAtZero: true
-            }
-          },
-          plugins: {
-            legend: {
-              display: false
-            },
-            tooltip: {
-              callbacks: {
-                label: (ctx) => `${ctx.parsed.y ?? 0}`
-              }
-            }
-          }
-        }
-      };
-    },
-    [chartColumns]
-  );
-
-  const handleSort = (column: number) => {
-    const next = toggleSortState(localSort, column);
-    console.debug('Table sort change', { tableId: table.id, column, next });
-    onSortChange(table.id, next);
-    setLocalSort(next);
-  };
-
-  const requestAiChart = useCallback(async () => {
-    if (aiChartState.status === 'loading' || aiChartState.status === 'ready') {
-      return;
-    }
-
-    if (focusProvider === 'mock') {
-      setAiChartState({ status: 'loading' });
-      window.setTimeout(() => {
-        if (localChartConfig) {
-          setAiChartState({ status: 'ready', config: localChartConfig, note: 'Mock chart preview', source: 'mock' });
-        } else {
-          setAiChartState({ status: 'error', message: 'No data available to visualize.' });
-        }
-      }, 800);
-      return;
-    }
-
-    const apiKey = ensureGeminiApiKey();
-    if (!apiKey) {
-      setAiChartState({ status: 'error', message: 'Gemini API key is required to build an AI chart.' });
-      return;
-    }
-
-    setAiChartState({ status: 'loading' });
-
-    // Generate cache key from table data
-    const cacheKey = generateTableCacheKey(table.id, table.cells ?? []);
-
-    // Check cache first
-    try {
-      const cached = await getCachedAiChart(cacheKey);
-      if (cached) {
-        console.debug('[TableViewer] Using cached AI chart');
-        setAiChartState({ status: 'ready', config: cached.config, note: cached.note, source: 'ai' });
-        return;
-      }
-    } catch (err) {
-      console.debug('[TableViewer] Cache check failed:', err);
-    }
-
-    // Not in cache, request from API
-    try {
-      const result = await generateAiChartFromTable({ table, apiKey });
-      const note = result.text && result.text.length < 240 ? result.text : undefined;
-      setAiChartState({ status: 'ready', config: result.config, note, source: 'ai' });
-
-      // Save to cache
-      try {
-        await setCachedAiChart(cacheKey, result.config, note);
-        console.debug('[TableViewer] Cached AI chart result');
-      } catch (cacheErr) {
-        console.debug('[TableViewer] Failed to cache result:', cacheErr);
-      }
-    } catch (error) {
-      setAiChartState({
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Failed to generate AI chart'
-      });
-    }
-  }, [aiChartState.status, focusProvider, ensureGeminiApiKey, table, localChartConfig]);
-
-  useEffect(() => {
-    if (viewMode === 'ai-chart') {
-      void requestAiChart();
-    }
-  }, [viewMode, requestAiChart]);
-
-  const aiChartConfig = aiChartState.status === 'ready' ? aiChartState.config : null;
-
-  useEffect(() => {
-    if (viewMode !== 'chart' && viewMode !== 'ai-chart') {
-      if (chartInstanceRef.current) {
-        chartInstanceRef.current.destroy();
-        chartInstanceRef.current = null;
-      }
-      return;
-    }
-
-    const selectedConfig = viewMode === 'chart' ? localChartConfig : aiChartConfig;
-    if (!selectedConfig) {
-      if (chartInstanceRef.current) {
-        chartInstanceRef.current.destroy();
-        chartInstanceRef.current = null;
-      }
-      return;
-    }
-
-    const canvas = chartCanvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-    if (chartInstanceRef.current) {
-      chartInstanceRef.current.destroy();
-    }
-
-    chartInstanceRef.current = new Chart(ctx, selectedConfig);
-
-    return () => {
-      if (chartInstanceRef.current) {
-        chartInstanceRef.current.destroy();
-        chartInstanceRef.current = null;
-      }
-    };
-  }, [viewMode, localChartConfig, aiChartConfig]);
-
-  return (
-    <div
-      className="canvas-overlay-highlight-block canvas-overlay-table-block"
-      style={{
-        left: `${left}px`,
-        top: `${top}px`,
-        minWidth: `${width}px`,
-        minHeight: `${height}px`
-      }}
-    >
-      <OverlayToolbar onClose={onClose}>
-        <OverlayToolbarButton
-          onClick={() => setViewMode('table')}
-          icon={<TableIcon />}
-          label="Table view"
-          variant={viewMode === 'table' ? 'primary' : 'default'}
-        />
-        <OverlayToolbarButton
-          onClick={() => setViewMode('chart')}
-          icon={<ChartIcon />}
-          label="Chart view"
-          variant={viewMode === 'chart' ? 'primary' : 'default'}
-        />
-        <OverlayToolbarButton
-          onClick={() => setViewMode('ai-chart')}
-          icon={<AIChartIcon />}
-          label="AI Chart view"
-          variant={viewMode === 'ai-chart' ? 'primary' : 'default'}
-        />
-        <span className="overlay-toolbar-divider" />
-      </OverlayToolbar>
-      <div className="canvas-overlay-highlight-inner">
-        <div className="canvas-overlay-table-content">
-            {viewMode === 'table' && (
-              <>
-                {rows.length === 0 ? (
-                  <div className="canvas-overlay-table-placeholder">Table detected (no cell data available).</div>
-                ) : (
-                  <table className="canvas-overlay-table">
-                    <tbody>
-                      {sortedRows.map((row, rowIndex) => (
-                        <tr key={rowIndex}>
-                          {row.map((cell, colIndex) => {
-                            const CellTag = cell.kind === 'th' ? 'th' : 'td';
-                            const isHeader = cell.kind === 'th';
-                            const isSorted = isHeader && localSort?.column === colIndex;
-                            const indicator = isHeader
-                              ? isSorted
-                                ? localSort?.direction === 'asc'
-                                  ? '▲'
-                                  : '▼'
-                                : '⇅'
-                              : null;
-                            return (
-                              <CellTag
-                                key={`${rowIndex}-${colIndex}`}
-                                className={isHeader ? 'table-sortable-header' : undefined}
-                              >
-                                {isHeader ? (
-                                  <button
-                                    type="button"
-                                    className="table-sort-button"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      handleSort(colIndex);
-                                    }}
-                                    aria-label={`Sort by column ${colIndex + 1}`}
-                                  >
-                                    <span className="table-sort-label">{cell.text || '\u00A0'}</span>
-                                    {indicator && (
-                                      <span
-                                        className={`table-sort-indicator${isSorted ? '' : ' table-sort-indicator--off'}`}
-                                      >
-                                        {indicator}
-                                      </span>
-                                    )}
-                                  </button>
-                                ) : (
-                                  cell.text || '\u00A0'
-                                )}
-                              </CellTag>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </>
-            )}
-            {viewMode === 'chart' && (
-              <>
-                {chartColumns.length === 0 ? (
-                  <div className="canvas-overlay-table-placeholder">
-                    No columns available to visualize. Sorting still available in table view.
-                  </div>
-                ) : (
-                  <div className="table-chart-view table-chart-view--chartjs" role="img" aria-label="Table data as bar chart">
-                    <canvas ref={chartCanvasRef} />
-                  </div>
-                )}
-              </>
-            )}
-            {viewMode === 'ai-chart' && (
-              <div className="table-chart-view table-chart-view--chartjs" role="img" aria-label="AI generated chart">
-                {aiChartState.status === 'idle' && (
-                  <div className="canvas-overlay-table-placeholder">
-                    Click "AI Chart" to request a Gemini-generated chart.
-                  </div>
-                )}
-                {aiChartState.status === 'loading' && (
-                  <div className="canvas-overlay-table-placeholder">Generating chart with Gemini…</div>
-                )}
-                {aiChartState.status === 'error' && (
-                  <div className="canvas-overlay-table-placeholder">
-                    <div style={{ marginBottom: 8 }}>{aiChartState.message}</div>
-                    <button
-                      type="button"
-                      className="table-sort-button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        requestAiChart();
-                      }}
-                    >
-                      Retry
-                    </button>
-                  </div>
-                )}
-                {aiChartState.status === 'ready' && (
-                  <>
-                    <canvas ref={chartCanvasRef} />
-                    {aiChartState.note && <div className="table-chart-note">{aiChartState.note}</div>}
-                  </>
-                )}
-              </div>
-            )}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function TableIcon(): JSX.Element {
@@ -439,24 +699,51 @@ function TableIcon(): JSX.Element {
   );
 }
 
-function ChartIcon(): JSX.Element {
+function InteractiveChartIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
       <rect x="2" y="9" width="3" height="6" rx="0.5" fill="currentColor" />
       <rect x="7" y="5" width="3" height="10" rx="0.5" fill="currentColor" />
       <rect x="12" y="2" width="3" height="13" rx="0.5" fill="currentColor" />
+      <circle cx="14" cy="4" r="2" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M13.1 4.1l0.7 0.7 1.2-1.6" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
-function AIChartIcon(): JSX.Element {
+function ImageChartIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
-      <rect x="2" y="10" width="2.5" height="5" rx="0.5" fill="currentColor" />
-      <rect x="6" y="6" width="2.5" height="9" rx="0.5" fill="currentColor" />
-      <rect x="10" y="3" width="2.5" height="12" rx="0.5" fill="currentColor" />
-      <circle cx="14.5" cy="4.5" r="2" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M13.5 4.5l1 1 1.5-2" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="2" y="3" width="14" height="12" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M4 12l2.8-2.7 2.3 2.1 2.2-3.2 2.7 3.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="6.2" cy="6.4" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+function DragHandleIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 6" width="16" height="6" aria-hidden="true">
+      <circle cx="4" cy="1.5" r="1.2" fill="currentColor" />
+      <circle cx="8" cy="1.5" r="1.2" fill="currentColor" />
+      <circle cx="12" cy="1.5" r="1.2" fill="currentColor" />
+      <circle cx="4" cy="4.5" r="1.2" fill="currentColor" />
+      <circle cx="8" cy="4.5" r="1.2" fill="currentColor" />
+      <circle cx="12" cy="4.5" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ResizeHandleIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d="M5 11l6-6M8 12l4-4M11 13l2-2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

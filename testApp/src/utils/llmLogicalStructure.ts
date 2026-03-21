@@ -17,7 +17,7 @@ import {
   getStructuredExtractProvider
 } from './structuredExtractSettings';
 
-export const LOGICAL_STRUCTURE_LLM_PROMPT_VERSION = 'v1';
+export const LOGICAL_STRUCTURE_LLM_PROMPT_VERSION = 'v2';
 
 export interface LogicalStructureRuntimeSettings {
   provider: StructuredExtractProvider;
@@ -127,6 +127,9 @@ function buildLogicalStructurePrompt(batch: ReturnType<typeof collectHtmlLogical
     '- Prefer semantically coherent units over raw paragraph boundaries.',
     '- A short lead-in paragraph followed by its bullet list should usually stay in the same group.',
     '- A group may be one paragraph, several paragraphs, an entire short subsection, or a whole short section when that is the most coherent unit.',
+    '- If a headed subsection is compact, prefer one group covering the whole subsection instead of splitting it into smaller paragraph-level groups.',
+    '- Treat a headed subsection as compact when it has about 1 to 3 short paragraphs and no strong internal topic shift.',
+    '- Do not split a compact headed subsection unless there is a clear semantic break, such as a new experiment, a contrastive transition, or a distinct list/example block.',
     '- Do not invent ids, coordinates, or extra fields.',
     '- Keep titles short and optional.',
     `Section context: ${sectionLabel}`,
