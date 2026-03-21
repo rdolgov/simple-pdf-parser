@@ -16,49 +16,87 @@ export function ImagePreviewPopup({
   onDelete
 }: ImagePreviewPopupProps): JSX.Element {
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
+  const [panelSize, setPanelSize] = useState<{ width: number; height: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
+  const isResizingRef = useRef(false);
   const dragStartRef = useRef<{ mouseX: number; mouseY: number; elemX: number; elemY: number } | null>(null);
+  const resizeStartRef = useRef<{ mouseX: number; mouseY: number; width: number; height: number } | null>(null);
 
   // Reset drag position when click position changes (always open next to clicked button)
   useEffect(() => {
     setDragPosition(null);
+    setPanelSize(null);
   }, [position.top, position.left]);
 
 
   const handleDragStart = useCallback((e: ReactMouseEvent) => {
-    // Only start drag from the drag handle
     const target = e.target as HTMLElement;
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    if (target.closest('.image-preview-resize-handle')) {
+      e.preventDefault();
+      isResizingRef.current = true;
+      resizeStartRef.current = {
+        mouseX: e.clientX,
+        mouseY: e.clientY,
+        width: container.offsetWidth,
+        height: container.offsetHeight
+      };
+      return;
+    }
+
     if (!target.closest('.image-preview-drag-handle')) {
       return;
     }
+
     e.preventDefault();
     isDraggingRef.current = true;
 
-    const container = containerRef.current;
-    if (container) {
-      const style = container.style;
-      const currentTop = parseFloat(style.top) || 0;
-      const currentLeft = parseFloat(style.left) || 0;
+    const style = container.style;
+    const currentTop = parseFloat(style.top) || 0;
+    const currentLeft = parseFloat(style.left) || 0;
 
-      dragStartRef.current = {
-        mouseX: e.clientX,
-        mouseY: e.clientY,
-        elemX: currentLeft,
-        elemY: currentTop
-      };
-    }
+    dragStartRef.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      elemX: currentLeft,
+      elemY: currentTop
+    };
   }, []);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
+      const container = containerRef.current;
+      if (!container) {
+        return;
+      }
+      const parentRect = getPopupParentRect(container);
+
+      if (isResizingRef.current && resizeStartRef.current) {
+        const newWidth = resizeStartRef.current.width + (e.clientX - resizeStartRef.current.mouseX);
+        const newHeight = resizeStartRef.current.height + (e.clientY - resizeStartRef.current.mouseY);
+        const maxWidth = Math.max(320, parentRect.width);
+        const maxHeight = Math.max(220, parentRect.height);
+        setPanelSize({
+          width: clamp(newWidth, 320, maxWidth),
+          height: clamp(newHeight, 220, maxHeight)
+        });
+        return;
+      }
+
       if (!isDraggingRef.current || !dragStartRef.current) return;
 
       const deltaX = e.clientX - dragStartRef.current.mouseX;
       const deltaY = e.clientY - dragStartRef.current.mouseY;
 
-      const newLeft = dragStartRef.current.elemX + deltaX;
-      const newTop = dragStartRef.current.elemY + deltaY;
+      const maxLeft = Math.max(0, parentRect.width - container.offsetWidth);
+      const maxTop = Math.max(0, parentRect.height - container.offsetHeight);
+      const newLeft = clamp(dragStartRef.current.elemX + deltaX, 0, maxLeft);
+      const newTop = clamp(dragStartRef.current.elemY + deltaY, 0, maxTop);
 
       setDragPosition({ top: newTop, left: newLeft });
     };
@@ -67,7 +105,11 @@ export function ImagePreviewPopup({
       if (isDraggingRef.current) {
         isDraggingRef.current = false;
       }
+      if (isResizingRef.current) {
+        isResizingRef.current = false;
+      }
       dragStartRef.current = null;
+      resizeStartRef.current = null;
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -86,7 +128,9 @@ export function ImagePreviewPopup({
   const currentPosition = dragPosition ?? position;
   const positionStyle = {
     top: `${currentPosition.top}px`,
-    left: `${currentPosition.left}px`
+    left: `${currentPosition.left}px`,
+    width: panelSize ? `${panelSize.width}px` : undefined,
+    height: panelSize ? `${panelSize.height}px` : undefined
   };
 
   return (
@@ -122,8 +166,28 @@ export function ImagePreviewPopup({
       <div className="image-preview-content">
         <img src={dataUri} alt="Generated from text" />
       </div>
+      <div className="image-preview-resize-handle" aria-hidden="true" />
     </div>
   );
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getPopupParentRect(element: HTMLElement): { width: number; height: number } {
+  const parent = element.offsetParent;
+  if (parent instanceof HTMLElement) {
+    return {
+      width: parent.clientWidth,
+      height: parent.clientHeight
+    };
+  }
+
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight
+  };
 }
 
 function DragIcon(): JSX.Element {

@@ -4727,7 +4727,10 @@ footer code {
 .image-preview-popup {
   position: absolute;
   width: 420px;
-  max-height: 520px;
+  min-width: 320px;
+  min-height: 220px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
   background: rgba(255, 255, 255, 0.75);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -4820,6 +4823,28 @@ footer code {
   height: auto;
   display: block;
   border-radius: 8px;
+}
+
+.image-preview-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  z-index: 2;
+}
+
+.image-preview-resize-handle::before {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid rgba(100, 116, 139, 0.45);
+  border-bottom: 2px solid rgba(100, 116, 139, 0.45);
+  border-bottom-right-radius: 3px;
 }
 
 /* ============================================================================
