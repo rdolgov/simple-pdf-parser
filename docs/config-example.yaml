@@ -74,3 +74,4 @@ testApp:
 structuredExtract:
   provider: "gemini" # or "openai"
   model: "gemini-3-flash-preview"
+  minSplitPages: 8

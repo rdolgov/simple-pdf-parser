@@ -43,6 +43,22 @@ export interface StoredInteractionRecord {
   outputSummary?: Record<string, unknown>;
 }
 
+export interface StoredLlmExchangeRecord {
+  id: string;
+  actor: string;
+  documentId?: string;
+  taskType: string;
+  provider?: string;
+  model?: string;
+  stage?: string;
+  status: 'succeeded' | 'failed';
+  createdAt: string;
+  artifactPath: string;
+  requestSummary?: Record<string, unknown>;
+  responseSummary?: Record<string, unknown>;
+  errorSummary?: Record<string, unknown>;
+}
+
 export class TaskStore {
   readonly dataDir: string;
 
@@ -56,7 +72,8 @@ export class TaskStore {
       mkdir(this.filesDir(), { recursive: true }),
       mkdir(this.detectionsDir(), { recursive: true }),
       mkdir(this.interactionsDir(), { recursive: true }),
-      mkdir(this.semanticIndexesDir(), { recursive: true })
+      mkdir(this.semanticIndexesDir(), { recursive: true }),
+      mkdir(this.llmExchangesDir(), { recursive: true })
     ]);
   }
 
@@ -262,6 +279,70 @@ export class TaskStore {
     }
   }
 
+  async recordLlmExchange(input: {
+    actor: string;
+    documentId?: string;
+    taskType: string;
+    provider?: string;
+    model?: string;
+    stage?: string;
+    status: 'succeeded' | 'failed';
+    request?: Record<string, unknown>;
+    response?: Record<string, unknown>;
+    error?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }): Promise<string> {
+    await this.ensureReady();
+
+    const id = createHash('sha1')
+      .update(`${Date.now()}:${input.actor}:${input.documentId ?? 'global'}:${input.taskType}:${Math.random()}`)
+      .digest('hex')
+      .slice(0, 20);
+    const createdAt = new Date().toISOString();
+    const document = input.documentId ? await this.getDocument(input.documentId) : null;
+    const artifactDir = this.llmExchangeArtifactDir(input.documentId);
+    const artifactFileName = `${createdAt.replace(/[:.]/g, '-')}-${input.taskType}${input.stage ? `-${input.stage}` : ''}-${id}.json`;
+    const artifactPath = join(artifactDir, artifactFileName);
+
+    const record = {
+      id,
+      createdAt,
+      actor: input.actor,
+      documentId: input.documentId,
+      documentFileName: document?.fileName,
+      documentFilePath: document?.filePath,
+      taskType: input.taskType,
+      provider: input.provider,
+      model: input.model,
+      stage: input.stage,
+      status: input.status,
+      ...(input.metadata ? { metadata: sanitizeExchangeValue(input.metadata) } : {}),
+      ...(input.request ? { request: sanitizeExchangeValue(input.request) } : {}),
+      ...(input.response ? { response: sanitizeExchangeValue(input.response) } : {}),
+      ...(input.error ? { error: sanitizeExchangeValue(input.error) } : {})
+    };
+
+    await writeJson(artifactPath, record);
+
+    const indexRecord: StoredLlmExchangeRecord = {
+      id,
+      actor: input.actor,
+      ...(input.documentId ? { documentId: input.documentId } : {}),
+      taskType: input.taskType,
+      ...(input.provider ? { provider: input.provider } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.stage ? { stage: input.stage } : {}),
+      status: input.status,
+      createdAt,
+      artifactPath,
+      ...(input.request ? { requestSummary: summarizeExchangeValue(input.request) } : {}),
+      ...(input.response ? { responseSummary: summarizeExchangeValue(input.response) } : {}),
+      ...(input.error ? { errorSummary: summarizeExchangeValue(input.error) } : {})
+    };
+    await appendFile(this.llmExchangeIndexPath(input.documentId), `${JSON.stringify(indexRecord)}\n`, 'utf8');
+    return artifactPath;
+  }
+
   async getSemanticIndex<T>(documentId: string, fingerprint: string): Promise<T | null> {
     await this.ensureReady();
     return readJson<T>(this.semanticIndexPath(documentId, fingerprint));
@@ -292,6 +373,10 @@ export class TaskStore {
     return join(this.dataDir, 'semantic-indexes');
   }
 
+  private llmExchangesDir(): string {
+    return join(this.dataDir, 'llm-exchanges');
+  }
+
   private documentMetadataPath(documentId: string): string {
     return join(this.documentsDir(), `${documentId}.json`);
   }
@@ -311,6 +396,14 @@ export class TaskStore {
   private semanticIndexPath(documentId: string, fingerprint: string): string {
     const safeFingerprint = createHash('sha1').update(fingerprint).digest('hex');
     return join(this.semanticIndexesDir(), `${documentId}-${safeFingerprint}.json`);
+  }
+
+  private llmExchangeArtifactDir(documentId?: string): string {
+    return join(this.llmExchangesDir(), documentId ?? 'global');
+  }
+
+  private llmExchangeIndexPath(documentId?: string): string {
+    return join(this.llmExchangesDir(), `${documentId ?? 'global'}.jsonl`);
   }
 }
 
@@ -350,4 +443,112 @@ function inferDocumentExtension(fileName: string, mimeType: string): string {
     return '.pdf';
   }
   return '.bin';
+}
+
+function sanitizeExchangeValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeExchangeValue(entry));
+  }
+
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string') {
+      return redactStringIfNeeded('', value);
+    }
+    return value;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (shouldRedactExchangeKey(key)) {
+      result[key] = summarizeBlobValue(entry);
+      continue;
+    }
+
+    if (typeof entry === 'string') {
+      result[key] = redactStringIfNeeded(key, entry);
+      continue;
+    }
+
+    result[key] = sanitizeExchangeValue(entry);
+  }
+  return result;
+}
+
+function summarizeExchangeValue(value: Record<string, unknown>): Record<string, unknown> {
+  const summary: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === 'string') {
+      summary[key] = summarizeString(entry);
+      continue;
+    }
+    if (typeof entry === 'number' || typeof entry === 'boolean') {
+      summary[key] = entry;
+      continue;
+    }
+    if (Array.isArray(entry)) {
+      summary[key] = `array(${entry.length})`;
+      continue;
+    }
+    if (entry && typeof entry === 'object') {
+      summary[key] = 'object';
+    }
+  }
+  return summary;
+}
+
+function shouldRedactExchangeKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return (
+    normalized === 'data' ||
+    normalized === 'datauri' ||
+    normalized === 'base64data' ||
+    normalized === 'bytes' ||
+    normalized === 'rawzip' ||
+    normalized === 'inline_data' ||
+    normalized === 'inlinedata' ||
+    normalized === 'imagedata'
+  );
+}
+
+function redactStringIfNeeded(key: string, value: string): string {
+  if (shouldRedactExchangeKey(key)) {
+    return summarizeBlobString(value);
+  }
+  if (looksLikeBinaryBlob(value)) {
+    return summarizeBlobString(value);
+  }
+  return value;
+}
+
+function summarizeBlobValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return summarizeBlobString(value);
+  }
+  if (Array.isArray(value)) {
+    return `<redacted array length=${value.length}>`;
+  }
+  if (value && typeof value === 'object') {
+    return '<redacted object>';
+  }
+  return '<redacted>';
+}
+
+function summarizeBlobString(value: string): string {
+  return `<redacted binary-like string ${value.length} chars>`;
+}
+
+function looksLikeBinaryBlob(value: string): boolean {
+  if (value.startsWith('data:')) {
+    return true;
+  }
+  const compact = value.replace(/\s+/g, '');
+  return compact.length > 2048 && /^[A-Za-z0-9+/=:_-]+$/.test(compact);
+}
+
+function summarizeString(value: string, maxLength = 220): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 1)}…`;
 }

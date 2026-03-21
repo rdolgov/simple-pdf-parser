@@ -245,7 +245,7 @@ export class GeminiAPI {
     }
     const text = extractText(response);
     if (!text) {
-      throw new Error('Gemini response did not include text content');
+      throw new Error(buildNoTextContentErrorMessage(payload.model, response));
     }
     return { text, raw: response, model: payload.model };
   }
@@ -391,6 +391,92 @@ function extractInlineImages(response: GeminiGenerateContentResponse): GeminiGen
     }
   }
   return images;
+}
+
+function buildNoTextContentErrorMessage(model: string, response: GeminiGenerateContentResponse): string {
+  const summary = summarizeGeminiResponse(response);
+  return `Gemini response did not include text content (model=${model}; ${summary})`;
+}
+
+function summarizeGeminiResponse(response: GeminiGenerateContentResponse): string {
+  const candidateSummaries = collectCandidateSummaries(response);
+  const promptFeedback = readPromptFeedbackSummary(response);
+  const directText = typeof response.text === 'string' ? response.text.trim().length : 0;
+  const nestedText = typeof response.response?.text === 'string' ? response.response.text.trim().length : 0;
+
+  const parts = [
+    `candidates=${candidateSummaries.length}`,
+    `directText=${directText}`,
+    `nestedText=${nestedText}`
+  ];
+  if (candidateSummaries.length > 0) {
+    parts.push(`candidateSummary=${candidateSummaries.join('|')}`);
+  }
+  if (promptFeedback) {
+    parts.push(`promptFeedback=${promptFeedback}`);
+  }
+  return parts.join('; ');
+}
+
+function collectCandidateSummaries(response: GeminiGenerateContentResponse): string[] {
+  const summaries: string[] = [];
+  const candidateSets = [response.response?.candidates ?? [], response.candidates ?? []];
+  for (const candidates of candidateSets) {
+    for (const candidate of candidates) {
+      const candidateData = candidate as Record<string, unknown>;
+      const finishReason = normalizeText(typeof candidateData.finishReason === 'string' ? candidateData.finishReason : undefined);
+      const parts = candidate.content?.parts ?? [];
+      const partKinds = parts.length > 0
+        ? parts
+            .map((part) => {
+              const kinds: string[] = [];
+              if (normalizeText(part.text)) {
+                kinds.push('text');
+              }
+              if (part.inlineData?.data) {
+                kinds.push(`inline:${part.inlineData.mimeType ?? 'unknown'}`);
+              }
+              return kinds.length > 0 ? kinds.join('+') : 'empty';
+            })
+            .join(',')
+        : 'none';
+      const piece = finishReason ? `${finishReason}:${partKinds}` : partKinds;
+      summaries.push(piece);
+    }
+  }
+  return summaries.slice(0, 5);
+}
+
+function readPromptFeedbackSummary(response: GeminiGenerateContentResponse): string | undefined {
+  const feedback = (response as Record<string, unknown>).promptFeedback;
+  if (!feedback || typeof feedback !== 'object') {
+    return undefined;
+  }
+  const data = feedback as Record<string, unknown>;
+  const blockReason =
+    normalizeText(typeof data.blockReason === 'string' ? data.blockReason : undefined) ??
+    normalizeText(typeof data.block_reason === 'string' ? data.block_reason : undefined);
+  const safetyRatings = Array.isArray(data.safetyRatings)
+    ? data.safetyRatings
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object') {
+            return null;
+          }
+          const record = entry as Record<string, unknown>;
+          const category = normalizeText(typeof record.category === 'string' ? record.category : undefined);
+          const probability = normalizeText(typeof record.probability === 'string' ? record.probability : undefined);
+          if (!category && !probability) {
+            return null;
+          }
+          return [category, probability].filter(Boolean).join(':');
+        })
+        .filter(Boolean)
+        .join(',')
+    : undefined;
+  const parts = [blockReason ? `blockReason=${blockReason}` : null, safetyRatings ? `safety=${safetyRatings}` : null].filter(
+    Boolean
+  ) as string[];
+  return parts.length > 0 ? parts.join(',') : undefined;
 }
 
 function collectContentParts(response: GeminiGenerateContentResponse): GeminiContentPartResponse[] {

@@ -43,6 +43,7 @@ export interface TaskStructuredDetectResult {
   parsedTables: unknown[];
   assetMap: Record<string, string>;
   model: string;
+  prompt: string;
   rawText: string;
 }
 
@@ -65,19 +66,22 @@ export async function executeStructuredDetectTask(
   }
 
   const bytes = await readFile(input.filePath);
+  const configuredModel = resolveStructuredDetectModel(input, config);
   const extractor = new StructuredExtractAPI({
     provider,
     apiKey: provider === 'openai' ? config.openAiApiKey : config.geminiApiKey,
-    model: input.model,
+    ...(configuredModel ? { model: configuredModel } : {}),
     endpoint: provider === 'openai' ? config.openAiBaseUrl : config.geminiBaseUrl
   });
   const result = await extractor.extractStructuredData(bytes, { fileName: input.fileName });
+  const actualModel = normalizeStructuredDetectResultModel(result.document);
   return {
     document: result.document as Record<string, unknown>,
     parsedTables: result.parsedTables,
     assetMap: result.assetMap,
-    model: input.model?.trim() || providerDefaultModel(provider, config),
-    rawText: decodeArrayBuffer(result.rawZip)
+    model: actualModel ?? configuredModel ?? providerDefaultModel(provider, config),
+    prompt: result.prompt,
+    rawText: result.rawText
   };
 }
 
@@ -271,10 +275,6 @@ export async function executeImageGenerationTask(
   };
 }
 
-function decodeArrayBuffer(value: ArrayBuffer): string {
-  return Buffer.from(value).toString('utf8');
-}
-
 function safeParseJson(value: string): unknown {
   try {
     return JSON.parse(value) as unknown;
@@ -296,4 +296,30 @@ function providerDefaultModel(provider: 'gemini' | 'openai', config: TaskServerP
     return 'gpt-5.2';
   }
   return config.geminiBinaryInputModel ?? config.geminiModel;
+}
+
+function resolveStructuredDetectModel(
+  input: {
+    provider?: Exclude<StructuredExtractProvider, 'codex'>;
+    model?: string;
+  },
+  config: TaskServerProvidersConfig
+): string | undefined {
+  const provider = input.provider ?? 'gemini';
+  const requestedModel = normalizeNonEmptyString(input.model);
+  if (provider === 'openai') {
+    return requestedModel ?? undefined;
+  }
+  return requestedModel ?? config.geminiBinaryInputModel ?? undefined;
+}
+
+function normalizeStructuredDetectResultModel(document: unknown): string | undefined {
+  if (!document || typeof document !== 'object') {
+    return undefined;
+  }
+  const version = (document as { version?: unknown }).version;
+  if (!version || typeof version !== 'object') {
+    return undefined;
+  }
+  return normalizeNonEmptyString((version as { model?: unknown }).model) ?? undefined;
 }

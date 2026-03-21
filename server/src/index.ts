@@ -82,6 +82,7 @@ type ServerConfig = {
     structuredDetectBatchSize: number;
     structuredDetectInitialPageCount: number;
     structuredDetectMinSplitBytes: number;
+    structuredDetectMinSplitPages: number;
   };
   proxyUsers: Map<string, string>;
   sessionCookieName: string;
@@ -221,6 +222,7 @@ server.listen(config.port, config.host, () => {
     `dir=${config.geminiAnalytics.dataDir} retentionDays=${config.geminiAnalytics.retentionDays} dailyMaxCalls=${config.geminiAnalytics.dailyMaxCalls} dailyMaxTotalTokens=${config.geminiAnalytics.dailyMaxTotalTokens}`
   );
   console.log('[llm-proxy] Task data:', `dir=${config.tasks.dataDir}`);
+  console.log('[llm-proxy] Task exchanges:', `dir=${taskStore.dataDir}/llm-exchanges`);
   console.log(
     '[llm-proxy] Backoffice:',
     `${[...BACKOFFICE_ANALYTICS_HTML_PATHS].join(', ')} users=${listBackofficeAllowedUsers().join(',') || 'none'}`
@@ -541,6 +543,7 @@ async function handleTaskDocumentUploadRequest(
               structuredDetectBatchSize: currentConfig.tasks.structuredDetectBatchSize,
               structuredDetectInitialPageCount: currentConfig.tasks.structuredDetectInitialPageCount,
               structuredDetectMinSplitBytes: currentConfig.tasks.structuredDetectMinSplitBytes,
+              structuredDetectMinSplitPages: currentConfig.tasks.structuredDetectMinSplitPages,
               structuredDetectTasksDataDir: currentConfig.tasks.dataDir
             },
             {
@@ -553,6 +556,74 @@ async function handleTaskDocumentUploadRequest(
                   completedPages: progress.completedPages,
                   publishedPages: progress.publishedPages
                 });
+              },
+              onExchange: async (exchange) => {
+                const archivedPath = await archiveTaskLlmExchange({
+                  actor,
+                  document: documentRecord,
+                  taskType: requestKind,
+                  provider,
+                  model: exchange.result.model,
+                  stage: exchange.stage,
+                  status: 'succeeded',
+                  request: {
+                    fileName: exchange.fileName,
+                    filePath: exchange.filePath,
+                    prompt: exchange.result.prompt
+                  },
+                  response: {
+                    rawText: exchange.result.rawText,
+                    document: exchange.result.document,
+                    parsedTables: exchange.result.parsedTables,
+                    assetMap: exchange.result.assetMap
+                  },
+                  metadata: {
+                    sourceFilePath: documentRecord.filePath,
+                    sourceFileName: documentRecord.fileName,
+                    startPage: exchange.startPage,
+                    pageCount: exchange.pageCount,
+                    byteSize: exchange.byteSize,
+                    merged: exchange.merged,
+                    durationMs: exchange.durationMs
+                  }
+                });
+                if (archivedPath) {
+                  logProgress(
+                    `structured-exchange saved stage=${exchange.stage} pages=${exchange.startPage}-${exchange.startPage + exchange.pageCount - 1} path=${archivedPath}`
+                  );
+                }
+              },
+              onExchangeError: async (exchange) => {
+                const archivedPath = await archiveTaskLlmExchange({
+                  actor,
+                  document: documentRecord,
+                  taskType: requestKind,
+                  provider,
+                  ...(model ? { model } : {}),
+                  stage: exchange.stage,
+                  status: 'failed',
+                  request: {
+                    fileName: exchange.fileName,
+                    filePath: exchange.filePath
+                  },
+                  error: {
+                    message: exchange.error
+                  },
+                  metadata: {
+                    sourceFilePath: documentRecord.filePath,
+                    sourceFileName: documentRecord.fileName,
+                    startPage: exchange.startPage,
+                    pageCount: exchange.pageCount,
+                    byteSize: exchange.byteSize,
+                    merged: exchange.merged,
+                    durationMs: exchange.durationMs
+                  }
+                });
+                if (archivedPath) {
+                  logProgress(
+                    `structured-exchange-error saved stage=${exchange.stage} pages=${exchange.startPage}-${exchange.startPage + exchange.pageCount - 1} path=${archivedPath}`
+                  );
+                }
               },
               onPartial: async (partial, progress) => {
                 await taskStore.setDetectionPartial(documentRecord.id, {
@@ -758,6 +829,26 @@ async function handleTextTaskRequest(
           logProgress(
             `task-done provider=${provider} task=${taskType} model=${result.model} ${formatDurationFields(Date.now() - taskStartedAt)} response="${summarizeTextForLog(result.text)}"`
           );
+          const archivedPath = await archiveTaskLlmExchange({
+            actor,
+            document,
+            taskType,
+            provider,
+            model: result.model,
+            status: 'succeeded',
+            request: {
+              prompt,
+              responseFormat,
+              enableWebSearch
+            },
+            response: {
+              text: result.text,
+              raw: result.raw
+            }
+          });
+          if (archivedPath) {
+            logProgress(`task-exchange saved task=${taskType} path=${archivedPath}`);
+          }
           await taskStore.recordInteraction({
             actor,
             ...(document ? { documentId: document.id } : {}),
@@ -774,6 +865,25 @@ async function handleTextTaskRequest(
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : `Failed to run ${taskType}.`;
+          const archivedPath = await archiveTaskLlmExchange({
+            actor,
+            document,
+            taskType,
+            provider,
+            ...(model ? { model } : {}),
+            status: 'failed',
+            request: {
+              prompt,
+              responseFormat,
+              enableWebSearch
+            },
+            error: {
+              message
+            }
+          });
+          if (archivedPath) {
+            logProgress(`task-exchange-error saved task=${taskType} path=${archivedPath}`);
+          }
           await taskStore.recordInteraction({
             actor,
             ...(document ? { documentId: document.id } : {}),
@@ -1217,6 +1327,26 @@ async function handleImageAnalysisTaskRequest(
           logProgress(
             `task-done provider=${provider} task=analyze-image model=${result.model} ${formatDurationFields(Date.now() - taskStartedAt)} response="${summarizeTextForLog(result.text)}"`
           );
+          const archivedPath = await archiveTaskLlmExchange({
+            actor,
+            document,
+            taskType: 'analyze-image',
+            provider,
+            model: result.model,
+            status: 'succeeded',
+            request: {
+              prompt,
+              mimeType: imagePayload.mimeType,
+              imageBytes: Math.floor((imagePayload.base64Data.length * 3) / 4)
+            },
+            response: {
+              text: result.text,
+              raw: result.raw
+            }
+          });
+          if (archivedPath) {
+            logProgress(`task-exchange saved task=analyze-image path=${archivedPath}`);
+          }
           await taskStore.recordInteraction({
             actor,
             ...(document ? { documentId: document.id } : {}),
@@ -1237,6 +1367,25 @@ async function handleImageAnalysisTaskRequest(
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Failed to analyze image.';
+          const archivedPath = await archiveTaskLlmExchange({
+            actor,
+            document,
+            taskType: 'analyze-image',
+            provider,
+            ...(model ? { model } : {}),
+            status: 'failed',
+            request: {
+              prompt,
+              mimeType: imagePayload.mimeType,
+              imageBytes: Math.floor((imagePayload.base64Data.length * 3) / 4)
+            },
+            error: {
+              message
+            }
+          });
+          if (archivedPath) {
+            logProgress(`task-exchange-error saved task=analyze-image path=${archivedPath}`);
+          }
           await taskStore.recordInteraction({
             actor,
             ...(document ? { documentId: document.id } : {}),
@@ -1319,6 +1468,26 @@ async function handleImageGenerationTaskRequest(
           logProgress(
             `task-done provider=${provider} task=${taskType} model=${result.model} ${formatDurationFields(Date.now() - taskStartedAt)} mime=${result.mimeType} imageData=${result.dataUri.startsWith('data:') ? 'inline' : 'url'}`
           );
+          const archivedPath = await archiveTaskLlmExchange({
+            actor,
+            document,
+            taskType,
+            provider,
+            model: result.model,
+            status: 'succeeded',
+            request: {
+              prompt
+            },
+            response: {
+              mimeType: result.mimeType,
+              prompt: result.prompt,
+              dataUri: result.dataUri,
+              raw: result.raw
+            }
+          });
+          if (archivedPath) {
+            logProgress(`task-exchange saved task=${taskType} path=${archivedPath}`);
+          }
           await taskStore.recordInteraction({
             actor,
             ...(document ? { documentId: document.id } : {}),
@@ -1340,6 +1509,23 @@ async function handleImageGenerationTaskRequest(
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : `Failed to run ${taskType}.`;
+          const archivedPath = await archiveTaskLlmExchange({
+            actor,
+            document,
+            taskType,
+            provider,
+            ...(model ? { model } : {}),
+            status: 'failed',
+            request: {
+              prompt
+            },
+            error: {
+              message
+            }
+          });
+          if (archivedPath) {
+            logProgress(`task-exchange-error saved task=${taskType} path=${archivedPath}`);
+          }
           await taskStore.recordInteraction({
             actor,
             ...(document ? { documentId: document.id } : {}),
@@ -2511,6 +2697,39 @@ function summarizeDetectionResult(result: {
   };
 }
 
+async function archiveTaskLlmExchange(input: {
+  actor: string;
+  document?: StoredDocumentRecord | null;
+  taskType: string;
+  provider?: string;
+  model?: string;
+  stage?: string;
+  status: 'succeeded' | 'failed';
+  request?: Record<string, unknown>;
+  response?: Record<string, unknown>;
+  error?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}): Promise<string | null> {
+  try {
+    return await taskStore.recordLlmExchange({
+      actor: input.actor,
+      ...(input.document ? { documentId: input.document.id } : {}),
+      taskType: input.taskType,
+      ...(input.provider ? { provider: input.provider } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.stage ? { stage: input.stage } : {}),
+      status: input.status,
+      ...(input.request ? { request: input.request } : {}),
+      ...(input.response ? { response: input.response } : {}),
+      ...(input.error ? { error: input.error } : {}),
+      ...(input.metadata ? { metadata: input.metadata } : {})
+    });
+  } catch (error) {
+    console.warn('[llm-proxy] Failed to archive task LLM exchange', error);
+    return null;
+  }
+}
+
 function defaultSemanticTaskModel(provider: TaskSemanticProvider): string {
   return provider === 'openai' ? 'text-embedding-3-small' : 'gemini-embedding-001';
 }
@@ -2976,7 +3195,8 @@ function loadConfig(): ServerConfig {
       structuredDetectPageConcurrency: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_PAGE_CONCURRENCY, 2),
       structuredDetectBatchSize: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_BATCH_SIZE, 3),
       structuredDetectInitialPageCount: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_FIRST_PAGES, 3),
-      structuredDetectMinSplitBytes: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_MIN_SPLIT_BYTES, 1024 * 1024)
+      structuredDetectMinSplitBytes: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_MIN_SPLIT_BYTES, 1024 * 1024),
+      structuredDetectMinSplitPages: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_MIN_SPLIT_PAGES, 8)
     },
     proxyUsers: parseProxyUsers(env.LLM_PROXY_USERS),
     sessionCookieName: normalizeNonEmpty(env.LLM_PROXY_SESSION_COOKIE_NAME) ?? 'llm_proxy_session',

@@ -149,11 +149,12 @@ Server environment variables:
 - `LLM_PROXY_LOG_FILE` defaults to `server.log`
 - `LLM_PROXY_LOG_MAX_BYTES` defaults to `5242880` (5 MB before rolling)
 - `LLM_PROXY_LOG_MAX_FILES` defaults to `5` total files including the active log
-- `LLM_PROXY_TASKS_DIR` defaults to `.cache/llm-proxy-tasks` and stores uploaded files, detection results, semantic indexes, and interaction logs for the task API
+- `LLM_PROXY_TASKS_DIR` defaults to `.cache/llm-proxy-tasks` and stores uploaded files, detection results, semantic indexes, interaction logs, and per-request LLM exchange artifacts for the task API
 - `LLM_PROXY_TASKS_DETECT_PAGE_CONCURRENCY` defaults to `2` and controls how many per-page structured extraction jobs run in parallel when local page splitting is available
 - `LLM_PROXY_TASKS_DETECT_FIRST_PAGES` defaults to `3` and keeps the earliest pages as individual extraction calls so the first visible pages publish sooner
 - `LLM_PROXY_TASKS_DETECT_BATCH_SIZE` defaults to `3` and controls the page-range batch size used after the initial individually processed pages
 - `LLM_PROXY_TASKS_DETECT_MIN_SPLIT_BYTES` defaults to `1048576` and skips page splitting entirely for small PDFs at or below that size
+- `LLM_PROXY_TASKS_DETECT_MIN_SPLIT_PAGES` defaults to `8` and forces page splitting for longer PDFs even when the file bytes are small
 - `LLM_PROXY_APP_DIR` defaults to `testApp/dist` and is used when serving the built app under `/proxy`
 
 The proxy server now auto-loads root-level `.env` and `.env.local` files on startup. Shell environment variables still win over file-loaded values.

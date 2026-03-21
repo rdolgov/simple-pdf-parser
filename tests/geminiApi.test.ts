@@ -87,4 +87,50 @@ describe('GeminiAPI', () => {
       vi.stubGlobal('fetch', originalFetch);
     }
   });
+
+  it('includes a compact response summary when Gemini returns no text content', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => {
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              finishReason: 'SAFETY',
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: 'application/pdf',
+                      data: 'cGRm'
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          promptFeedback: {
+            blockReason: 'SAFETY'
+          }
+        }),
+        text: async () => 'ok'
+      } as unknown as Response;
+    });
+
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const client = new GeminiAPI({
+        apiKey: 'test-key',
+        endpoint: 'http://localhost:8787/proxy/api/llm/gemini',
+        model: 'gemini-3-pro-image-preview'
+      });
+
+      await expect(client.generateText('extract this pdf')).rejects.toThrow(
+        /Gemini response did not include text content \(model=gemini-3-pro-image-preview; .*candidateSummary=SAFETY:inline:application\/pdf.*promptFeedback=blockReason=SAFETY\)/
+      );
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
+  });
 });

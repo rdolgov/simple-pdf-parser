@@ -34,6 +34,7 @@ export function mergeStructuredDetectUnitResults(unitResults: StructuredDetectUn
   const elements: Array<Record<string, unknown>> = [];
   const parsedTables: Array<{ name: string; rows: string[][] }> = [];
   const assetMap: Record<string, string> = {};
+  const prompts: string[] = [];
   const rawTexts: string[] = [];
 
   let nextElementId = 0;
@@ -91,6 +92,9 @@ export function mergeStructuredDetectUnitResults(unitResults: StructuredDetectUn
     if (unitResult.result.rawText.trim().length > 0) {
       rawTexts.push(unitResult.result.rawText.trim());
     }
+    if (unitResult.result.prompt.trim().length > 0) {
+      prompts.push(unitResult.result.prompt.trim());
+    }
   }
 
   return {
@@ -102,6 +106,7 @@ export function mergeStructuredDetectUnitResults(unitResults: StructuredDetectUn
     parsedTables,
     assetMap,
     model: sorted[0]?.result.model ?? 'unknown',
+    prompt: prompts[0] ?? '',
     rawText: rawTexts.join('\n\n')
   };
 }

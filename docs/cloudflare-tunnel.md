@@ -57,6 +57,7 @@ Important environment notes:
 - `LLM_PROXY_TASKS_DETECT_FIRST_PAGES` defaults to `3`.
 - `LLM_PROXY_TASKS_DETECT_BATCH_SIZE` defaults to `3`.
 - `LLM_PROXY_TASKS_DETECT_MIN_SPLIT_BYTES` defaults to `1048576` and skips split-page extraction for small PDFs.
+- `LLM_PROXY_TASKS_DETECT_MIN_SPLIT_PAGES` defaults to `8` and forces split-page extraction for longer PDFs even when the file bytes are small.
 - When the local `pdfseparate` and `pdfunite` tools are installed, startup document detection keeps split pages under `.cache/llm-proxy-tasks/split-pages/...`, extracts the earliest pages individually, batches later pages into small ranges, and publishes early-page partial results while later pages continue in the background.
 - `CODEX_EXEC_ENABLED=1` still works in this deployment if you want Codex proxy support.
 

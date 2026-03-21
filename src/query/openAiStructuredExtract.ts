@@ -24,6 +24,7 @@ export interface OpenAiStructuredExtractResult {
   parsedTables: ParsedTable[];
   assetMap: Record<string, string>;
   model: string;
+  prompt: string;
   rawText: string;
 }
 

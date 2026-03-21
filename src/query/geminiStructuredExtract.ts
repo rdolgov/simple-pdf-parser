@@ -1,6 +1,12 @@
 import { PDFDocument } from '../pdfDocument.js';
 import { GeminiAPI, type GeminiApiConfig, type GeminiContentParts } from './geminiApi.js';
 import { resolveGeminiBinaryInputModel } from './geminiModelSelection.js';
+import {
+  detectStructuredExtractPageYBand,
+  normalizeStructuredExtractRatioBounds,
+  readStructuredExtractRawBounds,
+  toPdfBoundsFromNormalizedRatioBounds
+} from './structuredExtractBounds.js';
 import { normalizeParsedTableRows } from './tableCellText.js';
 
 export type StructuredExtractFileInput = Blob | File | ArrayBuffer | Uint8Array;
@@ -98,6 +104,7 @@ export interface GeminiStructuredExtractResult {
   parsedTables: ParsedTable[];
   assetMap: Record<string, string>;
   model: string;
+  prompt: string;
   rawText: string;
 }
 
@@ -251,6 +258,7 @@ export class GeminiStructuredExtract {
       parsedTables,
       assetMap,
       model: result.model,
+      prompt: this.prompt,
       rawText: result.text
     };
   }
@@ -330,6 +338,7 @@ function extractJsonObject(value: string): string {
 function normalizeElements(parsed: LlmResponse, pages: StructuredDataPage[]): StructuredDataElement[] {
   const pageInfo = buildPageInfo(pages);
   const pageNumberMode = detectPageNumberMode(parsed, pages.length);
+  const pageYBands = detectPageYBands(parsed, pages.length, pageNumberMode);
   const counters = new Map<string, number>();
   const elements: StructuredDataElement[] = [];
 
@@ -337,7 +346,7 @@ function normalizeElements(parsed: LlmResponse, pages: StructuredDataPage[]): St
   for (const page of pageEntries) {
     const pageIndex = normalizePageIndex(page.page_number, pages.length, pageNumberMode);
     for (const rawElement of page.elements ?? []) {
-      const element = toStructuredElement(rawElement, pageIndex, pageInfo, counters);
+      const element = toStructuredElement(rawElement, pageIndex, pageInfo, counters, pageYBands.get(pageIndex) ?? 0);
       if (element) {
         elements.push(element);
       }
@@ -346,7 +355,7 @@ function normalizeElements(parsed: LlmResponse, pages: StructuredDataPage[]): St
 
   for (const rawElement of parsed.elements ?? []) {
     const pageIndex = normalizePageIndex(rawElement.page ?? rawElement.page_number, pages.length, pageNumberMode);
-    const element = toStructuredElement(rawElement, pageIndex, pageInfo, counters);
+    const element = toStructuredElement(rawElement, pageIndex, pageInfo, counters, pageYBands.get(pageIndex) ?? 0);
     if (element) {
       elements.push(element);
     }
@@ -361,6 +370,35 @@ function buildPageInfo(pages: StructuredDataPage[]): PageInfo[] {
     width: page.width ?? 612,
     height: page.height ?? 792
   }));
+}
+
+function detectPageYBands(parsed: LlmResponse, pageCount: number, mode: PageNumberMode): Map<number, number> {
+  const grouped = new Map<number, LlmElement[]>();
+
+  const append = (pageIndex: number, element: LlmElement) => {
+    if (!grouped.has(pageIndex)) {
+      grouped.set(pageIndex, []);
+    }
+    grouped.get(pageIndex)!.push(element);
+  };
+
+  for (const page of parsed.pages ?? []) {
+    const pageIndex = normalizePageIndex(page.page_number, pageCount, mode);
+    for (const element of page.elements ?? []) {
+      append(pageIndex, element);
+    }
+  }
+
+  for (const element of parsed.elements ?? []) {
+    const pageIndex = normalizePageIndex(element.page ?? element.page_number, pageCount, mode);
+    append(pageIndex, element);
+  }
+
+  const bands = new Map<number, number>();
+  for (const [pageIndex, elements] of grouped.entries()) {
+    bands.set(pageIndex, detectStructuredExtractPageYBand(elements));
+  }
+  return bands;
 }
 
 function detectPageNumberMode(parsed: LlmResponse, pageCount: number): PageNumberMode {
@@ -438,19 +476,25 @@ function toStructuredElement(
   raw: LlmElement,
   pageIndex: number,
   pages: PageInfo[],
-  counters: Map<string, number>
+  counters: Map<string, number>,
+  pageYBand: number
 ): StructuredDataElement | null {
   const page = pages[pageIndex] ?? pages[0];
   if (!page) {
     return null;
   }
 
-  const box = readRatioBounds(raw.bbox ?? raw.bounding_box);
+  const rawBounds = readStructuredExtractRawBounds(raw.bbox ?? raw.bounding_box);
+  if (!rawBounds) {
+    return null;
+  }
+
+  const box = normalizeStructuredExtractRatioBounds(rawBounds, pageYBand);
   if (!box) {
     return null;
   }
 
-  const bounds = toPdfBounds(box, page.width, page.height);
+  const bounds = toPdfBoundsFromNormalizedRatioBounds(box, page.width, page.height);
   const rows = readTableRows(raw);
   const type = rows.length > 0 ? 'table' : normalizeType(raw.type);
   const pathBase = readPathBase(raw.path, type);
@@ -489,72 +533,6 @@ function toStructuredElement(
   }
 
   return element;
-}
-
-function readRatioBounds(value: unknown): StructuredBoundsTuple | null {
-  let bounds: [number, number, number, number] | null = null;
-  if (Array.isArray(value) && value.length === 4) {
-    const numbers = value.map((item) => toFiniteNumber(item));
-    if (!numbers.some((item) => item === null)) {
-      const [x, y, w, h] = numbers as number[];
-      bounds = [x, y, w, h];
-    }
-  } else if (value && typeof value === 'object') {
-    const data = value as Record<string, unknown>;
-    const x = toFiniteNumber(data.x);
-    const y = toFiniteNumber(data.y);
-    const width = toFiniteNumber(data.width);
-    const height = toFiniteNumber(data.height);
-    if (x !== null && y !== null && width !== null && height !== null) {
-      bounds = [x, y, width, height];
-    } else {
-      const left = toFiniteNumber(data.left);
-      const top = toFiniteNumber(data.top);
-      const right = toFiniteNumber(data.right);
-      const bottom = toFiniteNumber(data.bottom);
-      if (left !== null && top !== null && right !== null && bottom !== null) {
-        bounds = [left, top, right - left, bottom - top];
-      }
-    }
-  }
-  if (!bounds) {
-    return null;
-  }
-  const [x, y, w, h] = bounds;
-  const clampedX = clampRatio(x);
-  const clampedY = clampRatio(y);
-  const clampedW = clampRatio(w);
-  const clampedH = clampRatio(h);
-  if (clampedW <= 0 || clampedH <= 0) {
-    return null;
-  }
-  return [clampedX, clampedY, clampedW, clampedH];
-}
-
-function clampRatio(value: number): number {
-  if (Number.isNaN(value)) {
-    return 0;
-  }
-  if (value < 0) {
-    return 0;
-  }
-  if (value > 1) {
-    return 1;
-  }
-  return value;
-}
-
-function toPdfBounds(
-  ratioBounds: StructuredBoundsTuple,
-  pageWidth: number,
-  pageHeight: number
-): StructuredBoundsTuple {
-  const [x, y, width, height] = ratioBounds;
-  const minX = x * pageWidth;
-  const maxX = Math.min(1, x + width) * pageWidth;
-  const minY = Math.max(0, 1 - y - height) * pageHeight;
-  const maxY = (1 - y) * pageHeight;
-  return [minX, minY, maxX, maxY];
 }
 
 function normalizeType(value: unknown): string {

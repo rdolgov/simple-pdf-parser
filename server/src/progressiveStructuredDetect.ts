@@ -1,8 +1,9 @@
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { PDFDocument } from '../../src/pdfDocument.js';
 import { splitPdfIntoPages } from './pdfPageSplit.js';
 import { buildPdfPageBatches } from './pdfPageBatching.js';
-import { decideStructuredDetectSplit } from './structuredDetectSplitPolicy.js';
+import { decideStructuredDetectSplit, shouldRetryStructuredDetectAsSplit } from './structuredDetectSplitPolicy.js';
 import { formatDurationFields } from './logDuration.js';
 import {
   executeStructuredDetectTask,
@@ -16,6 +17,30 @@ import {
 } from './structuredDetectMerge.js';
 import type { StructuredExtractProvider } from '../../src/index.js';
 
+export interface StructuredDetectExchangeRecord {
+  stage: 'full-document' | 'page-batch';
+  filePath: string;
+  fileName: string;
+  startPage: number;
+  pageCount: number;
+  byteSize: number;
+  merged: boolean;
+  durationMs: number;
+  result: TaskStructuredDetectResult;
+}
+
+export interface StructuredDetectExchangeErrorRecord {
+  stage: 'full-document' | 'page-batch';
+  filePath: string;
+  fileName: string;
+  startPage: number;
+  pageCount: number;
+  byteSize: number;
+  merged: boolean;
+  durationMs: number;
+  error: string;
+}
+
 export async function executeStructuredDetectTaskProgressive(
   input: {
     provider?: Exclude<StructuredExtractProvider, 'codex'>;
@@ -28,28 +53,83 @@ export async function executeStructuredDetectTaskProgressive(
     structuredDetectBatchSize?: number;
     structuredDetectInitialPageCount?: number;
     structuredDetectMinSplitBytes?: number;
+    structuredDetectMinSplitPages?: number;
     structuredDetectTasksDataDir?: string;
   },
   options: {
     onPartial?: (partial: TaskStructuredDetectResult, progress: StructuredDetectProgress) => Promise<void> | void;
     onProgress?: (progress: StructuredDetectProgress) => Promise<void> | void;
+    onExchange?: (exchange: StructuredDetectExchangeRecord) => Promise<void> | void;
+    onExchangeError?: (exchange: StructuredDetectExchangeErrorRecord) => Promise<void> | void;
   } = {}
 ): Promise<TaskStructuredDetectResult> {
   const sourceFileStat = await stat(input.filePath);
+  const sourcePdfBytes = await readFile(input.filePath);
+  const sourcePdfBuffer = sourcePdfBytes.buffer.slice(
+    sourcePdfBytes.byteOffset,
+    sourcePdfBytes.byteOffset + sourcePdfBytes.byteLength
+  ) as ArrayBuffer;
+  const pageCount = PDFDocument.from(sourcePdfBuffer).pages.length;
   const splitDecision = decideStructuredDetectSplit({
     fileSizeBytes: sourceFileStat.size,
-    minSplitBytes: config.structuredDetectMinSplitBytes ?? 1024 * 1024
+    minSplitBytes: config.structuredDetectMinSplitBytes ?? 1024 * 1024,
+    pageCount,
+    minSplitPages: config.structuredDetectMinSplitPages ?? 8
   });
+
+  const runFullDocumentDetect = async (): Promise<TaskStructuredDetectResult> => {
+    const fullStartedAt = Date.now();
+    try {
+      const full = await executeStructuredDetectTask(input, config);
+      await options.onExchange?.({
+        stage: 'full-document',
+        filePath: input.filePath,
+        fileName: input.fileName,
+        startPage: 1,
+        pageCount: 1,
+        byteSize: sourceFileStat.size,
+        merged: false,
+        durationMs: Date.now() - fullStartedAt,
+        result: full
+      });
+      const progress = { totalPages: 1, completedPages: 1, publishedPages: 1 };
+      await options.onProgress?.(progress);
+      await options.onPartial?.(full, progress);
+      return full;
+    } catch (error) {
+      await options.onExchangeError?.({
+        stage: 'full-document',
+        filePath: input.filePath,
+        fileName: input.fileName,
+        startPage: 1,
+        pageCount: 1,
+        byteSize: sourceFileStat.size,
+        merged: false,
+        durationMs: Date.now() - fullStartedAt,
+        error: error instanceof Error ? error.message : 'Failed to detect structure.'
+      });
+      throw error;
+    }
+  };
+
+  let retryAsSplitError: Error | null = null;
 
   if (!splitDecision.shouldSplit) {
     console.log(
-      `[structured-detect] skip-split reason=${splitDecision.reason} file=${input.filePath} bytes=${sourceFileStat.size} threshold=${config.structuredDetectMinSplitBytes ?? 1024 * 1024}`
+      `[structured-detect] skip-split reason=${splitDecision.reason} file=${input.filePath} bytes=${sourceFileStat.size} pages=${pageCount} byteThreshold=${config.structuredDetectMinSplitBytes ?? 1024 * 1024} pageThreshold=${config.structuredDetectMinSplitPages ?? 8}`
     );
-    const full = await executeStructuredDetectTask(input, config);
-    const progress = { totalPages: 1, completedPages: 1, publishedPages: 1 };
-    await options.onProgress?.(progress);
-    await options.onPartial?.(full, progress);
-    return full;
+    try {
+      return await runFullDocumentDetect();
+    } catch (error) {
+      if (shouldRetryStructuredDetectAsSplit(error, pageCount)) {
+        console.log(
+          `[structured-detect] retry-as-split reason=no-text-or-recitation file=${input.filePath} bytes=${sourceFileStat.size} pages=${pageCount}`
+        );
+        retryAsSplitError = error instanceof Error ? error : new Error(String(error ?? 'Failed to detect structure.'));
+      } else {
+        throw error;
+      }
+    }
   }
 
   const splitStartedAt = Date.now();
@@ -60,14 +140,13 @@ export async function executeStructuredDetectTaskProgressive(
     workspaceKey: input.filePath
   });
   if (!split || split.pageFiles.length <= 1) {
+    if (retryAsSplitError) {
+      throw retryAsSplitError;
+    }
     console.log(
       `[structured-detect] skip-split reason=${split ? 'single-page-after-split' : 'split-tool-unavailable'} file=${input.filePath} bytes=${sourceFileStat.size}`
     );
-    const full = await executeStructuredDetectTask(input, config);
-    const progress = { totalPages: 1, completedPages: 1, publishedPages: 1 };
-    await options.onProgress?.(progress);
-    await options.onPartial?.(full, progress);
-    return full;
+    return runFullDocumentDetect();
   }
 
   console.log(
@@ -139,24 +218,52 @@ export async function executeStructuredDetectTaskProgressive(
       console.log(
         `[structured-detect] batch-start pages=${formatPageRange(batch.startPage, batch.pageCount)} bytes=${batch.byteSize} file=${batch.filePath}`
       );
-      const batchResult = await executeStructuredDetectTask(
-        {
-          provider: input.provider,
-          model: input.model,
+      const batchFileName =
+        batch.pageCount === 1
+          ? `${basename(input.fileName, '.pdf')}-page-${batch.startPage}.pdf`
+          : `${basename(input.fileName, '.pdf')}-pages-${batch.startPage}-${batch.startPage + batch.pageCount - 1}.pdf`;
+      let batchResult: TaskStructuredDetectResult;
+      try {
+        batchResult = await executeStructuredDetectTask(
+          {
+            provider: input.provider,
+            model: input.model,
+            filePath: batch.filePath,
+            fileName: batchFileName
+          },
+          config
+        );
+      } catch (error) {
+        await options.onExchangeError?.({
+          stage: 'page-batch',
           filePath: batch.filePath,
-          fileName:
-            batch.pageCount === 1
-              ? `${basename(input.fileName, '.pdf')}-page-${batch.startPage}.pdf`
-              : `${basename(input.fileName, '.pdf')}-pages-${batch.startPage}-${batch.startPage + batch.pageCount - 1}.pdf`
-        },
-        config
-      );
+          fileName: batchFileName,
+          startPage: batch.startPage,
+          pageCount: batch.pageCount,
+          byteSize: batch.byteSize,
+          merged: batch.merged,
+          durationMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : 'Failed to detect structure.'
+        });
+        throw error;
+      }
       completed.set(batch.startPage, {
         startPage: batch.startPage,
         pageCount: batch.pageCount,
         result: batchResult
       });
       completedPages += batch.pageCount;
+      await options.onExchange?.({
+        stage: 'page-batch',
+        filePath: batch.filePath,
+        fileName: batchFileName,
+        startPage: batch.startPage,
+        pageCount: batch.pageCount,
+        byteSize: batch.byteSize,
+        merged: batch.merged,
+        durationMs: Date.now() - startedAt,
+        result: batchResult
+      });
       console.log(
         `[structured-detect] batch-done pages=${formatPageRange(batch.startPage, batch.pageCount)} bytes=${batch.byteSize} ${formatDurationFields(Date.now() - startedAt)} model=${batchResult.model}`
       );

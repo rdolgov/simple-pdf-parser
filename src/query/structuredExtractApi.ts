@@ -39,6 +39,8 @@ export interface StructuredExtractResult {
   assetMap: Record<string, string>;
   tableAssets: Record<string, ArrayBuffer>;
   rawZip: ArrayBuffer;
+  rawText: string;
+  prompt: string;
   parsedTables: ParsedTable[];
 }
 
@@ -99,6 +101,8 @@ export class StructuredExtractAPI {
       document: response.document,
       assetMap: response.assetMap,
       tableAssets: {},
+      rawText: response.rawText,
+      prompt: response.prompt,
       parsedTables: response.parsedTables,
       rawZip: encodeUtf8(response.rawText)
     };
