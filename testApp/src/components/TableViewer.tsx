@@ -109,6 +109,15 @@ export function TableViewer({
     return nextRows;
   }, [table.cells]);
 
+  const rowCount = Math.max(rows.length - 1, 0);
+  const columnCount = rows[0]?.length ?? 0;
+  const viewLabel = viewMode === 'table' ? 'Detected table' : 'Generated infographic';
+  const detailLabel =
+    columnCount > 0
+      ? `${rowCount} ${rowCount === 1 ? 'row' : 'rows'} · ${columnCount} ${columnCount === 1 ? 'column' : 'columns'}`
+      : 'No structured cell data';
+  const sourceLabel = viewMode === 'table' ? 'Structured extract' : getProviderDisplayName(imageProvider);
+
   const sortedRows = useMemo(() => sortTableRows(rows, localSort), [rows, localSort]);
   const hasChartableData = rows.length >= 2 && rows.some((row, rowIndex) => rowIndex > 0 && row.some((cell) => cell.text.trim().length > 0));
 
@@ -356,7 +365,14 @@ export function TableViewer({
         <span className="overlay-toolbar-divider" />
       </OverlayToolbar>
       <div className="canvas-overlay-highlight-inner">
-        <div className="canvas-overlay-table-content">
+        <div className={`canvas-overlay-table-content canvas-overlay-table-content--${viewMode}`}>
+          <div className="table-viewer-header">
+            <div className="table-viewer-header-copy">
+              <div className="table-viewer-kicker">{viewLabel}</div>
+              <div className="table-viewer-heading">{detailLabel}</div>
+            </div>
+            <div className="table-viewer-source-pill">{sourceLabel}</div>
+          </div>
           {viewMode === 'table' && (
             <>
               {rows.length === 0 ? (

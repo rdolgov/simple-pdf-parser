@@ -2220,7 +2220,7 @@ export function CanvasPageWithOverlay({
   const canvasOffsetLeft = canvasRef.current?.offsetLeft ?? 0;
   const canvasOffsetTop = canvasRef.current?.offsetTop ?? 0;
   const isLogicalTextHoverOverlay = !focusMode && canvasHighlight?.kind === 'text';
-  const showOverlayDim = focusMode || Boolean(tableOverlay);
+  const showOverlayDim = focusMode;
   const overlayClassName = hasOverlayContent ? 'canvas-overlay canvas-overlay--interactive' : 'canvas-overlay';
   const overlayLayerClassName = hasOverlayContent
     ? 'canvas-overlay-layer canvas-overlay-layer--interactive'
