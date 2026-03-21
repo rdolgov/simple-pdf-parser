@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
 import { analyzeImageTask } from '../api/proxyTaskApi';
+import { renderMarkdownToHtml } from '../utils/markdownRenderer';
 
 
 export interface ImageExplanationData {
@@ -208,7 +209,10 @@ export function ImageExplanationPopup({
                 </button>
               )}
             </div>
-            <div className="image-explanation-note-text">{explanation}</div>
+            <div
+              className="image-explanation-note-text mini-chat-markdown image-explanation-markdown"
+              dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(explanation) }}
+            />
           </div>
         )}
         {!explanation && !isLoading && !error && (

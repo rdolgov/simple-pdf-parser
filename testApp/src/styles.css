@@ -5821,6 +5821,9 @@ footer code {
   border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 4px 12px rgba(250, 204, 21, 0.15);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .image-explanation-note-header {
@@ -5877,7 +5880,8 @@ footer code {
   font-size: 0.9rem;
   line-height: 1.6;
   color: #422006;
-  white-space: pre-wrap;
+  max-height: min(40vh, 320px);
+  overflow: auto;
 }
 
 /* ============================================================================
@@ -6052,6 +6056,12 @@ footer code {
 .mini-chat-markdown blockquote {
   border-left-color: rgba(94, 234, 212, 0.35);
   color: var(--popup-text-muted);
+}
+
+.image-explanation-markdown {
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .mini-chat-error,
