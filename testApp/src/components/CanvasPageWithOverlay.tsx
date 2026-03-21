@@ -41,6 +41,7 @@ import {
   type HighlightBlockData,
   type ExtractTableHit,
   buildHighlightBlockData,
+  buildMergedTextHighlightBlockData,
   buildHighlightBlockKey,
   findParagraphBlockAtPoint,
   detectExtractedTableAtPoint,
@@ -155,6 +156,7 @@ type LassoSelectionState = {
 
 type OverlayHighlightEntry = {
   highlight: HighlightBlockData;
+  text?: string;
   blockIndex?: number;
   isPrimary: boolean;
 };
@@ -1980,29 +1982,27 @@ export function CanvasPageWithOverlay({
     const pageSegment = getHtmlLogicalUnitPageSegment(logicalUnit, page.number);
 
     if (htmlPage && pageSegment && pageSegment.blockIndexes.length > 0) {
-      for (const blockIndex of pageSegment.blockIndexes) {
-        const sourceBlock = htmlPage.content[blockIndex];
-        if (!isParagraphBlock(sourceBlock)) {
-          continue;
-        }
-        const selectedBlock =
+      const sourceBlocks = pageSegment.blockIndexes
+        .map((blockIndex) =>
           canvasHighlight.pageNumber === page.number && canvasHighlight.blockIndex === blockIndex
             ? canvasHighlight.block
-            : sourceBlock;
-        const highlight = buildHighlightBlockData(selectedBlock);
-        if (highlight) {
-          highlightBlocks.push({
-            highlight,
-            blockIndex,
-            isPrimary: canvasHighlight.pageNumber === page.number && canvasHighlight.blockIndex === blockIndex
-          });
-        }
+            : htmlPage.content[blockIndex]
+        )
+        .filter(isParagraphBlock);
+      const mergedHighlight = buildMergedTextHighlightBlockData(sourceBlocks);
+      if (mergedHighlight) {
+        highlightBlocks.push({
+          highlight: mergedHighlight,
+          text: pageSegment.text,
+          isPrimary: true
+        });
       }
     } else if (canvasHighlight.pageNumber === page.number) {
       const manualHighlight = buildHighlightBlockData(canvasHighlight.block);
       if (manualHighlight) {
         highlightBlocks.push({
           highlight: manualHighlight,
+          text: canvasHighlight.block.text,
           blockIndex: canvasHighlight.blockIndex,
           isPrimary: true
         });
@@ -2185,13 +2185,10 @@ export function CanvasPageWithOverlay({
               const bounds = block.bounds;
               const blockKey = buildHighlightBlockKey(page.number, bounds);
               const selectedBlockForWidget =
-                entry.isPrimary &&
-                activeTextSelection &&
-                activeTextSelection.pageNumber === page.number &&
-                activeTextSelection.blockIndex === entry.blockIndex
+                entry.isPrimary && activeTextSelection && activeTextSelection.pageNumber === page.number
                   ? activeTextSelection
                   : null;
-              const highlightText = selectedBlockForWidget?.block.text.trim() ?? '';
+              const highlightText = entry.text?.trim() ?? selectedBlockForWidget?.block.text.trim() ?? '';
               const selectionContext = selectedBlockForWidget
                 ? resolveTextSelectionContext(selectedBlockForWidget, logicalStructure, highlightText)
                 : null;

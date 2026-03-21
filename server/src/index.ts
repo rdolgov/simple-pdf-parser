@@ -72,6 +72,7 @@ type ServerConfig = {
     structuredDetectPageConcurrency: number;
     structuredDetectBatchSize: number;
     structuredDetectInitialPageCount: number;
+    structuredDetectMinSplitBytes: number;
   };
   proxyUsers: Map<string, string>;
   sessionCookieName: string;
@@ -130,6 +131,8 @@ const BACKOFFICE_ANALYTICS_API_PATHS = new Set([
   '/api/backoffice/gemini-analytics',
   '/proxy/api/backoffice/gemini-analytics'
 ]);
+const LOG_PREVIEW_MAX_CHARS = 220;
+const LOG_PREVIEW_STRING_LIMIT = 4;
 
 loadLocalEnvFiles();
 const config = loadConfig();
@@ -468,6 +471,10 @@ async function handleTaskDocumentUploadRequest(
   const bodyHash = responseCache.buildBodyHash(body);
   const sequence = ++proxyRequestSequence;
   const startedAt = Date.now();
+  logProxyEvent(
+    sequence,
+    `document stored id=${documentRecord.id} file=${fileName} bytes=${body.length} path=${documentRecord.filePath} detection=${documentRecord.detection.state}`
+  );
   const { job, reused } = asyncJobStore.createOrReuse({
     provider: 'task',
     requestKind,
@@ -495,7 +502,7 @@ async function handleTaskDocumentUploadRequest(
       sequence,
       startedAt,
       runner: async (_jobId, logProgress) => {
-        logProgress(`uploaded document=${documentRecord.id} file=${fileName}`);
+        logProgress(`uploaded document=${documentRecord.id} file=${fileName} bytes=${body.length} path=${documentRecord.filePath}`);
         try {
           const detection = await executeStructuredDetectTaskProgressive(
             {
@@ -509,6 +516,7 @@ async function handleTaskDocumentUploadRequest(
               structuredDetectPageConcurrency: currentConfig.tasks.structuredDetectPageConcurrency,
               structuredDetectBatchSize: currentConfig.tasks.structuredDetectBatchSize,
               structuredDetectInitialPageCount: currentConfig.tasks.structuredDetectInitialPageCount,
+              structuredDetectMinSplitBytes: currentConfig.tasks.structuredDetectMinSplitBytes,
               structuredDetectTasksDataDir: currentConfig.tasks.dataDir
             },
             {
@@ -540,6 +548,9 @@ async function handleTaskDocumentUploadRequest(
             result: detection as unknown as Record<string, unknown>,
             totalPages: (detection.document as { pages?: unknown[] }).pages?.length
           });
+          logProgress(
+            `detection ready document=${documentRecord.id} model=${detection.model} resultPath=${updatedRecord?.detection.resultPath ?? 'n/a'}`
+          );
           await taskStore.recordInteraction({
             actor,
             documentId: documentRecord.id,
@@ -705,7 +716,10 @@ async function handleTextTaskRequest(
       }),
       bodyHash: responseCache.buildBodyHash(rawBody),
       runner: async (_jobId, logProgress) => {
-        logProgress(`provider=${provider} task=${taskType}`);
+        logProgress(
+          `task-start provider=${provider} task=${taskType} model=${model ?? 'default'} document=${document?.id ?? 'none'} prompt="${summarizeTextForLog(prompt)}"`
+        );
+        const taskStartedAt = Date.now();
         try {
           const result = await executeTextTask(
             {
@@ -716,6 +730,9 @@ async function handleTextTaskRequest(
               enableWebSearch
             },
             currentConfig
+          );
+          logProgress(
+            `task-done provider=${provider} task=${taskType} model=${result.model} durationMs=${Date.now() - taskStartedAt} response="${summarizeTextForLog(result.text)}"`
           );
           await taskStore.recordInteraction({
             actor,
@@ -798,7 +815,10 @@ async function handleRelevanceTaskRequest(
       }),
       bodyHash: responseCache.buildBodyHash(rawBody),
       runner: async (_jobId, logProgress) => {
-        logProgress(`provider=${provider} task=analyze-relevance`);
+        logProgress(
+          `task-start provider=${provider} task=analyze-relevance model=${model ?? 'default'} document=${document?.id ?? 'none'} query="${summarizeTextForLog(query)}"`
+        );
+        const taskStartedAt = Date.now();
         try {
           const result = await executeRelevanceTask(
             {
@@ -809,6 +829,9 @@ async function handleRelevanceTaskRequest(
               ...(typeof maxContextTokens === 'number' ? { maxContextTokens } : {})
             },
             currentConfig
+          );
+          logProgress(
+            `task-done provider=${provider} task=analyze-relevance model=${result.model ?? model ?? provider} durationMs=${Date.now() - taskStartedAt} annotations=${Array.isArray(result.annotations) ? result.annotations.length : 0}`
           );
           await taskStore.recordInteraction({
             actor,
@@ -919,7 +942,10 @@ async function handleBuildSemanticIndexTaskRequest(
       }),
       bodyHash: responseCache.buildBodyHash(rawBody),
       runner: async (_jobId, logProgress) => {
-        logProgress(`provider=${provider} task=build-semantic-index chunks=${chunks.length}`);
+        logProgress(
+          `task-start provider=${provider} task=build-semantic-index model=${model} document=${authorizedDocument.id} chunks=${chunks.length}`
+        );
+        const taskStartedAt = Date.now();
         try {
           const index = await buildSemanticIndex(
             {
@@ -933,6 +959,9 @@ async function handleBuildSemanticIndexTaskRequest(
             (processed, total) => {
               logProgress(`embedded ${processed}/${total} semantic chunks`);
             }
+          );
+          logProgress(
+            `task-done provider=${provider} task=build-semantic-index model=${index.model} durationMs=${Date.now() - taskStartedAt} chunkCount=${index.chunkCount}`
           );
           await taskStore.setSemanticIndex(authorizedDocument.id, fingerprint, index);
           await taskStore.recordInteraction({
@@ -1040,7 +1069,10 @@ async function handleSearchSemanticTaskRequest(
       }),
       bodyHash: responseCache.buildBodyHash(rawBody),
       runner: async (_jobId, logProgress) => {
-        logProgress(`provider=${provider} task=search-semantic`);
+        logProgress(
+          `task-start provider=${provider} task=search-semantic model=${model} document=${authorizedDocument.id} query="${summarizeTextForLog(query)}"`
+        );
+        const taskStartedAt = Date.now();
         try {
           const result = await searchSemanticIndex(
             {
@@ -1052,6 +1084,9 @@ async function handleSearchSemanticTaskRequest(
               ...(typeof minScore === 'number' ? { minScore } : {})
             },
             currentConfig
+          );
+          logProgress(
+            `task-done provider=${provider} task=search-semantic model=${result.model} durationMs=${Date.now() - taskStartedAt} hits=${result.results.length}`
           );
           await taskStore.recordInteraction({
             actor,
@@ -1140,7 +1175,10 @@ async function handleImageAnalysisTaskRequest(
       }),
       bodyHash: responseCache.buildBodyHash(rawBody),
       runner: async (_jobId, logProgress) => {
-        logProgress(`provider=${provider} task=analyze-image`);
+        logProgress(
+          `task-start provider=${provider} task=analyze-image model=${model ?? 'default'} document=${document?.id ?? 'none'} imageBytes=${Math.floor((imagePayload.base64Data.length * 3) / 4)} prompt="${summarizeTextForLog(prompt)}"`
+        );
+        const taskStartedAt = Date.now();
         try {
           const result = await executeImageAnalysisTask(
             {
@@ -1151,6 +1189,9 @@ async function handleImageAnalysisTaskRequest(
               mimeType: imagePayload.mimeType
             },
             currentConfig
+          );
+          logProgress(
+            `task-done provider=${provider} task=analyze-image model=${result.model} durationMs=${Date.now() - taskStartedAt} response="${summarizeTextForLog(result.text)}"`
           );
           await taskStore.recordInteraction({
             actor,
@@ -1238,7 +1279,10 @@ async function handleImageGenerationTaskRequest(
       }),
       bodyHash: responseCache.buildBodyHash(rawBody),
       runner: async (_jobId, logProgress) => {
-        logProgress(`provider=${provider} task=${taskType}`);
+        logProgress(
+          `task-start provider=${provider} task=${taskType} model=${model ?? 'default'} document=${document?.id ?? 'none'} prompt="${summarizeTextForLog(prompt)}"`
+        );
+        const taskStartedAt = Date.now();
         try {
           const result = await executeImageGenerationTask(
             {
@@ -1247,6 +1291,9 @@ async function handleImageGenerationTaskRequest(
               prompt
             },
             currentConfig
+          );
+          logProgress(
+            `task-done provider=${provider} task=${taskType} model=${result.model} durationMs=${Date.now() - taskStartedAt} mime=${result.mimeType} imageData=${result.dataUri.startsWith('data:') ? 'inline' : 'url'}`
           );
           await taskStore.recordInteraction({
             actor,
@@ -1386,6 +1433,7 @@ async function runAsyncTaskJob(
   try {
     const payload = await input.runner(jobId, (message) => {
       asyncJobStore.appendEvent(jobId, message);
+      logProxyEvent(input.sequence, message);
     });
     asyncJobStore.complete(jobId, payload);
     logProxyCompletion({
@@ -1476,6 +1524,8 @@ async function proxyOpenAiRequest(
   const body = await readRawBody(request);
   const accept = readHeaderValue(request.headers.accept);
   const contentType = readHeaderValue(request.headers['content-type']);
+  const requestPreview = summarizeBodyForLog(body, contentType);
+  logProxyEvent(sequence, `request provider=openai kind=${requestKind} preview="${requestPreview}"`);
   const cacheEntry = responseCache.buildKey({
     provider: 'openai',
     upstreamBaseUrl: currentConfig.openAiBaseUrl,
@@ -1525,7 +1575,7 @@ async function proxyOpenAiRequest(
     cacheKey,
     bodyHash,
     runner: async (logProgress) => {
-      logProgress(`requesting upstream ${upstreamPath}`);
+      logProgress(`requesting upstream ${upstreamPath} preview="${requestPreview}"`);
       let upstreamResponse: Response;
       try {
         upstreamResponse = await fetch(upstreamUrl, {
@@ -1544,6 +1594,7 @@ async function proxyOpenAiRequest(
 
       logProgress(`received upstream status=${upstreamResponse.status}`);
       const upstream = await readUpstreamResponse(upstreamResponse);
+      logProgress(`response status=${upstream.status} preview="${summarizeBodyForLog(upstream.body, upstream.headers['content-type'])}"`);
       if (isCacheableResponse(upstream.status)) {
         try {
           await responseCache.set(cacheKey, upstream);
@@ -1583,6 +1634,10 @@ async function proxyOpenAiRequest(
   }
 
   const upstream = await readUpstreamResponse(upstreamResponse);
+  logProxyEvent(
+    sequence,
+    `response provider=openai kind=${requestKind} status=${upstream.status} preview="${summarizeBodyForLog(upstream.body, upstream.headers['content-type'])}"`
+  );
   if (isCacheableResponse(upstream.status)) {
     try {
       await responseCache.set(cacheKey, upstream);
@@ -1655,6 +1710,8 @@ async function proxyGeminiRequest(
   }
 
   const body = await readRawBody(request);
+  const requestPreview = summarizeBodyForLog(body, readHeaderValue(request.headers['content-type']));
+  logProxyEvent(sequence, `request provider=gemini kind=${requestKind} preview="${requestPreview}"`);
   const modelSelection = resolveGeminiProxyUpstreamPath(upstreamPath, body, {
     textModel: currentConfig.geminiModel,
     binaryInputModel: currentConfig.geminiBinaryInputModel
@@ -1825,6 +1882,7 @@ async function proxyCodexRequest(
 
   const body = await readRawBody(request);
   const codexSummary = summarizeCodexResponsesBody(body);
+  logProxyEvent(sequence, `request provider=codex kind=${requestKind} preview="${summarizeBodyForLog(body, 'application/json')}"`);
   logCodexProxyRequest({
     sequence,
     pathname: requestUrl.pathname,
@@ -1909,6 +1967,7 @@ async function proxyCodexRequest(
         );
       }
 
+      logProgress(`response status=${upstream.status} preview="${summarizeBodyForLog(upstream.body, upstream.headers['content-type'])}"`);
       return upstream;
     },
     completionExtras: (job) => `intent=${codexSummary.intent} job=${job.id}`
@@ -1948,6 +2007,10 @@ async function proxyCodexRequest(
     return;
   }
 
+  logProxyEvent(
+    sequence,
+    `response provider=codex kind=${requestKind} status=${upstream.status} preview="${summarizeBodyForLog(upstream.body, upstream.headers['content-type'])}"`
+  );
   if (isCacheableResponse(upstream.status)) {
     try {
       await responseCache.set(cacheKey, upstream);
@@ -1979,6 +2042,13 @@ async function executeGeminiUpstreamRequest(input: {
   logProgress?: (message: string) => void;
 }): Promise<ProxyAsyncJobResponse> {
   const startedAt = Date.now();
+  const emitProgress = (message: string) => {
+    if (input.logProgress) {
+      input.logProgress(message);
+      return;
+    }
+    logProxyEvent(input.sequence, message);
+  };
   const begin = await geminiAnalyticsStore.beginRequest({
     actor: input.actor,
     model: input.model,
@@ -1986,7 +2056,7 @@ async function executeGeminiUpstreamRequest(input: {
   });
 
   if (!begin.allowed) {
-    input.logProgress?.(`blocked by Gemini daily limits day=${begin.day}`);
+    emitProgress(`blocked by Gemini daily limits day=${begin.day}`);
     return createJsonErrorResponse(429, begin.reason, {
       code: 'GEMINI_DAILY_LIMIT_REACHED',
       day: begin.day,
@@ -1996,7 +2066,8 @@ async function executeGeminiUpstreamRequest(input: {
     });
   }
 
-  input.logProgress?.(`requesting upstream ${input.upstreamPath} actor=${input.actor}`);
+  emitProgress(`requesting upstream ${input.upstreamPath} actor=${input.actor}`);
+  emitProgress(`request preview="${summarizeBodyForLog(input.body, input.contentType)}"`);
 
   let upstreamResponse: Response;
   try {
@@ -2019,11 +2090,12 @@ async function executeGeminiUpstreamRequest(input: {
     return createJsonErrorResponse(502, 'Failed to reach Gemini upstream.');
   }
 
-  input.logProgress?.(`received upstream status=${upstreamResponse.status}`);
+  emitProgress(`received upstream status=${upstreamResponse.status}`);
   const upstream = await readUpstreamResponse(upstreamResponse);
+  emitProgress(`response preview="${summarizeBodyForLog(upstream.body, upstream.headers['content-type'])}"`);
   const usage = extractGeminiUsageMetadata(upstream.body);
   if (usage) {
-    input.logProgress?.(
+    emitProgress(
       `usage input=${usage.inputTokens} output=${usage.outputTokens} total=${usage.totalTokens}`
     );
   }
@@ -2099,6 +2171,7 @@ async function runAsyncProxyJob(
   try {
     const response = await input.runner((message) => {
       asyncJobStore.appendEvent(jobId, message);
+      logProxyEvent(input.sequence, message);
     });
     asyncJobStore.complete(jobId, response);
     const snapshot = asyncJobStore.get(jobId);
@@ -2540,8 +2613,123 @@ function logProxyCompletion(input: {
   );
 }
 
-function logCodexProxyEvent(sequence: number, message: string): void {
+function logProxyEvent(sequence: number, message: string): void {
   console.log(`[llm-proxy] seq=${sequence} ${message}`);
+}
+
+function logCodexProxyEvent(sequence: number, message: string): void {
+  logProxyEvent(sequence, message);
+}
+
+function summarizeTextForLog(value: string, maxChars = LOG_PREVIEW_MAX_CHARS): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars - 1)}…`;
+}
+
+function summarizeBodyForLog(body: Buffer, contentType?: string): string {
+  const normalizedContentType = normalizeNonEmpty(contentType)?.toLowerCase() ?? '';
+  if (
+    normalizedContentType.includes('application/pdf') ||
+    normalizedContentType.includes('application/octet-stream')
+  ) {
+    return `<binary ${body.length} bytes>`;
+  }
+
+  const text = body.toString('utf8').trim();
+  if (!text) {
+    return '<empty>';
+  }
+
+  const parsed = safeParseJson(text);
+  if (parsed !== null) {
+    const preview = extractStructuredLogPreview(parsed);
+    if (preview) {
+      return summarizeTextForLog(preview);
+    }
+  }
+
+  return summarizeTextForLog(text);
+}
+
+function extractStructuredLogPreview(value: unknown): string | null {
+  const parts: string[] = [];
+  collectStructuredLogPreview(value, parts, 0, '');
+  if (parts.length === 0) {
+    return null;
+  }
+  return parts.join(' | ');
+}
+
+function collectStructuredLogPreview(
+  value: unknown,
+  parts: string[],
+  depth: number,
+  key: string
+): void {
+  if (parts.length >= LOG_PREVIEW_STRING_LIMIT || depth > 6 || value === null || value === undefined) {
+    return;
+  }
+
+  const normalizedKey = key.toLowerCase();
+  if (
+    normalizedKey === 'data' ||
+    normalizedKey === 'inline_data' ||
+    normalizedKey === 'inlinedata' ||
+    normalizedKey === 'base64data' ||
+    normalizedKey === 'bytes'
+  ) {
+    return;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    if (!normalized || looksLikeEncodedBlob(normalized)) {
+      return;
+    }
+    parts.push(normalized);
+    return;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    parts.push(String(value));
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectStructuredLogPreview(entry, parts, depth + 1, key);
+      if (parts.length >= LOG_PREVIEW_STRING_LIMIT) {
+        return;
+      }
+    }
+    return;
+  }
+
+  if (typeof value !== 'object') {
+    return;
+  }
+
+  for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    if (parts.length >= LOG_PREVIEW_STRING_LIMIT) {
+      return;
+    }
+    collectStructuredLogPreview(entryValue, parts, depth + 1, entryKey);
+  }
+}
+
+function looksLikeEncodedBlob(value: string): boolean {
+  return value.length > 80 && /^[A-Za-z0-9+/=:_-]+$/.test(value);
+}
+
+function safeParseJson(value: string): unknown | null {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeRequestKind(provider: 'openai' | 'gemini' | 'codex', upstreamPath: string): string {
@@ -2756,7 +2944,8 @@ function loadConfig(): ServerConfig {
       dataDir: normalizeNonEmpty(env.LLM_PROXY_TASKS_DIR) ?? '.cache/llm-proxy-tasks',
       structuredDetectPageConcurrency: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_PAGE_CONCURRENCY, 2),
       structuredDetectBatchSize: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_BATCH_SIZE, 3),
-      structuredDetectInitialPageCount: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_FIRST_PAGES, 3)
+      structuredDetectInitialPageCount: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_FIRST_PAGES, 3),
+      structuredDetectMinSplitBytes: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_MIN_SPLIT_BYTES, 1024 * 1024)
     },
     proxyUsers: parseProxyUsers(env.LLM_PROXY_USERS),
     sessionCookieName: normalizeNonEmpty(env.LLM_PROXY_SESSION_COOKIE_NAME) ?? 'llm_proxy_session',

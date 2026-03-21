@@ -11,7 +11,7 @@ import {
 import { generateLogicalStructureTask } from '../api/proxyTaskApi';
 import { getStructuredExtractModel, getStructuredExtractProvider } from './structuredExtractSettings';
 
-export const LOGICAL_STRUCTURE_LLM_PROMPT_VERSION = 'v2';
+export const LOGICAL_STRUCTURE_LLM_PROMPT_VERSION = 'v3';
 
 export interface LogicalStructureRuntimeSettings {
   provider: StructuredExtractProvider;
@@ -92,15 +92,19 @@ function buildLogicalStructurePrompt(batch: ReturnType<typeof collectHtmlLogical
     '- Cover every provided block exactly once.',
     '- Preserve the original order.',
     '- Each group must contain contiguous block ids from the provided order.',
-    '- Prefer semantically coherent units over raw paragraph boundaries.',
+    '- Prefer semantically coherent units over raw paragraph boundaries, but be conservative about splitting.',
     '- A short lead-in paragraph followed by its bullet list should usually stay in the same group.',
-    '- A group may be one paragraph, several paragraphs, an entire short subsection, or a whole short section when that is the most coherent unit.',
+    '- The default should be one group for the whole section or whole batch unless it is clearly too large.',
+    '- If the current section is about 20 paragraphs or fewer, prefer one group covering the whole section or whole batch.',
+    '- If you split, do it only for a genuinely large section or a strong internal topic shift.',
+    '- Each group should usually contain at least about 10 sentences, unless the whole section or the remaining tail is shorter.',
     '- If a headed subsection is compact, prefer one group covering the whole subsection instead of splitting it into smaller paragraph-level groups.',
-    '- Treat a headed subsection as compact when it has about 1 to 3 short paragraphs and no strong internal topic shift.',
     '- Do not split a compact headed subsection unless there is a clear semantic break, such as a new experiment, a contrastive transition, or a distinct list/example block.',
     '- Do not invent ids, coordinates, or extra fields.',
     '- Keep titles short and optional.',
     `Section context: ${sectionLabel}`,
+    `Section stats: ${batch.totalParagraphCount} paragraphs, about ${batch.totalSentenceCount} sentences.`,
+    `Batch stats: batch ${batch.batchIndex} of ${batch.batchCount}, ${batch.paragraphs.length} paragraphs, about ${batch.paragraphs.reduce((sum, paragraph) => sum + paragraph.sentenceCount, 0)} sentences.`,
     'Ordered blocks:',
     ...blockLines
   ].join('\n');

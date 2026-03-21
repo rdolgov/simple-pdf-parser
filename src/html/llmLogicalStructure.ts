@@ -1,5 +1,6 @@
 import type { PDFImageBounds } from '../types.js';
 import type { HtmlDocumentLayout, HtmlHeadingBlock, HtmlParagraphBlock } from './htmlLayoutConverter.js';
+import { estimateLogicalSentenceCount } from './logicalSentenceCount.js';
 import type {
   HtmlDocumentLogicalStructure,
   HtmlLogicalBlockAssignment,
@@ -16,6 +17,7 @@ export interface HtmlLogicalParagraphCandidate {
   pageNumber: number;
   blockIndex: number;
   text: string;
+  sentenceCount: number;
   sectionId?: string;
   sectionTitle?: string;
   sectionPath: string[];
@@ -27,6 +29,10 @@ export interface HtmlLogicalSectionBatch {
   sectionId?: string;
   sectionTitle?: string;
   sectionPath: string[];
+  batchIndex: number;
+  batchCount: number;
+  totalParagraphCount: number;
+  totalSentenceCount: number;
   paragraphs: HtmlLogicalParagraphCandidate[];
 }
 
@@ -44,11 +50,17 @@ export interface HtmlLogicalTopicGroup {
 export interface HtmlLogicalBatchOptions {
   maxBatchChars?: number;
   maxBatchParagraphs?: number;
+  wholeSectionMaxChars?: number;
+  wholeSectionMaxParagraphs?: number;
+  minTopicSentences?: number;
 }
 
 const DEFAULT_BATCH_OPTIONS: Required<HtmlLogicalBatchOptions> = {
   maxBatchChars: 6500,
-  maxBatchParagraphs: 18
+  maxBatchParagraphs: 18,
+  wholeSectionMaxChars: 14000,
+  wholeSectionMaxParagraphs: 20,
+  minTopicSentences: 10
 };
 
 const LIST_PREFIX = /^(\(?\d+[\).]|[a-z][\).]|[ivxlcdm]+[\).]|[•·\-–—])\s+/i;
@@ -90,6 +102,7 @@ export function collectHtmlLogicalSectionBatches(
         pageNumber: page.number,
         blockIndex,
         text,
+        sentenceCount: estimateLogicalSentenceCount(text),
         sectionId: sectionUnit?.id,
         sectionTitle: sectionUnit?.title,
         sectionPath: buildSectionPath(sectionUnit, sectionUnitMap),
@@ -108,22 +121,37 @@ export function collectHtmlLogicalSectionBatches(
     const sectionId = paragraphs[0]?.sectionId;
     const sectionTitle = paragraphs[0]?.sectionTitle;
     const sectionPath = paragraphs[0]?.sectionPath ?? [];
+    const totalParagraphCount = paragraphs.length;
+    const totalSentenceCount = paragraphs.reduce((sum, paragraph) => sum + paragraph.sentenceCount, 0);
+    const totalChars = paragraphs.reduce((sum, paragraph) => sum + paragraph.text.length, 0);
+
+    if (
+      totalParagraphCount <= config.wholeSectionMaxParagraphs &&
+      totalChars <= config.wholeSectionMaxChars
+    ) {
+      batches.push({
+        id: `${bucketKey}-batch-1`,
+        sectionId,
+        sectionTitle,
+        sectionPath,
+        batchIndex: 1,
+        batchCount: 1,
+        totalParagraphCount,
+        totalSentenceCount,
+        paragraphs
+      });
+      continue;
+    }
+
     let currentBatch: HtmlLogicalParagraphCandidate[] = [];
     let currentChars = 0;
-    let batchIndex = 0;
+    const pendingBatches: HtmlLogicalParagraphCandidate[][] = [];
 
     const flush = () => {
       if (currentBatch.length === 0) {
         return;
       }
-      batchIndex += 1;
-      batches.push({
-        id: `${bucketKey}-batch-${batchIndex}`,
-        sectionId,
-        sectionTitle,
-        sectionPath,
-        paragraphs: currentBatch
-      });
+      pendingBatches.push(currentBatch);
       currentBatch = [];
       currentChars = 0;
     };
@@ -141,6 +169,20 @@ export function collectHtmlLogicalSectionBatches(
     }
 
     flush();
+
+    pendingBatches.forEach((batchParagraphs, index) => {
+      batches.push({
+        id: `${bucketKey}-batch-${index + 1}`,
+        sectionId,
+        sectionTitle,
+        sectionPath,
+        batchIndex: index + 1,
+        batchCount: pendingBatches.length,
+        totalParagraphCount,
+        totalSentenceCount,
+        paragraphs: batchParagraphs
+      });
+    });
   }
 
   return batches;
@@ -264,7 +306,11 @@ export function normalizeHtmlLogicalTopicGroups(
     });
   }
 
-  return normalized.filter((group) => group.blockRefs.length > 0);
+  return applyHierarchicalTopicPolicy(
+    batch,
+    normalized.filter((group) => group.blockRefs.length > 0),
+    DEFAULT_BATCH_OPTIONS.minTopicSentences
+  );
 }
 
 export function buildHtmlLogicalStructureFromTopicGroups(
@@ -275,7 +321,7 @@ export function buildHtmlLogicalStructureFromTopicGroups(
 ): HtmlDocumentLogicalStructure {
   const sectionUnits = baseStructure.units.filter((unit) => unit.kind === 'section');
   const sectionIds = new Set(sectionUnits.map((unit) => unit.id));
-  const topicUnits = topicGroups
+  const topicUnits = filterRedundantSectionTopicGroups(baseStructure, topicGroups)
     .filter((group) => group.blockRefs.length > 0)
     .map((group, index) => finalizeTopicUnit(layout, group, index + 1, sectionIds));
 
@@ -365,6 +411,137 @@ function finalizeTopicUnit(
     blockCount: group.blockRefs.length,
     paragraphCount: group.blockRefs.length
   };
+}
+
+function applyHierarchicalTopicPolicy(
+  batch: HtmlLogicalSectionBatch,
+  groups: HtmlLogicalTopicGroup[],
+  minTopicSentences: number
+): HtmlLogicalTopicGroup[] {
+  if (groups.length === 0) {
+    return [];
+  }
+
+  if (batch.totalParagraphCount <= DEFAULT_BATCH_OPTIONS.wholeSectionMaxParagraphs) {
+    return [buildWholeBatchGroup(batch)];
+  }
+
+  const sentenceCountByKey = new Map(
+    batch.paragraphs.map((paragraph) => [buildLogicalBlockKey(paragraph.pageNumber, paragraph.blockIndex), paragraph.sentenceCount] as const)
+  );
+  const merged: HtmlLogicalTopicGroup[] = [];
+
+  for (let index = 0; index < groups.length; index += 1) {
+    let current = cloneGroup(groups[index]);
+    while (countGroupSentences(current, sentenceCountByKey) < minTopicSentences && index < groups.length - 1) {
+      index += 1;
+      current = mergeTopicGroups(current, groups[index]);
+    }
+
+    if (countGroupSentences(current, sentenceCountByKey) < minTopicSentences && merged.length > 0) {
+      merged[merged.length - 1] = mergeTopicGroups(merged[merged.length - 1], current);
+      continue;
+    }
+
+    merged.push(current);
+  }
+
+  return merged.filter((group) => group.blockRefs.length > 0);
+}
+
+function buildWholeBatchGroup(batch: HtmlLogicalSectionBatch): HtmlLogicalTopicGroup {
+  return {
+    sectionId: batch.sectionId,
+    blockRefs: batch.paragraphs.map((paragraph) => ({
+      pageNumber: paragraph.pageNumber,
+      blockIndex: paragraph.blockIndex,
+      type: 'paragraph' as const
+    }))
+  };
+}
+
+function countGroupSentences(
+  group: HtmlLogicalTopicGroup,
+  sentenceCountByKey: Map<string, number>
+): number {
+  return group.blockRefs.reduce(
+    (sum, ref) => sum + (sentenceCountByKey.get(buildLogicalBlockKey(ref.pageNumber, ref.blockIndex)) ?? 0),
+    0
+  );
+}
+
+function mergeTopicGroups(left: HtmlLogicalTopicGroup, right: HtmlLogicalTopicGroup): HtmlLogicalTopicGroup {
+  return {
+    title: normalizeNonEmpty(left.title) || normalizeNonEmpty(right.title),
+    sectionId: left.sectionId ?? right.sectionId,
+    blockRefs: [...left.blockRefs, ...right.blockRefs]
+  };
+}
+
+function cloneGroup(group: HtmlLogicalTopicGroup): HtmlLogicalTopicGroup {
+  return {
+    title: group.title,
+    sectionId: group.sectionId,
+    blockRefs: group.blockRefs.slice()
+  };
+}
+
+function filterRedundantSectionTopicGroups(
+  baseStructure: HtmlDocumentLogicalStructure,
+  topicGroups: HtmlLogicalTopicGroup[]
+): HtmlLogicalTopicGroup[] {
+  const sectionParagraphs = new Map<string, Set<string>>();
+  for (const unit of baseStructure.units) {
+    if (unit.kind !== 'section') {
+      continue;
+    }
+    sectionParagraphs.set(
+      unit.id,
+      new Set(
+        unit.blockRefs
+          .filter((ref) => ref.type === 'paragraph')
+          .map((ref) => buildLogicalBlockKey(ref.pageNumber, ref.blockIndex))
+      )
+    );
+  }
+
+  const groupsBySection = new Map<string, HtmlLogicalTopicGroup[]>();
+  for (const group of topicGroups) {
+    if (!group.sectionId) {
+      continue;
+    }
+    const existing = groupsBySection.get(group.sectionId);
+    if (existing) {
+      existing.push(group);
+    } else {
+      groupsBySection.set(group.sectionId, [group]);
+    }
+  }
+
+  return topicGroups.filter((group) => {
+    if (!group.sectionId) {
+      return true;
+    }
+    const sectionGroups = groupsBySection.get(group.sectionId) ?? [];
+    if (sectionGroups.length !== 1) {
+      return true;
+    }
+    const sectionKeys = sectionParagraphs.get(group.sectionId);
+    if (!sectionKeys || sectionKeys.size === 0) {
+      return true;
+    }
+    if (group.blockRefs.length !== sectionKeys.size) {
+      return true;
+    }
+
+    for (const ref of group.blockRefs) {
+      if (!sectionKeys.has(buildLogicalBlockKey(ref.pageNumber, ref.blockIndex))) {
+        return true;
+      }
+    }
+
+    return false;
+  });
 }
 
 function buildPageSegments(blockRefs: HtmlLogicalBlockRef[], layout: HtmlDocumentLayout): HtmlLogicalUnitPageSegment[] {

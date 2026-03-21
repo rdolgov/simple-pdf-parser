@@ -91,6 +91,28 @@ export function buildHighlightBlockData(block: any): HighlightBlockData | null {
   };
 }
 
+export function buildMergedTextHighlightBlockData(blocks: Array<HtmlParagraphBlock | HtmlHeadingBlock>): HighlightBlockData | null {
+  const validBlocks = blocks.filter((block) => hasBounds(block?.bounds));
+  if (validBlocks.length === 0) {
+    return null;
+  }
+
+  const lines = validBlocks.flatMap((block) => extractHighlightLines(block));
+  const fontFamilies = validBlocks
+    .map((block) => extractFontFamily(block))
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  const fontSizes = validBlocks
+    .map((block) => extractFontSize(block))
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
+
+  return {
+    bounds: mergeBounds(validBlocks.map((block) => block.bounds)),
+    lines,
+    fontFamily: fontFamilies[0],
+    fontSize: fontSizes.length > 0 ? average(fontSizes) : undefined
+  };
+}
+
 export function findParagraphBlockAtPoint(
   page: HtmlPageLayout,
   x: number,
@@ -272,6 +294,23 @@ function normalizeBounds(bounds: PDFImageBounds): PDFImageBounds {
     maxX: Math.max(bounds.minX, bounds.maxX),
     maxY: Math.max(bounds.minY, bounds.maxY)
   };
+}
+
+function mergeBounds(boundsList: PDFImageBounds[]): PDFImageBounds {
+  return boundsList.reduce(
+    (merged, bounds) => ({
+      minX: Math.min(merged.minX, bounds.minX),
+      minY: Math.min(merged.minY, bounds.minY),
+      maxX: Math.max(merged.maxX, bounds.maxX),
+      maxY: Math.max(merged.maxY, bounds.maxY)
+    }),
+    {
+      minX: boundsList[0]?.minX ?? 0,
+      minY: boundsList[0]?.minY ?? 0,
+      maxX: boundsList[0]?.maxX ?? 0,
+      maxY: boundsList[0]?.maxY ?? 0
+    }
+  );
 }
 
 function distanceToBounds(bounds: PDFImageBounds, x: number, y: number): number {

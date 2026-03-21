@@ -12,7 +12,7 @@ import {
 } from '../src/html/llmLogicalStructure';
 
 describe('llm logical structure', () => {
-  it('normalizes proposal JSON into contiguous topic groups and preserves bullet context', () => {
+  it('collapses short headed sections into one logical group even if the llm proposes smaller groups', () => {
     const layout: HtmlDocumentLayout = {
       pages: [
         {
@@ -47,14 +47,11 @@ describe('llm logical structure', () => {
 
     const groups = normalizeHtmlLogicalTopicGroups(batch, proposals);
 
-    expect(groups).toHaveLength(2);
-    expect(groups[0].title).toBe('Decoder stack overview');
-    expect(groups[0].blockRefs).toHaveLength(3);
-    expect(groups[0].blockRefs.map((ref) => ref.blockIndex)).toEqual([1, 2, 3]);
-    expect(groups[1].blockRefs.map((ref) => ref.blockIndex)).toEqual([4]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].blockRefs.map((ref) => ref.blockIndex)).toEqual([1, 2, 3, 4]);
   });
 
-  it('builds llm topic units while preserving section-level selection context', () => {
+  it('treats a short headed section as the primary logical unit even when the llm returns one whole-section group', () => {
     const layout: HtmlDocumentLayout = {
       pages: [
         {
@@ -89,7 +86,7 @@ describe('llm logical structure', () => {
 
     expect(structure.strategy).toBe('llm-v1');
     expect(structure.metadata?.provider).toBe('openai');
-    expect(structure.units.filter((unit) => unit.kind === 'topic')).toHaveLength(1);
+    expect(structure.units.filter((unit) => unit.kind === 'topic')).toHaveLength(0);
 
     const selection = resolveHtmlLogicalUnitForSelection(structure, {
       pageNumber: 1,
@@ -97,8 +94,8 @@ describe('llm logical structure', () => {
       blockType: 'paragraph'
     });
 
-    expect(selection.scope).toBe('topic');
-    expect(selection.logicalUnit?.title).toBe('Decoder stack and masking');
+    expect(selection.scope).toBe('section');
+    expect(selection.logicalUnit?.title).toBe('Methods');
     expect(selection.logicalUnit?.paragraphCount).toBe(3);
     expect(selection.sectionUnit?.title).toBe('Methods');
   });
@@ -148,6 +145,7 @@ describe('llm logical structure', () => {
       promptVersion: 'test-v1',
       batchCount: 1
     });
+    const topicUnits = structure.units.filter((unit) => unit.kind === 'topic');
 
     const selection = resolveHtmlLogicalUnitForSelection(structure, {
       pageNumber: 1,
@@ -155,10 +153,47 @@ describe('llm logical structure', () => {
       blockType: 'paragraph'
     });
 
+    expect(topicUnits).toHaveLength(0);
     expect(selection.scope).toBe('section');
     expect(selection.logicalUnit?.kind).toBe('section');
     expect(selection.logicalUnit?.title).toBe('3.3 Position-wise Feed-Forward Networks');
     expect(selection.sectionUnit?.title).toBe('3.3 Position-wise Feed-Forward Networks');
+  });
+
+  it('merges tiny topic proposals inside large sections into larger contiguous groups', () => {
+    const batch = {
+      id: 'section-1-batch-1',
+      sectionId: 'section-1',
+      sectionTitle: 'Large Section',
+      sectionPath: ['Large Section'],
+      batchIndex: 1,
+      batchCount: 1,
+      totalParagraphCount: 21,
+      totalSentenceCount: 21,
+      paragraphs: Array.from({ length: 21 }, (_, index) => ({
+        id: `p-${index + 1}`,
+        pageNumber: 1,
+        blockIndex: index + 1,
+        text: `Sentence ${index + 1}.`,
+        sentenceCount: 1,
+        sectionId: 'section-1',
+        sectionTitle: 'Large Section',
+        sectionPath: ['Large Section'],
+        isListLike: false
+      }))
+    } as const;
+
+    const groups = normalizeHtmlLogicalTopicGroups(
+      batch,
+      batch.paragraphs.map((paragraph) => ({
+        title: paragraph.id,
+        blockIds: [paragraph.id]
+      }))
+    );
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0].blockRefs).toHaveLength(10);
+    expect(groups[1].blockRefs).toHaveLength(11);
   });
 });
 

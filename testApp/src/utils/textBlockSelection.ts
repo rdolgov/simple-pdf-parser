@@ -24,6 +24,8 @@ type LineMetrics = {
 const MIN_FONT_RATIO = 0.86;
 const MAX_FONT_RATIO = 1.16;
 const MIN_PRIMARY_LINE_WIDTH = 24;
+const MIXED_LAYOUT_COLUMN_SHIFT = 56;
+const MIXED_LAYOUT_GAP_RATIO = 1.8;
 
 export function refineTextBlockForSelection<T extends TextBlock>(block: T, point: SelectionPoint): T {
   if (!Array.isArray(block.lines) || block.lines.length < 2) {
@@ -33,6 +35,10 @@ export function refineTextBlockForSelection<T extends TextBlock>(block: T, point
   const metrics = block.lines.map((line, index) => buildLineMetrics(line, index));
   const anchor = findAnchorLine(metrics, point);
   if (!anchor) {
+    return block;
+  }
+
+  if (!shouldRefineBlock(block, metrics, anchor)) {
     return block;
   }
 
@@ -47,6 +53,37 @@ export function refineTextBlockForSelection<T extends TextBlock>(block: T, point
   }
 
   return rebuildBlock(block, selectedLines);
+}
+
+function shouldRefineBlock<T extends TextBlock>(
+  block: T,
+  metrics: LineMetrics[],
+  anchor: LineMetrics
+): boolean {
+  if (anchor.isOutlier) {
+    return true;
+  }
+
+  if (block.type === 'heading') {
+    return hasMixedLayout(metrics, anchor);
+  }
+
+  return false;
+}
+
+function hasMixedLayout(metrics: LineMetrics[], anchor: LineMetrics): boolean {
+  for (let index = 1; index < metrics.length; index += 1) {
+    const previous = metrics[index - 1];
+    const current = metrics[index];
+    const gap = previous.line.bounds.minY - current.line.bounds.maxY;
+    const gapRatio = gap / Math.max(anchor.fontSize, previous.fontSize, current.fontSize, 1);
+    const minXDelta = Math.abs(previous.line.bounds.minX - current.line.bounds.minX);
+    if (gapRatio >= MIXED_LAYOUT_GAP_RATIO || minXDelta >= Math.max(anchor.fontSize * 4, MIXED_LAYOUT_COLUMN_SHIFT)) {
+      return true;
+    }
+  }
+
+  return metrics.some((metric) => metric.isOutlier);
 }
 
 function buildLineMetrics(line: HtmlLine, index: number): LineMetrics {
