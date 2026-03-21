@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "updatedAt": "2026-03-21T01:23:37.348Z",
+  "days": {
+    "2026-03-20": {
+      "day": "2026-03-20",
+      "totals": {
+        "calls": 3,
+        "blockedRequests": 0,
+        "errorCalls": 0,
+        "inputTokens": 6245,
+        "outputTokens": 6672,
+        "totalTokens": 12917
+      },
+      "actors": {
+        "vesperz": {
+          "calls": 3,
+          "blockedRequests": 0,
+          "errorCalls": 0,
+          "inputTokens": 6245,
+          "outputTokens": 6672,
+          "totalTokens": 12917
+        }
+      },
+      "models": {
+        "gemini-3-flash-preview": {
+          "calls": 3,
+          "blockedRequests": 0,
+          "errorCalls": 0,
+          "inputTokens": 6245,
+          "outputTokens": 6672,
+          "totalTokens": 12917
+        }
+      },
+      "recentRequests": [
+        {
+          "id": "b3a28e57-ca6e-4836-82c8-0262abce0e0a",
+          "timestamp": "2026-03-21T01:23:37.348Z",
+          "actor": "vesperz",
+          "model": "gemini-3-flash-preview",
+          "requestKind": "generateContent",
+          "status": 200,
+          "durationMs": 6118,
+          "inputTokens": 3176,
+          "outputTokens": 1054,
+          "totalTokens": 4230,
+          "blocked": false
+        },
+        {
+          "id": "4c8e3fc2-3aa6-40b8-906e-ef2d37899c97",
+          "timestamp": "2026-03-21T01:23:01.987Z",
+          "actor": "vesperz",
+          "model": "gemini-3-flash-preview",
+          "requestKind": "generateContent",
+          "status": 200,
+          "durationMs": 10344,
+          "inputTokens": 223,
+          "outputTokens": 2131,
+          "totalTokens": 2354,
+          "blocked": false
+        },
+        {
+          "id": "8a4af555-d2e1-4c85-8b7c-73135ba0de5f",
+          "timestamp": "2026-03-21T01:10:47.709Z",
+          "actor": "vesperz",
+          "model": "gemini-3-flash-preview",
+          "requestKind": "generateContent",
+          "status": 200,
+          "durationMs": 16976,
+          "inputTokens": 2846,
+          "outputTokens": 3487,
+          "totalTokens": 6333,
+          "blocked": false
+        }
+      ]
+    }
+  }
+}

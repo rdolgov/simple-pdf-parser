@@ -16,7 +16,7 @@ function proxyRouteDevPlugin(): Plugin {
           return;
         }
 
-        if (pathname.startsWith('/proxy/api/')) {
+        if (pathname.startsWith('/proxy/api/') || pathname.startsWith('/proxy/backoffice/')) {
           next();
           return;
         }
@@ -54,11 +54,23 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true
       },
+      '/api/backoffice': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
       '/api/llm': {
         target: 'http://localhost:8787',
         changeOrigin: true
       },
+      '/backoffice': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
       '/proxy/api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
+      '/proxy/backoffice': {
         target: 'http://localhost:8787',
         changeOrigin: true
       }
