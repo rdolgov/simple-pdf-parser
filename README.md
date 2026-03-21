@@ -145,6 +145,9 @@ Server environment variables:
 - `LLM_PROXY_ASYNC_JOB_TTL_MS` defaults to `3600000` (1 hour) and controls how long completed async job results stay available for polling
 - `LLM_PROXY_ASYNC_MAX_JOBS` defaults to `100`
 - `LLM_PROXY_TASKS_DIR` defaults to `.cache/llm-proxy-tasks` and stores uploaded files, detection results, semantic indexes, and interaction logs for the task API
+- `LLM_PROXY_TASKS_DETECT_PAGE_CONCURRENCY` defaults to `2` and controls how many per-page structured extraction jobs run in parallel when local page splitting is available
+- `LLM_PROXY_TASKS_DETECT_FIRST_PAGES` defaults to `3` and keeps the earliest pages as individual extraction calls so the first visible pages publish sooner
+- `LLM_PROXY_TASKS_DETECT_BATCH_SIZE` defaults to `3` and controls the page-range batch size used after the initial individually processed pages
 - `LLM_PROXY_APP_DIR` defaults to `testApp/dist` and is used when serving the built app under `/proxy`
 
 The proxy server now auto-loads root-level `.env` and `.env.local` files on startup. Shell environment variables still win over file-loaded values.
@@ -161,8 +164,10 @@ For manual refresh/debugging, send `X-LLM-Proxy-Cache: bypass` or append `?cache
 When the browser app uses the task API, startup document detection is:
 
 - `POST /api/tasks/documents`
-- if detection is still running, the response includes a `document.id`
+- if detection is still running, the response includes a `document.id`, page progress, and may already include a partial `detection.result`
 - the client polls `GET /api/tasks/documents/<documentId>` until `detection.status === ready`
+- when the local `pdfseparate` tool is available, the server splits the PDF into per-page PDFs under `.cache/llm-proxy-tasks/split-pages/...`, keeps the first few pages as individual calls, batches later pages into small page ranges, and publishes the longest contiguous page prefix as partial results while later pages are still processing
+- if `pdfseparate` is unavailable, the server falls back to a single whole-document extraction
 
 Long-running task and passthrough requests also switch to async job polling automatically:
 

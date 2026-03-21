@@ -9,6 +9,9 @@ export interface StoredDetectionInfo {
   jobId?: string;
   provider?: string;
   model?: string;
+  totalPages?: number;
+  completedPages?: number;
+  publishedPages?: number;
   updatedAt: string;
   error?: string;
   resultPath?: string;
@@ -104,6 +107,9 @@ export class TaskStore {
     jobId: string;
     provider: string;
     model?: string;
+    totalPages?: number;
+    completedPages?: number;
+    publishedPages?: number;
   }): Promise<StoredDocumentRecord | null> {
     const current = await this.getDocument(documentId);
     if (!current) {
@@ -117,7 +123,44 @@ export class TaskStore {
         jobId: input.jobId,
         provider: input.provider,
         ...(input.model ? { model: input.model } : {}),
+        ...(typeof input.totalPages === 'number' ? { totalPages: input.totalPages } : {}),
+        ...(typeof input.completedPages === 'number' ? { completedPages: input.completedPages } : {}),
+        ...(typeof input.publishedPages === 'number' ? { publishedPages: input.publishedPages } : {}),
         updatedAt: new Date().toISOString()
+      }
+    };
+    await writeJson(this.documentMetadataPath(documentId), next);
+    return next;
+  }
+
+  async setDetectionPartial(documentId: string, input: {
+    provider: string;
+    model?: string;
+    result: Record<string, unknown>;
+    totalPages: number;
+    completedPages: number;
+    publishedPages: number;
+  }): Promise<StoredDocumentRecord | null> {
+    const current = await this.getDocument(documentId);
+    if (!current) {
+      return null;
+    }
+    const resultPath = this.detectionResultPath(documentId);
+    await writeJson(resultPath, input.result);
+    const updatedAt = new Date().toISOString();
+    const next: StoredDocumentRecord = {
+      ...current,
+      updatedAt,
+      detection: {
+        state: 'pending',
+        ...(current.detection.jobId ? { jobId: current.detection.jobId } : {}),
+        provider: input.provider,
+        ...(input.model ? { model: input.model } : {}),
+        totalPages: input.totalPages,
+        completedPages: input.completedPages,
+        publishedPages: input.publishedPages,
+        resultPath,
+        updatedAt
       }
     };
     await writeJson(this.documentMetadataPath(documentId), next);
@@ -128,6 +171,7 @@ export class TaskStore {
     provider: string;
     model?: string;
     result: Record<string, unknown>;
+    totalPages?: number;
   }): Promise<StoredDocumentRecord | null> {
     const current = await this.getDocument(documentId);
     if (!current) {
@@ -143,6 +187,8 @@ export class TaskStore {
         state: 'ready',
         provider: input.provider,
         ...(input.model ? { model: input.model } : {}),
+        ...(typeof input.totalPages === 'number' ? { totalPages: input.totalPages } : {}),
+        ...(typeof input.totalPages === 'number' ? { completedPages: input.totalPages, publishedPages: input.totalPages } : {}),
         resultPath,
         updatedAt
       }
@@ -166,8 +212,13 @@ export class TaskStore {
       updatedAt,
       detection: {
         state: 'error',
+        ...(current.detection.jobId ? { jobId: current.detection.jobId } : {}),
         provider: input.provider,
         ...(input.model ? { model: input.model } : {}),
+        ...(typeof current.detection.totalPages === 'number' ? { totalPages: current.detection.totalPages } : {}),
+        ...(typeof current.detection.completedPages === 'number' ? { completedPages: current.detection.completedPages } : {}),
+        ...(typeof current.detection.publishedPages === 'number' ? { publishedPages: current.detection.publishedPages } : {}),
+        ...(current.detection.resultPath ? { resultPath: current.detection.resultPath } : {}),
         error: input.error,
         updatedAt
       }

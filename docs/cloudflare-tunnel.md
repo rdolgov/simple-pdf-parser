@@ -50,6 +50,10 @@ Important environment notes:
 - `LLM_PROXY_GEMINI_DAILY_MAX_TOKENS` defaults to `1000000` and hard-blocks new Gemini upstream calls once the recorded daily token cap is reached.
 - `/proxy/backoffice/gemini-analytics` exposes the server-side Gemini usage dashboard for a small hardcoded username allowlist.
 - Long-running browser task requests now auto-switch to `202 + poll` under `/api/tasks/jobs/...`, which avoids Cloudflare `524` timeouts without changing the browser-side app flow.
+- `LLM_PROXY_TASKS_DETECT_PAGE_CONCURRENCY` defaults to `2`.
+- `LLM_PROXY_TASKS_DETECT_FIRST_PAGES` defaults to `3`.
+- `LLM_PROXY_TASKS_DETECT_BATCH_SIZE` defaults to `3`.
+- When the local `pdfseparate` and `pdfunite` tools are installed, startup document detection keeps split pages under `.cache/llm-proxy-tasks/split-pages/...`, extracts the earliest pages individually, batches later pages into small ranges, and publishes early-page partial results while later pages continue in the background.
 - `CODEX_EXEC_ENABLED=1` still works in this deployment if you want Codex proxy support.
 
 Expected public flow:

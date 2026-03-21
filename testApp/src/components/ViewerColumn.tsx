@@ -67,6 +67,10 @@ interface ViewerColumnProps {
   enableFormulaHighlight: boolean;
   enableTableHighlight: boolean;
   enableWebSearch: boolean;
+  onChatActivityChange: (delta: number) => void;
+  onImageExplanationActivityChange: (delta: number) => void;
+  onFormulaExplanationActivityChange: (delta: number) => void;
+  onTableInfographicActivityChange: (delta: number) => void;
   onInlineImageGenerationActivityChange: (delta: number) => void;
   onInteractiveWidgetGenerationActivityChange: (delta: number) => void;
   onInlineSuggestionAnalysisActivityChange: (delta: number) => void;
@@ -116,6 +120,10 @@ export function ViewerColumn({
   enableFormulaHighlight,
   enableTableHighlight,
   enableWebSearch,
+  onChatActivityChange,
+  onImageExplanationActivityChange,
+  onFormulaExplanationActivityChange,
+  onTableInfographicActivityChange,
   onInlineImageGenerationActivityChange,
   onInteractiveWidgetGenerationActivityChange,
   onInlineSuggestionAnalysisActivityChange
@@ -169,6 +177,10 @@ export function ViewerColumn({
                       enableFormulaHighlight={enableFormulaHighlight}
                       enableTableHighlight={enableTableHighlight}
                       enableWebSearch={enableWebSearch}
+                      onChatActivityChange={onChatActivityChange}
+                      onImageExplanationActivityChange={onImageExplanationActivityChange}
+                      onFormulaExplanationActivityChange={onFormulaExplanationActivityChange}
+                      onTableInfographicActivityChange={onTableInfographicActivityChange}
                       onInlineImageGenerationActivityChange={onInlineImageGenerationActivityChange}
                       onInteractiveWidgetGenerationActivityChange={onInteractiveWidgetGenerationActivityChange}
                       onInlineSuggestionAnalysisActivityChange={onInlineSuggestionAnalysisActivityChange}

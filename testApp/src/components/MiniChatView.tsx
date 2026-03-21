@@ -31,6 +31,7 @@ interface MiniChatViewProps {
   initialMessages?: ChatMessage[];
   /** When enabled, allows Gemini to search the web for additional context */
   enableWebSearch?: boolean;
+  onChatActivityChange?: (delta: number) => void;
 }
 
 const SYSTEM_PROMPT = `You are a helpful assistant analyzing a specific paragraph from a PDF document.
@@ -54,7 +55,8 @@ export function MiniChatView({
   onAnnotationChange,
   initialQuery,
   initialMessages,
-  enableWebSearch = false
+  enableWebSearch = false,
+  onChatActivityChange
 }: MiniChatViewProps): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -227,8 +229,11 @@ export function MiniChatView({
     const userMessage: ChatMessage = { role: 'user', content: trimmed, timestamp: Date.now() };
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
+    let tracksChatActivity = false;
 
     try {
+      onChatActivityChange?.(1);
+      tracksChatActivity = true;
       const conversationHistory = messages
         .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
         .join('\n');
@@ -256,9 +261,12 @@ export function MiniChatView({
       const message = err instanceof Error ? err.message : 'Failed to get response';
       setError(message);
     } finally {
+      if (tracksChatActivity) {
+        onChatActivityChange?.(-1);
+      }
       setIsLoading(false);
     }
-  }, [input, isLoading, model, messages, contextText, enableWebSearch, provider, taskDocumentId]);
+  }, [input, isLoading, model, messages, contextText, enableWebSearch, provider, taskDocumentId, onChatActivityChange]);
 
   // Auto-send initial query if provided
   useEffect(() => {

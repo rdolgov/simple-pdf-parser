@@ -34,6 +34,9 @@ const EXTRACT_CACHE_SCHEMA_VERSION = 6;
 export interface ExtractState {
   status: 'idle' | 'loading' | 'ready' | 'error';
   message?: string;
+  totalPages?: number;
+  completedPages?: number;
+  publishedPages?: number;
 }
 
 export interface UseDocumentLoaderResult {
@@ -104,11 +107,14 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     setTaskDocumentId('');
   }, []);
 
-  const handleExtractResponse = useCallback((response: {
-    document: any;
-    parsedTables?: Array<{ name?: string; rows: any[] }>;
-    assetMap?: Record<string, string> | null;
-  }) => {
+  const handleExtractResponse = useCallback((
+    response: {
+      document: any;
+      parsedTables?: Array<{ name?: string; rows: any[] }>;
+      assetMap?: Record<string, string> | null;
+    },
+    nextState: ExtractState = { status: 'ready' }
+  ) => {
     setExtractDocument(response.document);
     setExtractParsedTables(response.parsedTables);
     setExtractAssetMap(response.assetMap ?? null);
@@ -187,7 +193,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
       matchedParsedTables: parsedTables.length - parsedTableMap.size,
       source: 'extract'
     });
-    setExtractState({ status: 'ready' });
+    setExtractState(nextState);
   }, []);
 
   const loadCachedExtractForFile = useCallback(
@@ -235,6 +241,67 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     []
   );
 
+  const applyTaskDetectionUpdate = useCallback(
+    (
+      fileHash: string,
+      response: {
+        document: {
+          id: string;
+          interactionCount: number;
+          detection: {
+            provider?: string;
+            model?: string;
+          };
+        };
+        detection: {
+          status: 'idle' | 'pending' | 'ready' | 'error';
+          provider?: string;
+          model?: string;
+          totalPages?: number;
+          completedPages?: number;
+          publishedPages?: number;
+          result?: Record<string, unknown> | null;
+        };
+      }
+    ) => {
+      persistTaskDocumentState(fileHash, {
+        documentId: response.document.id,
+        interactionCount: response.document.interactionCount,
+        detection: {
+          status: response.detection.status,
+          provider: response.detection.provider ?? response.document.detection.provider,
+          model: response.detection.model ?? response.document.detection.model
+        }
+      });
+
+      const nextState: ExtractState = {
+        status: response.detection.status === 'pending' ? 'loading' : response.detection.status,
+        ...(typeof response.detection.totalPages === 'number' ? { totalPages: response.detection.totalPages } : {}),
+        ...(typeof response.detection.completedPages === 'number'
+          ? { completedPages: response.detection.completedPages }
+          : {}),
+        ...(typeof response.detection.publishedPages === 'number'
+          ? { publishedPages: response.detection.publishedPages }
+          : {})
+      };
+
+      if (response.detection.result) {
+        handleExtractResponse(
+          {
+            document: (response.detection.result.document ?? null) as any,
+            parsedTables: (response.detection.result.parsedTables ?? undefined) as any,
+            assetMap: (response.detection.result.assetMap ?? null) as Record<string, string> | null
+          },
+          nextState
+        );
+        return;
+      }
+
+      setExtractState(nextState);
+    },
+    [handleExtractResponse, persistTaskDocumentState]
+  );
+
   const persistExtractResult = useCallback(
     async (
       file: File,
@@ -246,11 +313,14 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         assetMap?: unknown;
       }
     ) => {
-      handleExtractResponse({
-        document: (result.document ?? null) as any,
-        parsedTables: (result.parsedTables ?? undefined) as any,
-        assetMap: (result.assetMap ?? null) as Record<string, string> | null
-      });
+      handleExtractResponse(
+        {
+          document: (result.document ?? null) as any,
+          parsedTables: (result.parsedTables ?? undefined) as any,
+          assetMap: (result.assetMap ?? null) as Record<string, string> | null
+        },
+        { status: 'ready' }
+      );
 
       const extractPayload = {
         schemaVersion: EXTRACT_CACHE_SCHEMA_VERSION,
@@ -283,23 +353,23 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
           fileHash,
           refresh
         });
-        persistTaskDocumentState(fileHash, {
-          documentId: response.document.id,
-          interactionCount: response.document.interactionCount,
-          detection: {
-            status: response.detection.status,
-            provider: response.detection.provider ?? response.document.detection.provider,
-            model: response.detection.model ?? response.document.detection.model
-          }
-        });
 
         if (response.detection.status === 'error') {
           throw new Error(response.detection.error ?? 'AI extraction failed.');
         }
 
+        applyTaskDetectionUpdate(fileHash, response);
+
         const resolved = response.detection.status === 'ready' && response.detection.result
           ? response
-          : await waitForTaskDocumentDetection(response.document.id);
+          : await waitForTaskDocumentDetection(response.document.id, {
+              onUpdate: async (update) => {
+                if (update.detection.status === 'error') {
+                  return;
+                }
+                applyTaskDetectionUpdate(fileHash, update);
+              }
+            });
 
         persistTaskDocumentState(fileHash, {
           documentId: resolved.document.id,
@@ -327,14 +397,21 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         return null;
       }
     },
-    [persistExtractResult, persistTaskDocumentState]
+    [applyTaskDetectionUpdate, persistExtractResult, persistTaskDocumentState]
   );
 
   const runExistingTaskExtract = useCallback(
     async (file: File, fileHash: string, documentId: string) => {
       setExtractState({ status: 'loading' });
       try {
-        const resolved = await waitForTaskDocumentDetection(documentId);
+        const resolved = await waitForTaskDocumentDetection(documentId, {
+          onUpdate: async (update) => {
+            if (update.detection.status === 'error') {
+              return;
+            }
+            applyTaskDetectionUpdate(fileHash, update);
+          }
+        });
         persistTaskDocumentState(fileHash, {
           documentId: resolved.document.id,
           interactionCount: resolved.document.interactionCount,
@@ -366,7 +443,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         return null;
       }
     },
-    [persistExtractResult, persistTaskDocumentState, runRemoteExtract]
+    [applyTaskDetectionUpdate, persistExtractResult, persistTaskDocumentState, runRemoteExtract]
   );
 
   const runExtract = useCallback(
@@ -394,6 +471,38 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     [aiDetectionSupport.supported, runRemoteExtract]
   );
 
+  const startAutoExtractForFile = useCallback(
+    async (file: File, fileHash: string) => {
+      if (!autoExtract) {
+        return;
+      }
+
+      setLoadedFileHash(fileHash);
+      const cachedTaskDocument = await loadCachedTaskDocument(fileHash);
+      if (cachedTaskDocument?.documentId) {
+        setTaskDocumentId(cachedTaskDocument.documentId);
+      }
+
+      const loadedFromCache = await loadCachedExtractForFile(fileHash);
+      if (loadedFromCache) {
+        return;
+      }
+
+      setExtractState({ status: 'loading' });
+
+      if (
+        cachedTaskDocument?.documentId &&
+        cachedTaskDocument.extractSchemaVersion === EXTRACT_CACHE_SCHEMA_VERSION
+      ) {
+        void runExistingTaskExtract(file, fileHash, cachedTaskDocument.documentId);
+        return;
+      }
+
+      void runExtract(file, fileHash, true);
+    },
+    [autoExtract, loadCachedExtractForFile, runExistingTaskExtract, runExtract]
+  );
+
   const openFile = useCallback(
     async (file: File) => {
       if (!SUPPORTED_TYPES.includes(file.type)) {
@@ -412,10 +521,20 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
 
         let didRevealPreview = false;
         const fileHashPromise = computeBufferHash(bytes);
+        let didStartAutoExtract = false;
+        const scheduleAutoExtract = (support: AiDetectionSupport) => {
+          if (!autoExtract || didStartAutoExtract || !support.supported) {
+            return;
+          }
+          didStartAutoExtract = true;
+          void fileHashPromise.then((fileHash) => startAutoExtractForFile(file, fileHash));
+        };
         const document = await parsePdfDocument(bytes, {
           onBatch: (partialDocument) => {
             setState({ status: 'ready', document: partialDocument });
-            setAiDetectionSupport(analyzeAiDetectionSupport(partialDocument));
+            const partialAiDetectionSupport = analyzeAiDetectionSupport(partialDocument);
+            setAiDetectionSupport(partialAiDetectionSupport);
+            scheduleAutoExtract(partialAiDetectionSupport);
             if (didRevealPreview || partialDocument.pages.length === 0) {
               return;
             }
@@ -438,29 +557,8 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         setLoadedFileHash(fileHash);
 
         if (nextAiDetectionSupport.supported) {
-          const cachedTaskDocument = await loadCachedTaskDocument(fileHash);
-          if (cachedTaskDocument?.documentId) {
-            setTaskDocumentId(cachedTaskDocument.documentId);
-          }
-          const loadedFromCache = await loadCachedExtractForFile(fileHash);
-          if (loadedFromCache) {
-            return;
-          }
-
-          if (!loadedFromCache) {
-            setExtractState({ status: 'loading' });
-          }
-
-          if (
-            cachedTaskDocument?.documentId &&
-            cachedTaskDocument.extractSchemaVersion === EXTRACT_CACHE_SCHEMA_VERSION
-          ) {
-            void runExistingTaskExtract(file, fileHash, cachedTaskDocument.documentId);
-            return;
-          }
-
-          if (autoExtract || !loadedFromCache) {
-            void runExtract(file, fileHash, true);
+          if (!didStartAutoExtract) {
+            await startAutoExtractForFile(file, fileHash);
           }
         }
       } catch (error) {
@@ -471,7 +569,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         setIsOpeningFile(false);
       }
     },
-    [autoExtract, loadCachedExtractForFile, onDocumentLoad, resetExtractResults, runExistingTaskExtract, runExtract]
+    [autoExtract, onDocumentLoad, resetExtractResults, startAutoExtractForFile]
   );
 
   const triggerExtract = useCallback(async () => {

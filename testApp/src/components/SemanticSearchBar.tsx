@@ -4,12 +4,14 @@ import type { IndexingProgress, KeywordSearchResult, SemanticSearchResult } from
 import type { ExtractState, GeminiExtractionState } from '../hooks';
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 import { getAiExtractionStatusView } from '../utils/aiExtractionStatus';
+import type { TopTaskStatusView } from '../utils/topTaskStatus';
 import {
   type SearchHistoryEntry,
   addSearchToHistory,
   getSearchHistory,
   deleteSearchFromHistory
 } from '../storage/searchHistoryStorage';
+import { TopTaskStatusStrip } from './TopTaskStatusStrip';
 
 interface SemanticSearchBarProps {
   isIndexed: boolean;
@@ -42,6 +44,7 @@ interface SemanticSearchBarProps {
   aiDetectionSupport: AiDetectionSupport;
   aiDetectionModeDescription: string;
   onRunAiDetection: () => Promise<void>;
+  topTaskStatus?: TopTaskStatusView | null;
 }
 
 export function SemanticSearchBar({
@@ -74,7 +77,8 @@ export function SemanticSearchBar({
   geminiExtractionState,
   aiDetectionSupport,
   aiDetectionModeDescription,
-  onRunAiDetection
+  onRunAiDetection,
+  topTaskStatus = null
 }: SemanticSearchBarProps): JSX.Element {
   const [searchMode, setSearchMode] = useState<'semantic' | 'keyword'>('semantic');
   const [semanticQuery, setSemanticQuery] = useState('');
@@ -580,6 +584,7 @@ export function SemanticSearchBar({
           <span>{aiDetectionButtonLabel}</span>
         </button>
       </div>
+      {topTaskStatus ? <TopTaskStatusStrip status={topTaskStatus} /> : null}
     </div>
   );
 }

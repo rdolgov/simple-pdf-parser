@@ -35,7 +35,6 @@ import { ViewerColumn } from './components/ViewerColumn';
 import { ControlsSidebar } from './components/ControlsSidebar';
 import { EmptyView } from './components/EmptyView';
 import { GlobalErrorDialog } from './components/GlobalErrorDialog';
-import { GlobalProgressOverlay } from './components/GlobalProgressOverlay';
 import { findChapterBounds, getHeadingLevel, collectChapterText, collectChapterBlocks } from './utils/structured';
 import { useKeywordSearch, useSemanticSearch } from './search';
 import { SemanticSearchBar } from './components/SemanticSearchBar';
@@ -50,15 +49,28 @@ import {
 } from './hooks';
 import { useGlobalFetchActivity } from './hooks/useGlobalFetchActivity';
 import { useProxyAuthSession } from './hooks/useProxyAuthSession';
-import {
-  describeAiDetectionMode,
-  parseAiDetectionMode,
-  shouldAutoRunStructuredExtract
-} from './utils/aiDetectionActivation';
+import { useTaskStatusNotice } from './hooks/useTaskStatusNotice';
 import { isProxyAppRoute } from './utils/proxyRoute';
 import { ProxyLoginGate } from './components/ProxyLoginGate';
 import { isOpenAiCompatibleAppProvider } from './utils/providerMetadata';
 import { analyzeRelevanceTask } from './api/proxyTaskApi';
+import type { TopTaskStatusView } from './utils/topTaskStatus';
+
+function useCompletionNotice(
+  count: number,
+  notice: TopTaskStatusView,
+  showNotice: (status: TopTaskStatusView, durationMs?: number) => void
+): void {
+  const previousCountRef = useRef(count);
+
+  useEffect(() => {
+    const previousCount = previousCountRef.current;
+    if (previousCount > 0 && count === 0) {
+      showNotice(notice);
+    }
+    previousCountRef.current = count;
+  }, [count, notice, showNotice]);
+}
 
 export default function App(): JSX.Element {
   const isManagedProxyRoute = useMemo(() => isProxyAppRoute(), []);
@@ -68,22 +80,23 @@ export default function App(): JSX.Element {
     logout: logoutProxySession,
     refresh: refreshProxySession
   } = useProxyAuthSession(isManagedProxyRoute);
-  const aiDetectionMode = useMemo(
-    () => parseAiDetectionMode(typeof window === 'undefined' ? '' : window.location.search),
-    []
-  );
-  const aiDetectionModeDescription = useMemo(() => describeAiDetectionMode(aiDetectionMode), [aiDetectionMode]);
+  const aiDetectionModeDescription = 'AI extraction starts automatically when you open a PDF. Use Re-run AI to refresh the structured extract.';
   const devicePixelRatio = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
   const { viewMode, setViewMode, showFocusView } = useViewMode('canvas');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [includeImageData, setIncludeImageData] = useState(false);
+  const [enableWebSearch, setEnableWebSearch] = useState(false);
   const htmlContainerRef = useRef<HTMLDivElement | null>(null);
   const structuredContainerRef = useRef<HTMLDivElement | null>(null);
   const [structuredState, setStructuredState] = useState<StructuredDataState>({ status: 'idle' });
   const [focusProvider, setFocusProvider] = useState<FocusProvider>('mock');
-  const [, setInlineImageGenerationCount] = useState(0);
-  const [, setInteractiveWidgetGenerationCount] = useState(0);
-  const [, setInlineSuggestionAnalysisCount] = useState(0);
+  const [inlineImageGenerationCount, setInlineImageGenerationCount] = useState(0);
+  const [interactiveWidgetGenerationCount, setInteractiveWidgetGenerationCount] = useState(0);
+  const [inlineSuggestionAnalysisCount, setInlineSuggestionAnalysisCount] = useState(0);
+  const [chatActivityCount, setChatActivityCount] = useState(0);
+  const [imageExplanationActivityCount, setImageExplanationActivityCount] = useState(0);
+  const [formulaExplanationActivityCount, setFormulaExplanationActivityCount] = useState(0);
+  const [tableInfographicActivityCount, setTableInfographicActivityCount] = useState(0);
   const [openAiConfig, setOpenAiConfig] = useState<RelevanceServiceConfig>({
     provider: 'openai',
     model: 'gpt-5.2',
@@ -152,10 +165,11 @@ export default function App(): JSX.Element {
     handleDeleteCachedFile
   } = useDocumentLoader({
     onDocumentLoad: handleDocumentLoad,
-    autoExtract: shouldAutoRunStructuredExtract(aiDetectionMode)
+    autoExtract: true
   });
 
   const { lastError, dismissLastError } = useGlobalFetchActivity();
+  const { notice: topTaskNotice, showNotice: showTopTaskNotice } = useTaskStatusNotice();
   const handleInlineImageGenerationActivityChange = useCallback((delta: number) => {
     setInlineImageGenerationCount((count) => Math.max(0, count + delta));
   }, []);
@@ -164,6 +178,18 @@ export default function App(): JSX.Element {
   }, []);
   const handleInlineSuggestionAnalysisActivityChange = useCallback((delta: number) => {
     setInlineSuggestionAnalysisCount((count) => Math.max(0, count + delta));
+  }, []);
+  const handleChatActivityChange = useCallback((delta: number) => {
+    setChatActivityCount((count) => Math.max(0, count + delta));
+  }, []);
+  const handleImageExplanationActivityChange = useCallback((delta: number) => {
+    setImageExplanationActivityCount((count) => Math.max(0, count + delta));
+  }, []);
+  const handleFormulaExplanationActivityChange = useCallback((delta: number) => {
+    setFormulaExplanationActivityCount((count) => Math.max(0, count + delta));
+  }, []);
+  const handleTableInfographicActivityChange = useCallback((delta: number) => {
+    setTableInfographicActivityCount((count) => Math.max(0, count + delta));
   }, []);
 
   // Derive interactive layout metadata from the structured extract response.
@@ -175,6 +201,76 @@ export default function App(): JSX.Element {
     extractState,
     aiDetectionSupport
   });
+
+  useCompletionNotice(chatActivityCount, {
+    tone: 'success',
+    title: 'Chat reply ready',
+    message: 'The assistant response has been added to the chat window.',
+    detail: null,
+    progress: null
+  }, showTopTaskNotice);
+  useCompletionNotice(inlineImageGenerationCount, {
+    tone: 'success',
+    title: 'Image ready',
+    message: 'The generated image is ready.',
+    detail: 'It should appear next to the selected passage.',
+    progress: null
+  }, showTopTaskNotice);
+  useCompletionNotice(interactiveWidgetGenerationCount, {
+    tone: 'success',
+    title: 'Interactive widget ready',
+    message: 'The generated widget is ready.',
+    detail: 'The popup will update automatically.',
+    progress: null
+  }, showTopTaskNotice);
+  useCompletionNotice(imageExplanationActivityCount, {
+    tone: 'success',
+    title: 'Image explanation ready',
+    message: 'The image analysis is complete.',
+    detail: null,
+    progress: null
+  }, showTopTaskNotice);
+  useCompletionNotice(formulaExplanationActivityCount, {
+    tone: 'success',
+    title: 'Formula explanation ready',
+    message: 'The formula explanation is ready.',
+    detail: null,
+    progress: null
+  }, showTopTaskNotice);
+  useCompletionNotice(tableInfographicActivityCount, {
+    tone: 'success',
+    title: 'Infographic ready',
+    message: 'The table infographic is ready.',
+    detail: null,
+    progress: null
+  }, showTopTaskNotice);
+
+  const previousExtractStatusRef = useRef(extractState.status);
+  useEffect(() => {
+    const previousStatus = previousExtractStatusRef.current;
+    if (previousStatus === 'loading' && extractState.status === 'ready') {
+      showTopTaskNotice({
+        tone: 'success',
+        title: 'AI extraction ready',
+        message: 'Structured extraction finished for this PDF.',
+        detail:
+          typeof extractState.totalPages === 'number'
+            ? `${extractState.totalPages} pages are ready for references, formulas, tables, and layout-aware actions.`
+            : 'References, formulas, tables, and layout-aware actions are now available.',
+        progress: null
+      });
+    }
+    if (previousStatus === 'loading' && extractState.status === 'error') {
+      showTopTaskNotice({
+        tone: 'error',
+        title: 'AI extraction failed',
+        message: extractState.message ?? 'The structured extraction request failed.',
+        detail: null,
+        progress: null
+      }, 6000);
+    }
+    previousExtractStatusRef.current = extractState.status;
+  }, [extractState.message, extractState.status, extractState.totalPages, showTopTaskNotice]);
 
   const handleRunAiDetection = useCallback(async () => {
     if (!aiDetectionSupport.supported) {
@@ -336,24 +432,103 @@ export default function App(): JSX.Element {
   const [activeSemanticResultIndex, setActiveSemanticResultIndex] = useState(0);
   const [activeKeywordResultIndex, setActiveKeywordResultIndex] = useState(0);
 
-  const globalProgressOverlay = useMemo(() => {
+  const topTaskStatus = useMemo<TopTaskStatusView | null>(() => {
+    if (chatActivityCount > 0) {
+      return {
+        tone: 'running',
+        title: 'Answering question',
+        message: 'Generating a response for the selected document context.',
+        detail: enableWebSearch ? 'Web search is enabled for this chat.' : null,
+        progress: null
+      };
+    }
+
+    if (inlineImageGenerationCount > 0) {
+      return {
+        tone: 'running',
+        title: 'Generating image',
+        message: 'Creating an image from the selected passage.',
+        detail: 'The image popup will update automatically when it is ready.',
+        progress: null
+      };
+    }
+
+    if (tableInfographicActivityCount > 0) {
+      return {
+        tone: 'running',
+        title: 'Generating infographic',
+        message: 'Building a visual summary for the selected table.',
+        detail: 'The table popup will update automatically when it is ready.',
+        progress: null
+      };
+    }
+
+    if (interactiveWidgetGenerationCount > 0) {
+      return {
+        tone: 'running',
+        title: 'Generating interactive widget',
+        message: 'Creating a teaching widget for the selected content.',
+        detail: 'The widget popup will update automatically when it is ready.',
+        progress: null
+      };
+    }
+
+    if (imageExplanationActivityCount > 0) {
+      return {
+        tone: 'running',
+        title: 'Explaining image',
+        message: 'Analyzing the selected image.',
+        detail: null,
+        progress: null
+      };
+    }
+
+    if (formulaExplanationActivityCount > 0) {
+      return {
+        tone: 'running',
+        title: 'Explaining formula',
+        message: 'Analyzing the selected formula.',
+        detail: null,
+        progress: null
+      };
+    }
+
     if (isOpeningFile) {
       return {
-        visible: true,
+        tone: 'running',
         title: 'Opening PDF',
         message: 'Reading and parsing the PDF without calling any AI APIs.',
-        progress: null as number | null,
+        progress: null,
         detail: loadedFileName ? `File: ${loadedFileName}` : null
       };
     }
 
     if (extractState.status === 'loading') {
+      const progress =
+        typeof extractState.totalPages === 'number' && extractState.totalPages > 0
+          ? Math.min(
+              1,
+              Math.max(
+                0,
+                (extractState.publishedPages ?? extractState.completedPages ?? 0) / extractState.totalPages
+              )
+            )
+          : null;
+      const detailParts = [
+        loadedFileName ? `Processing ${loadedFileName}` : null,
+        typeof extractState.totalPages === 'number'
+          ? `Published ${extractState.publishedPages ?? 0} of ${extractState.totalPages} pages`
+          : null,
+        typeof extractState.totalPages === 'number' && typeof extractState.completedPages === 'number'
+          ? `completed AI calls for ${extractState.completedPages} pages`
+          : null
+      ].filter((value): value is string => Boolean(value));
       return {
-        visible: true,
+        tone: 'running',
         title: 'Running AI Extraction',
-        message: 'Calling the configured AI provider once for tables, images, references, formulas, and layout metadata.',
-        progress: null as number | null,
-        detail: loadedFileName ? `Processing ${loadedFileName}` : 'AI extraction is running.'
+        message: 'Processing pages incrementally so early pages can appear before the full document finishes.',
+        progress,
+        detail: detailParts.length > 0 ? detailParts.join(' · ') : 'AI extraction is running.'
       };
     }
 
@@ -362,7 +537,7 @@ export default function App(): JSX.Element {
       const processed = indexingProgress.processedChunks;
       const progress = total > 0 ? processed / total : null;
       return {
-        visible: true,
+        tone: 'running',
         title: 'Building Semantic Index',
         message: 'Creating embeddings for semantic search and RAG-style lookup.',
         progress,
@@ -374,52 +549,68 @@ export default function App(): JSX.Element {
 
     if (isSearching) {
       return {
-        visible: true,
+        tone: 'running',
         title: 'Running Semantic Search',
         message: 'Querying embeddings and ranking the most relevant passages.',
-        progress: null as number | null,
+        progress: null,
         detail: null
       };
     }
 
     if (focusState.status === 'loading') {
       return {
-        visible: true,
+        tone: 'running',
         title: 'Analyzing Relevance',
         message: 'Calling the AI model to highlight relevant sections for your query.',
-        progress: null as number | null,
+        progress: null,
         detail: focusState.query ? `Query: ${focusState.query}` : null
+      };
+    }
+
+    if (inlineSuggestionAnalysisCount > 0) {
+      return {
+        tone: 'running',
+        title: 'Checking formulas',
+        message: 'Scanning the selected text for math content.',
+        detail: null,
+        progress: null
       };
     }
 
     if (structuredState.status === 'loading') {
       return {
-        visible: true,
+        tone: 'running',
         title: 'Loading Structured View',
         message: 'Loading structured demo data for the current view.',
-        progress: null as number | null,
+        progress: null,
         detail: null
       };
     }
 
-    return {
-      visible: false,
-      title: '',
-      message: '',
-      progress: null as number | null,
-      detail: null as string | null
-    };
+    return topTaskNotice;
   }, [
+    chatActivityCount,
+    enableWebSearch,
+    inlineImageGenerationCount,
+    tableInfographicActivityCount,
+    interactiveWidgetGenerationCount,
+    imageExplanationActivityCount,
+    formulaExplanationActivityCount,
     isOpeningFile,
     loadedFileName,
     extractState.status,
+    extractState.totalPages,
+    extractState.completedPages,
+    extractState.publishedPages,
     isIndexing,
     indexingProgress.totalChunks,
     indexingProgress.processedChunks,
     indexingProgress.message,
     isSearching,
     focusState,
-    structuredState.status
+    inlineSuggestionAnalysisCount,
+    structuredState.status,
+    topTaskNotice
   ]);
 
   // Reset active index when results change and auto-navigate to first result
@@ -477,7 +668,6 @@ export default function App(): JSX.Element {
   const [canvasHighlight, setCanvasHighlight] = useState<CanvasHighlightSelection | null>(null);
   const [enableFormulaHighlight, setEnableFormulaHighlight] = useState(true);
   const [enableTableHighlight, setEnableTableHighlight] = useState(true);
-  const [enableWebSearch, setEnableWebSearch] = useState(false);
   const htmlPageLayouts = useMemo<Map<number, HtmlPageLayout>>(() => {
     if (!htmlLayout) {
       return new Map();
@@ -963,8 +1153,7 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app-shell">
-      {/* Semantic Search Bar - Only show when document is loaded */}
-      {state.status === 'ready' && (
+      {(state.status !== 'idle' || isOpeningFile) && (
         <SemanticSearchBar
           isIndexed={isIndexed}
           isIndexing={isIndexing}
@@ -996,6 +1185,7 @@ export default function App(): JSX.Element {
           aiDetectionSupport={aiDetectionSupport}
           aiDetectionModeDescription={aiDetectionModeDescription}
           onRunAiDetection={handleRunAiDetection}
+          topTaskStatus={topTaskStatus}
         />
       )}
       {state.status === 'idle' ? (
@@ -1047,10 +1237,13 @@ export default function App(): JSX.Element {
           onLassoModeChange={setLassoMode}
           documentText={documentText}
           totalPages={totalPages}
-          onRunAiDetection={handleRunAiDetection}
           enableFormulaHighlight={enableFormulaHighlight}
           enableTableHighlight={enableTableHighlight}
           enableWebSearch={enableWebSearch}
+          onChatActivityChange={handleChatActivityChange}
+          onImageExplanationActivityChange={handleImageExplanationActivityChange}
+          onFormulaExplanationActivityChange={handleFormulaExplanationActivityChange}
+          onTableInfographicActivityChange={handleTableInfographicActivityChange}
           onInlineImageGenerationActivityChange={handleInlineImageGenerationActivityChange}
           onInteractiveWidgetGenerationActivityChange={handleInteractiveWidgetGenerationActivityChange}
           onInlineSuggestionAnalysisActivityChange={handleInlineSuggestionAnalysisActivityChange}
@@ -1105,13 +1298,6 @@ export default function App(): JSX.Element {
           onProxyLogout={handleProxyLogout}
         />
       )}
-      <GlobalProgressOverlay
-        visible={globalProgressOverlay.visible}
-        title={globalProgressOverlay.title}
-        message={globalProgressOverlay.message}
-        progress={globalProgressOverlay.progress}
-        detail={globalProgressOverlay.detail}
-      />
       <GlobalErrorDialog
         error={lastError}
         onClose={dismissLastError}

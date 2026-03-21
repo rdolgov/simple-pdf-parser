@@ -33,6 +33,7 @@ type TableViewerProps = {
   imageProvider: ImageCapableProvider;
   imageModel?: string;
   onClose: () => void;
+  onInfographicActivityChange?: (delta: number) => void;
 };
 
 export function TableViewer({
@@ -46,7 +47,8 @@ export function TableViewer({
   taskDocumentId,
   imageProvider,
   imageModel,
-  onClose
+  onClose,
+  onInfographicActivityChange
 }: TableViewerProps): JSX.Element {
   const [localSort, setLocalSort] = useState<TableSortState>(sortState);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
@@ -130,6 +132,7 @@ export function TableViewer({
     }
 
     setChartImageState({ status: 'loading' });
+    let tracksActivity = false;
 
     try {
       if (forceRefresh) {
@@ -148,6 +151,8 @@ export function TableViewer({
         }
       }
 
+      onInfographicActivityChange?.(1);
+      tracksActivity = true;
       const result = await generateAiTableChartImage({
         table,
         taskDocumentId,
@@ -172,8 +177,21 @@ export function TableViewer({
         status: 'error',
         message: error instanceof Error ? error.message : 'Failed to generate infographic.'
       });
+    } finally {
+      if (tracksActivity) {
+        onInfographicActivityChange?.(-1);
+      }
     }
-  }, [chartImageCacheKey, chartImageState.status, hasChartableData, imageModel, imageProvider, table, taskDocumentId]);
+  }, [
+    chartImageCacheKey,
+    chartImageState.status,
+    hasChartableData,
+    imageModel,
+    imageProvider,
+    onInfographicActivityChange,
+    table,
+    taskDocumentId
+  ]);
 
   useEffect(() => {
     if (viewMode === 'chart-image' && chartImageState.status === 'idle') {

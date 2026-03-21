@@ -189,6 +189,10 @@ interface CanvasPageWithOverlayProps {
   enableTableHighlight?: boolean;
   enableImageHighlight?: boolean;
   enableWebSearch?: boolean;
+  onChatActivityChange?: (delta: number) => void;
+  onImageExplanationActivityChange?: (delta: number) => void;
+  onFormulaExplanationActivityChange?: (delta: number) => void;
+  onTableInfographicActivityChange?: (delta: number) => void;
   onInlineImageGenerationActivityChange?: (delta: number) => void;
   onInteractiveWidgetGenerationActivityChange?: (delta: number) => void;
   onInlineSuggestionAnalysisActivityChange?: (delta: number) => void;
@@ -224,6 +228,10 @@ export function CanvasPageWithOverlay({
   enableTableHighlight = true,
   enableImageHighlight = true,
   enableWebSearch = false,
+  onChatActivityChange,
+  onImageExplanationActivityChange,
+  onFormulaExplanationActivityChange,
+  onTableInfographicActivityChange,
   onInlineImageGenerationActivityChange,
   onInteractiveWidgetGenerationActivityChange,
   onInlineSuggestionAnalysisActivityChange
@@ -2295,6 +2303,7 @@ export function CanvasPageWithOverlay({
                 imageProvider={overlayImageProvider}
                 imageModel={overlayImageModel}
                 onClose={() => setTableOverlay(null)}
+                onInfographicActivityChange={onTableInfographicActivityChange}
               />
             )}
           </div>
@@ -2317,6 +2326,7 @@ export function CanvasPageWithOverlay({
           onAnnotationChange={handleAnnotationChange}
           initialMessages={chatState.initialMessages}
           enableWebSearch={enableWebSearch}
+          onChatActivityChange={onChatActivityChange}
         />
       ))}
 
@@ -2436,6 +2446,7 @@ export function CanvasPageWithOverlay({
           onAnnotationChange={handleAnnotationChange}
           initialQuery={connectionChatState.initialQuery}
           enableWebSearch={enableWebSearch}
+          onChatActivityChange={onChatActivityChange}
         />
       )}
 
@@ -2460,6 +2471,7 @@ export function CanvasPageWithOverlay({
           taskDocumentId={taskDocumentId}
           provider={overlayAiProvider}
           model={overlayAiModel}
+          onFormulaExplanationActivityChange={onFormulaExplanationActivityChange}
         />
       )}
 
@@ -2475,6 +2487,7 @@ export function CanvasPageWithOverlay({
           savedExplanation={imageExplanationState.savedExplanation}
           onSaveExplanation={handleSaveImageExplanation}
           onDeleteExplanation={handleDeleteImageExplanation}
+          onImageAnalysisActivityChange={onImageExplanationActivityChange}
         />
       )}
 

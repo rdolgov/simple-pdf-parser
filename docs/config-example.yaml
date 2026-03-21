@@ -35,6 +35,11 @@ llmProxy:
     pollIntervalMs: 1500
     ttlMs: 3600000
     maxJobs: 100
+  tasks:
+    dir: ".cache/llm-proxy-tasks"
+    detectPageConcurrency: 2
+    detectFirstPages: 3
+    detectBatchSize: 3 # progressive structured extraction uses local pdfseparate and pdfunite when available
   openAI:
     apiKey: "YOUR_OPENAI_API_KEY"
     baseUrl: "https://api.openai.com/v1"
@@ -61,4 +66,4 @@ testApp:
 
 structuredExtract:
   provider: "gemini" # or "openai"
-  model: "gemini-3-pro-preview"
+  model: "gemini-3-flash-preview"

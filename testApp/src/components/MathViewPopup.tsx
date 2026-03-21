@@ -19,6 +19,7 @@ interface MathViewPopupProps {
   taskDocumentId?: string | null;
   provider?: 'gemini' | 'openai' | 'codex';
   model?: string | null;
+  onFormulaExplanationActivityChange?: (delta: number) => void;
 }
 
 export function MathViewPopup({
@@ -29,7 +30,8 @@ export function MathViewPopup({
   error = null,
   taskDocumentId,
   provider = 'gemini',
-  model
+  model,
+  onFormulaExplanationActivityChange
 }: MathViewPopupProps): JSX.Element {
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
@@ -145,8 +147,11 @@ export function MathViewPopup({
 
     setIsExplaining(true);
     setExplainError(null);
+    let tracksActivity = false;
 
     try {
+      onFormulaExplanationActivityChange?.(1);
+      tracksActivity = true;
       const prompt = `Analyze this mathematical formula and provide a structured explanation.
 
 LaTeX formula: ${latex}
@@ -190,9 +195,12 @@ Important:
     } catch (err) {
       setExplainError(err instanceof Error ? err.message : 'Failed to explain formula');
     } finally {
+      if (tracksActivity) {
+        onFormulaExplanationActivityChange?.(-1);
+      }
       setIsExplaining(false);
     }
-  }, [latex, isExplaining, provider, model, taskDocumentId]);
+  }, [latex, isExplaining, model, onFormulaExplanationActivityChange, provider, taskDocumentId]);
 
   const currentPosition = dragPosition ?? position;
   const positionStyle = {

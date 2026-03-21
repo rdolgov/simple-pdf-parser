@@ -33,6 +33,9 @@ export interface ProxyTaskDocumentRecord {
     jobId?: string;
     provider?: string;
     model?: string;
+    totalPages?: number;
+    completedPages?: number;
+    publishedPages?: number;
     error?: string;
   };
 }
@@ -44,8 +47,13 @@ export interface ProxyTaskDocumentResponse {
     jobId?: string;
     provider?: string;
     model?: string;
+    totalPages?: number;
+    completedPages?: number;
+    publishedPages?: number;
     error?: string;
     result?: Record<string, unknown> | null;
+    pollUrl?: string;
+    documentUrl?: string;
   };
 }
 
@@ -113,7 +121,7 @@ export async function uploadPdfAndStartDetection(input: {
     endpoint.searchParams.set('refresh', 'true');
   }
 
-  const response = await fetchWithLlmProxyPolling(fetch, endpoint.toString(), {
+  const response = await fetch(endpoint.toString(), {
     method: 'POST',
     headers: withTaskHeaders({
       'Content-Type': input.file.type || 'application/pdf',
@@ -138,6 +146,7 @@ export async function waitForTaskDocumentDetection(
   options?: {
     pollIntervalMs?: number;
     timeoutMs?: number;
+    onUpdate?: (response: ProxyTaskDocumentResponse) => void | Promise<void>;
   }
 ): Promise<ProxyTaskDocumentResponse> {
   const pollIntervalMs = Math.max(100, options?.pollIntervalMs ?? 1500);
@@ -146,6 +155,7 @@ export async function waitForTaskDocumentDetection(
 
   while (true) {
     const response = await getTaskDocument(documentId);
+    await options?.onUpdate?.(response);
     if (response.detection.status === 'ready' && response.detection.result) {
       return response;
     }

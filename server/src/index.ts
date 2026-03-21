@@ -27,6 +27,7 @@ import {
   type TaskImageProvider,
   type TaskTextProvider
 } from './taskExecutors.js';
+import { executeStructuredDetectTaskProgressive } from './progressiveStructuredDetect.js';
 import { executeRelevanceTask } from './taskRelevance.js';
 import {
   buildSemanticIndex,
@@ -68,6 +69,9 @@ type ServerConfig = {
   };
   tasks: {
     dataDir: string;
+    structuredDetectPageConcurrency: number;
+    structuredDetectBatchSize: number;
+    structuredDetectInitialPageCount: number;
   };
   proxyUsers: Map<string, string>;
   sessionCookieName: string;
@@ -445,7 +449,11 @@ async function handleTaskDocumentUploadRequest(
       document: serializeDocumentRecord(documentRecord),
       detection: {
         status: 'ready',
-        result
+        ...(typeof documentRecord.detection.totalPages === 'number' ? { totalPages: documentRecord.detection.totalPages } : {}),
+        ...(typeof documentRecord.detection.completedPages === 'number' ? { completedPages: documentRecord.detection.completedPages } : {}),
+        ...(typeof documentRecord.detection.publishedPages === 'number' ? { publishedPages: documentRecord.detection.publishedPages } : {}),
+        ...(result ? { result } : {}),
+        documentUrl: buildTaskDocumentStatusPath(requestUrl.pathname, documentRecord.id)
       }
     });
     return;
@@ -458,35 +466,79 @@ async function handleTaskDocumentUploadRequest(
     ...(model ? { model } : {})
   });
   const bodyHash = responseCache.buildBodyHash(body);
+  const sequence = ++proxyRequestSequence;
+  const startedAt = Date.now();
+  const { job, reused } = asyncJobStore.createOrReuse({
+    provider: 'task',
+    requestKind,
+    cacheKey,
+    bodyHash,
+    cacheStatus: 'BYPASS',
+    sequence
+  });
+  const taskJobPollPath = buildTaskJobPollPath(requestUrl.pathname, job.id);
+  const documentPollPath = buildTaskDocumentStatusPath(requestUrl.pathname, documentRecord.id);
 
-  if (
-    maybeHandleAsyncTaskJob(request, response, requestUrl, {
+  if (reused) {
+    console.log(`[llm-proxy] seq=${sequence} task job reuse kind=${requestKind} job=${job.id} status=${job.state}`);
+  } else {
+    console.log(`[llm-proxy] seq=${sequence} task job create kind=${requestKind} job=${job.id} poll=${taskJobPollPath}`);
+    await taskStore.setDetectionPending(documentRecord.id, {
+      jobId: job.id,
+      provider,
+      ...(model ? { model } : {}),
+      completedPages: 0,
+      publishedPages: 0
+    });
+    void runAsyncTaskJob(job.id, {
       requestKind,
-      sequence: ++proxyRequestSequence,
-      startedAt: Date.now(),
-      cacheKey,
-      bodyHash,
-      runner: async (jobId, logProgress) => {
-        await taskStore.setDetectionPending(documentRecord.id, {
-          jobId,
-          provider,
-          ...(model ? { model } : {})
-        });
+      sequence,
+      startedAt,
+      runner: async (_jobId, logProgress) => {
         logProgress(`uploaded document=${documentRecord.id} file=${fileName}`);
         try {
-          const detection = await executeStructuredDetectTask(
+          const detection = await executeStructuredDetectTaskProgressive(
             {
               provider,
               ...(model ? { model } : {}),
               filePath: documentRecord.filePath,
               fileName: documentRecord.fileName
             },
-            currentConfig
+            {
+              ...currentConfig,
+              structuredDetectPageConcurrency: currentConfig.tasks.structuredDetectPageConcurrency,
+              structuredDetectBatchSize: currentConfig.tasks.structuredDetectBatchSize,
+              structuredDetectInitialPageCount: currentConfig.tasks.structuredDetectInitialPageCount,
+              structuredDetectTasksDataDir: currentConfig.tasks.dataDir
+            },
+            {
+              onProgress: async (progress) => {
+                await taskStore.setDetectionPending(documentRecord.id, {
+                  jobId: job.id,
+                  provider,
+                  ...(model ? { model } : {}),
+                  totalPages: progress.totalPages,
+                  completedPages: progress.completedPages,
+                  publishedPages: progress.publishedPages
+                });
+              },
+              onPartial: async (partial, progress) => {
+                await taskStore.setDetectionPartial(documentRecord.id, {
+                  provider,
+                  model: partial.model,
+                  result: partial as unknown as Record<string, unknown>,
+                  totalPages: progress.totalPages,
+                  completedPages: progress.completedPages,
+                  publishedPages: progress.publishedPages
+                });
+              }
+            }
           );
           const updatedRecord = await taskStore.setDetectionReady(documentRecord.id, {
             provider,
             model: detection.model,
-            result: detection as unknown as Record<string, unknown>
+            result: detection as unknown as Record<string, unknown>,
+            totalPages: (detection.document as { pages?: unknown[] }).pages?.length
           });
           await taskStore.recordInteraction({
             actor,
@@ -505,7 +557,11 @@ async function handleTaskDocumentUploadRequest(
             document: serializeDocumentRecord(updatedRecord ?? documentRecord),
             detection: {
               status: 'ready',
-              result: detection
+              totalPages: (detection.document as { pages?: unknown[] }).pages?.length ?? null,
+              completedPages: (detection.document as { pages?: unknown[] }).pages?.length ?? null,
+              publishedPages: (detection.document as { pages?: unknown[] }).pages?.length ?? null,
+              result: detection,
+              documentUrl: documentPollPath
             }
           });
         } catch (error) {
@@ -533,17 +589,40 @@ async function handleTaskDocumentUploadRequest(
           return createJsonErrorResponse(500, message, {
             document: serializeDocumentRecord(documentRecord),
             detection: {
-              status: 'error'
+              status: 'error',
+              documentUrl: documentPollPath
             }
           });
         }
       }
-    })
-  ) {
-    return;
+    });
   }
 
-  sendJson(response, 400, { error: 'Document detection requests must use async polling.' });
+  const latestDocument = (await taskStore.getDocument(documentRecord.id)) ?? documentRecord;
+  const partialResult = await taskStore.getDetectionResult(documentRecord.id);
+  response.writeHead(202, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    Location: documentPollPath,
+    'Retry-After': String(Math.max(1, Math.ceil(currentConfig.asyncJobs.pollIntervalMs / 1000))),
+    'X-LLM-Proxy-Job-Id': job.id,
+    'X-LLM-Proxy-Async-Status': latestDocument.detection.state
+  });
+  response.end(JSON.stringify({
+    document: serializeDocumentRecord(latestDocument),
+    detection: {
+      status: latestDocument.detection.state,
+      jobId: job.id,
+      provider,
+      ...(model ? { model } : {}),
+      ...(typeof latestDocument.detection.totalPages === 'number' ? { totalPages: latestDocument.detection.totalPages } : {}),
+      ...(typeof latestDocument.detection.completedPages === 'number' ? { completedPages: latestDocument.detection.completedPages } : {}),
+      ...(typeof latestDocument.detection.publishedPages === 'number' ? { publishedPages: latestDocument.detection.publishedPages } : {}),
+      ...(partialResult ? { result: partialResult } : {}),
+      pollUrl: taskJobPollPath,
+      documentUrl: documentPollPath
+    }
+  }));
 }
 
 async function handleTaskDocumentStatusRequest(
@@ -564,7 +643,7 @@ async function handleTaskDocumentStatusRequest(
     sendJson(response, 404, { error: 'Unknown task document.' });
     return;
   }
-  const result = document.detection.state === 'ready' ? await taskStore.getDetectionResult(documentId) : null;
+  const result = await taskStore.getDetectionResult(documentId);
   sendJson(response, 200, {
     document: serializeDocumentRecord(document),
     detection: {
@@ -572,8 +651,12 @@ async function handleTaskDocumentStatusRequest(
       ...(document.detection.jobId ? { jobId: document.detection.jobId } : {}),
       ...(document.detection.provider ? { provider: document.detection.provider } : {}),
       ...(document.detection.model ? { model: document.detection.model } : {}),
+      ...(typeof document.detection.totalPages === 'number' ? { totalPages: document.detection.totalPages } : {}),
+      ...(typeof document.detection.completedPages === 'number' ? { completedPages: document.detection.completedPages } : {}),
+      ...(typeof document.detection.publishedPages === 'number' ? { publishedPages: document.detection.publishedPages } : {}),
       ...(document.detection.error ? { error: document.detection.error } : {}),
-      ...(result ? { result } : {})
+      ...(result ? { result } : {}),
+      documentUrl: buildTaskDocumentStatusPath(requestUrl.pathname, document.id)
     }
   });
 }
@@ -1331,6 +1414,11 @@ async function runAsyncTaskJob(
 function buildTaskJobPollPath(pathname: string, jobId: string): string {
   const prefix = pathname.startsWith(PROXY_APP_PREFIX) ? PROXY_TASK_JOBS_PREFIX : TASK_JOBS_PREFIX;
   return `${prefix}${encodeURIComponent(jobId)}`;
+}
+
+function buildTaskDocumentStatusPath(pathname: string, documentId: string): string {
+  const prefix = pathname.startsWith(PROXY_APP_PREFIX) ? PROXY_TASK_DOCUMENTS_PREFIX : TASK_DOCUMENTS_PREFIX;
+  return `${prefix}/${encodeURIComponent(documentId)}`;
 }
 
 async function proxyOpenAiRequest(
@@ -2179,6 +2267,9 @@ function serializeDocumentRecord(document: StoredDocumentRecord): Record<string,
       ...(document.detection.jobId ? { jobId: document.detection.jobId } : {}),
       ...(document.detection.provider ? { provider: document.detection.provider } : {}),
       ...(document.detection.model ? { model: document.detection.model } : {}),
+      ...(typeof document.detection.totalPages === 'number' ? { totalPages: document.detection.totalPages } : {}),
+      ...(typeof document.detection.completedPages === 'number' ? { completedPages: document.detection.completedPages } : {}),
+      ...(typeof document.detection.publishedPages === 'number' ? { publishedPages: document.detection.publishedPages } : {}),
       ...(document.detection.error ? { error: document.detection.error } : {}),
       updatedAt: document.detection.updatedAt
     }
@@ -2662,7 +2753,10 @@ function loadConfig(): ServerConfig {
       pollIntervalMs: normalizePositiveNumber(env.LLM_PROXY_ASYNC_POLL_INTERVAL_MS, 1500)
     },
     tasks: {
-      dataDir: normalizeNonEmpty(env.LLM_PROXY_TASKS_DIR) ?? '.cache/llm-proxy-tasks'
+      dataDir: normalizeNonEmpty(env.LLM_PROXY_TASKS_DIR) ?? '.cache/llm-proxy-tasks',
+      structuredDetectPageConcurrency: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_PAGE_CONCURRENCY, 2),
+      structuredDetectBatchSize: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_BATCH_SIZE, 3),
+      structuredDetectInitialPageCount: normalizePositiveNumber(env.LLM_PROXY_TASKS_DETECT_FIRST_PAGES, 3)
     },
     proxyUsers: parseProxyUsers(env.LLM_PROXY_USERS),
     sessionCookieName: normalizeNonEmpty(env.LLM_PROXY_SESSION_COOKIE_NAME) ?? 'llm_proxy_session',

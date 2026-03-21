@@ -43,7 +43,7 @@ export function useGeminiExtraction({
     }
 
     if (extractState.status === 'loading') {
-      return { status: 'loading', extraction: null };
+      return { status: 'loading', extraction: derivedExtraction };
     }
 
     if (extractState.status === 'error') {

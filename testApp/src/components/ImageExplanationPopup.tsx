@@ -19,6 +19,7 @@ interface ImageExplanationPopupProps {
   savedExplanation?: ImageExplanationData | null;
   onSaveExplanation: (explanation: string) => void;
   onDeleteExplanation?: () => void;
+  onImageAnalysisActivityChange?: (delta: number) => void;
 }
 
 export function ImageExplanationPopup({
@@ -30,7 +31,8 @@ export function ImageExplanationPopup({
   model,
   savedExplanation,
   onSaveExplanation,
-  onDeleteExplanation
+  onDeleteExplanation,
+  onImageAnalysisActivityChange
 }: ImageExplanationPopupProps): JSX.Element {
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
   const [explanation, setExplanation] = useState<string | null>(savedExplanation?.explanation ?? null);
@@ -105,8 +107,11 @@ export function ImageExplanationPopup({
   const handleExplain = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    let tracksActivity = false;
 
     try {
+      onImageAnalysisActivityChange?.(1);
+      tracksActivity = true;
       // Extract base64 data from data URI
       const [header, base64Data] = imageDataUri.split(',');
       const mimeMatch = header.match(/data:([^;]+)/);
@@ -133,9 +138,12 @@ export function ImageExplanationPopup({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to explain image');
     } finally {
+      if (tracksActivity) {
+        onImageAnalysisActivityChange?.(-1);
+      }
       setIsLoading(false);
     }
-  }, [imageDataUri, onSaveExplanation, provider, model, taskDocumentId]);
+  }, [imageDataUri, model, onImageAnalysisActivityChange, onSaveExplanation, provider, taskDocumentId]);
 
   const handleDelete = useCallback(() => {
     setExplanation(null);
