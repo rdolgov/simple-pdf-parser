@@ -98,6 +98,7 @@ import {
   resolveTextSelectionContext,
   trimSelectionContextText
 } from '../utils/logicalUnitContext';
+import { resolveLogicalHoverSegment } from '../utils/logicalHoverSegment';
 import {
   analyzeFormulaTask,
   analyzeImageTask,
@@ -2030,7 +2031,12 @@ export function CanvasPageWithOverlay({
     const pageSegment = getHtmlLogicalUnitPageSegment(logicalUnit, page.number);
 
     if (htmlPage && pageSegment && pageSegment.blockIndexes.length > 0) {
-      const sourceBlocks = pageSegment.blockIndexes
+      const clippedSegment = resolveLogicalHoverSegment({
+        page: htmlPage,
+        blockIndexes: pageSegment.blockIndexes,
+        selectedBlockIndex: canvasHighlight.blockIndex
+      });
+      const sourceBlocks = (clippedSegment?.blockIndexes ?? pageSegment.blockIndexes)
         .map((blockIndex) =>
           canvasHighlight.pageNumber === page.number && canvasHighlight.blockIndex === blockIndex
             ? canvasHighlight.block
@@ -2044,7 +2050,7 @@ export function CanvasPageWithOverlay({
       if (mergedHighlight && fragmentHighlights.length > 0) {
         highlightBlocks.push({
           highlight: mergedHighlight,
-          text: pageSegment.text,
+          text: clippedSegment?.text ?? pageSegment.text,
           fragments: fragmentHighlights,
           isPrimary: true
         });
