@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { ExploreIcon, LoadingIcon, WidgetIcon } from './OverlayIcons';
+import { ExploreIcon, ImageIcon, LoadingIcon, WidgetIcon } from './OverlayIcons';
 
 interface LassoActionMenuProps {
   previewDataUri: string;
   position: { top: number; left: number };
-  activeAction: 'explain' | 'interactive' | null;
+  activeAction: 'explain' | 'graphic' | 'interactive' | null;
   error?: string | null;
   onExplain: () => void;
+  onGenerateGraphic: () => void;
   onMakeInteractive: () => void;
   onReselect: () => void;
   onCancel: () => void;
@@ -19,6 +20,7 @@ export function LassoActionMenu({
   activeAction,
   error = null,
   onExplain,
+  onGenerateGraphic,
   onMakeInteractive,
   onReselect,
   onCancel
@@ -110,6 +112,15 @@ export function LassoActionMenu({
         >
           {activeAction === 'explain' ? <LoadingIcon /> : <ExploreIcon />}
           <span>{activeAction === 'explain' ? 'Explaining...' : 'Explain'}</span>
+        </button>
+        <button
+          type="button"
+          className="lasso-action-menu__button"
+          onClick={onGenerateGraphic}
+          disabled={activeAction !== null}
+        >
+          {activeAction === 'graphic' ? <LoadingIcon /> : <ImageIcon />}
+          <span>{activeAction === 'graphic' ? 'Generating...' : 'Generate Graphic'}</span>
         </button>
         <button
           type="button"

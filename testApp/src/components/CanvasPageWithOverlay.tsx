@@ -82,6 +82,7 @@ import { buildMathDetectionPrompt, parseMathDetectionResponse } from '../utils/m
 import {
   buildLassoChatContextText,
   buildLassoExplainPrompt,
+  buildLassoGraphicPrompt,
   buildLassoInteractiveWidgetPrompt,
   buildLassoPromptContext,
   type LassoPromptContext
@@ -315,7 +316,7 @@ export function CanvasPageWithOverlay({
   const [lassoDraftPoints, setLassoDraftPoints] = useState<LassoPoint[]>([]);
   const [lassoSelection, setLassoSelection] = useState<LassoSelectionState | null>(null);
   const [lassoActionState, setLassoActionState] = useState<{
-    action: 'explain' | 'interactive';
+    action: 'explain' | 'graphic' | 'interactive';
     error: string | null;
   } | null>(null);
   const [formulaSuggestionAttentionKey, setFormulaSuggestionAttentionKey] = useState<string | null>(null);
@@ -1300,6 +1301,75 @@ export function CanvasPageWithOverlay({
     onInteractiveWidgetGenerationActivityChange,
     pageNumber,
     runVisionPromptOnDataUri
+  ]);
+
+  const handleLassoGenerateGraphic = useCallback(async () => {
+    if (!lassoSelection) {
+      return;
+    }
+
+    const selection = lassoSelection;
+    setLassoActionState({ action: 'graphic', error: null });
+
+    let tracksInlineActivity = false;
+
+    try {
+      onInlineImageGenerationActivityChange?.(1);
+      tracksInlineActivity = true;
+      const selectedProvider = getRewriteProvider();
+      const provider = resolveImageCapableProvider(selectedProvider);
+      const configuredModel = getRewriteModel(provider === 'openai' ? 'openai' : 'gemini')?.trim();
+      const response = await generateImageTask({
+        ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+        prompt: buildLassoGraphicPrompt(selection.promptContext),
+        provider: provider === 'openai' ? 'openai' : 'gemini',
+        ...(configuredModel ? { model: configuredModel } : {})
+      });
+      const mimeType = response.mimeType ?? 'image/png';
+      const dataUri = response.dataUri;
+      try {
+        const annotation = await saveOrUpdateImageAnnotation(
+          documentId,
+          pageNumber,
+          selection.pdfBounds,
+          dataUri,
+          mimeType,
+          response.prompt
+        );
+        setAnnotationVersion((current) => current + 1);
+        setImagePreview({
+          dataUri,
+          prompt: response.prompt,
+          position: getWidgetPopupPosition(selection.pdfBounds),
+          annotationId: annotation.id
+        });
+      } catch (saveError) {
+        console.error('Failed to save lasso image annotation:', saveError);
+        setImagePreview({
+          dataUri,
+          prompt: response.prompt,
+          position: getWidgetPopupPosition(selection.pdfBounds)
+        });
+      }
+      setLassoSelection(null);
+      setLassoActionState(null);
+    } catch (error) {
+      setLassoActionState({
+        action: 'graphic',
+        error: error instanceof Error ? error.message : 'Failed to generate graphic for the selected region.'
+      });
+    } finally {
+      if (tracksInlineActivity) {
+        onInlineImageGenerationActivityChange?.(-1);
+      }
+    }
+  }, [
+    documentId,
+    getWidgetPopupPosition,
+    lassoSelection,
+    onInlineImageGenerationActivityChange,
+    pageNumber,
+    taskDocumentId
   ]);
 
   const resolveCanvasPointerPoint = useCallback((clientX: number, clientY: number): LassoPoint | null => {
@@ -2584,6 +2654,9 @@ export function CanvasPageWithOverlay({
           error={lassoActionState?.error ?? null}
           onExplain={() => {
             void handleLassoExplain();
+          }}
+          onGenerateGraphic={() => {
+            void handleLassoGenerateGraphic();
           }}
           onMakeInteractive={() => {
             void handleLassoInteractiveWidget();

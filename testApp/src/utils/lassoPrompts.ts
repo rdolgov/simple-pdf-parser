@@ -164,6 +164,34 @@ Important:
 - Do not wrap the JSON in markdown fences.`;
 }
 
+export function buildLassoGraphicPrompt(context: LassoPromptContext): string {
+  return `Create a single polished explanatory graphic based on a selected region from a PDF document.
+
+This is not a request to redraw the screenshot itself. Instead, create a clean standalone visual that helps a reader understand the selected content.
+
+Document title:
+"""${context.documentTitle?.trim() || 'Untitled PDF'}"""
+
+Page:
+"""${context.pageNumber} of ${context.totalPages}"""
+
+${context.sectionHeading ? `Nearest section heading:\n"""${context.sectionHeading}"""\n\n` : ''}Nearby page text:
+"""${context.nearbyPageText}"""
+
+${context.sectionText ? `Section context:\n"""${context.sectionText}"""\n\n` : ''}${context.documentContextText ? `Whole-document context excerpt:\n"""${context.documentContextText}"""\n\n` : ''}Requirements:
+- White or very light background.
+- Professional academic infographic style.
+- Focus on the selected region only, not the whole document.
+- If the region is a formula, diagram, or mechanism, translate it into a simplified explanatory visual.
+- If the region is prose, create a concise concept graphic or structured visual summary.
+- Use large readable labels.
+- Keep the composition compact and clear.
+- Do not imitate the original PDF page layout.
+- Do not include browser UI, frames, or screenshots of the source page.
+- Avoid decorative flourishes that do not help explanation.
+- Return only the image.`;
+}
+
 function extractNearbyPageText(page: PDFPage, selectionBounds: AnnotationBounds): string {
   const expanded = {
     minX: Math.max(0, selectionBounds.minX - LOCAL_TEXT_PADDING),
