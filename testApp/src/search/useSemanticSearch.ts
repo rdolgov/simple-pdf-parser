@@ -2,8 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   indexDocument,
   semanticSearch,
-  loadEmbeddingsByHash,
-  isEmbeddingsCompatibleWithConfig,
+  isSemanticIndexCompatibleWithConfig,
   type DocumentEmbeddings,
   type IndexingProgress,
   type SemanticSearchResult,
@@ -96,7 +95,6 @@ export function useSemanticSearch(
   const indexingRef = useRef(false);
   const currentDocHashRef = useRef<string | null>(null);
 
-  // Check for cached embeddings when document changes
   useEffect(() => {
     if (!document) {
       setEmbeddings(null);
@@ -113,33 +111,14 @@ export function useSemanticSearch(
 
     currentDocHashRef.current = document.documentHash;
 
-    // Check for cached embeddings
-    loadEmbeddingsByHash(document.documentHash)
-      .then((cached) => {
-        if (cached && currentDocHashRef.current === document.documentHash && isEmbeddingsCompatibleWithConfig(cached, options?.config)) {
-          setEmbeddings(cached);
-          setIndexingProgress({
-            status: 'ready',
-            totalChunks: cached.chunks.length,
-            processedChunks: cached.chunks.length,
-            message: 'Loaded cached embeddings'
-          });
-        } else if (cached && currentDocHashRef.current === document.documentHash) {
-          setEmbeddings(null);
-          setIndexingProgress({
-            status: 'idle',
-            totalChunks: 0,
-            processedChunks: 0,
-            message: 'Semantic index provider/model changed. Re-index required.'
-          });
-        } else if (options?.autoIndex) {
-          // Auto-index if enabled and no cache found
-          void startIndexingInternal();
-        }
-      })
-      .catch((error) => {
-        console.warn('Failed to check cached embeddings:', error);
-      });
+    setEmbeddings(null);
+    setIndexingProgress({ status: 'idle', totalChunks: 0, processedChunks: 0 });
+    setIndexError(null);
+    setSearchResults([]);
+
+    if (options?.autoIndex) {
+      void startIndexingInternal();
+    }
   }, [document?.documentHash]);
 
   const startIndexingInternal = useCallback(async () => {
@@ -187,7 +166,7 @@ export function useSemanticSearch(
       return [];
     }
 
-    if (!isEmbeddingsCompatibleWithConfig(embeddings, options?.config)) {
+    if (!isSemanticIndexCompatibleWithConfig(embeddings, options?.config)) {
       setSearchError('Semantic index provider/model changed. Re-index the document.');
       return [];
     }

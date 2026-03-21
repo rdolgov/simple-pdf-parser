@@ -18,20 +18,17 @@ import {
   deleteCachedFile,
   type CachedFileSummary
 } from '../utils/fileCache';
-import {
-  getStructuredExtractApiKey,
-  getStructuredExtractModel,
-  getStructuredExtractProvider,
-  setStructuredExtractApiKey
-} from '../utils/structuredExtractSettings';
 import { analyzeAiDetectionSupport, type AiDetectionSupport } from '../utils/aiDetectionSupport';
 import type { PdfParseWorkerResponse } from '../workers/pdfParseProtocol';
 import { deserializePdfPage } from '../workers/pdfPageTransfer';
-import { createTransportedStructuredExtractApi } from '../utils/llmClients';
-import { getProviderDisplayName, isProxyOnlyProvider } from '../utils/providerMetadata';
-import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
+import { uploadPdfAndStartDetection, waitForTaskDocumentDetection } from '../api/proxyTaskApi';
+import {
+  deleteCachedTaskDocument,
+  loadCachedTaskDocument,
+  saveCachedTaskDocument
+} from '../storage/taskDocumentCache';
 
-const EXTRACT_CACHE_SCHEMA_VERSION = 4;
+const EXTRACT_CACHE_SCHEMA_VERSION = 5;
 
 export interface ExtractState {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -44,6 +41,7 @@ export interface UseDocumentLoaderResult {
   isOpeningFile: boolean;
   loadedFileName: string;
   loadedFileHash: string;
+  taskDocumentId: string;
   loadedPdfData: ArrayBuffer | null;
   aiDetectionSupport: AiDetectionSupport;
   extractState: ExtractState;
@@ -72,6 +70,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
   const [isOpeningFile, setIsOpeningFile] = useState(false);
   const [loadedFileName, setLoadedFileName] = useState<string>('');
   const [loadedFileHash, setLoadedFileHash] = useState<string>('');
+  const [taskDocumentId, setTaskDocumentId] = useState<string>('');
   const [loadedFile, setLoadedFile] = useState<File | null>(null);
   const [loadedPdfData, setLoadedPdfData] = useState<ArrayBuffer | null>(null);
   const [aiDetectionSupport, setAiDetectionSupport] = useState<AiDetectionSupport>({ supported: true });
@@ -101,6 +100,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     setExtractDocument(null);
     setExtractParsedTables(undefined);
     setExtractAssetMap(null);
+    setTaskDocumentId('');
   }, []);
 
   const handleExtractResponse = useCallback((response: {
@@ -190,13 +190,9 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
 
   const loadCachedExtractForFile = useCallback(
     async (fileHash: string): Promise<boolean> => {
-      const provider = getStructuredExtractProvider();
-      const model = getStructuredExtractModel(provider);
       const cachedExtract = await loadCachedExtractPayload(fileHash);
       const isCacheVersionValid = cachedExtract?.schemaVersion === EXTRACT_CACHE_SCHEMA_VERSION;
-      const isCacheProviderMatch = (cachedExtract?.provider ?? 'gemini') === provider;
-      const isCacheModelMatch = (cachedExtract?.model ?? null) === (model ?? null);
-      if (!cachedExtract?.document || !isCacheVersionValid || !isCacheProviderMatch || !isCacheModelMatch) {
+      if (!cachedExtract?.document || !isCacheVersionValid) {
         return false;
       }
 
@@ -211,66 +207,176 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     [handleExtractResponse]
   );
 
+  const persistTaskDocumentState = useCallback(
+    (fileHash: string, input: {
+      documentId: string;
+      interactionCount?: number;
+      detection: {
+        status: 'idle' | 'pending' | 'ready' | 'error';
+        provider?: string;
+        model?: string;
+      };
+    }) => {
+      setTaskDocumentId(input.documentId);
+      void saveCachedTaskDocument({
+        fileHash,
+        documentId: input.documentId,
+        detectionStatus: input.detection.status,
+        provider: input.detection.provider,
+        model: input.detection.model,
+        interactionCount: input.interactionCount,
+        updatedAt: Date.now()
+      });
+    },
+    []
+  );
+
+  const persistExtractResult = useCallback(
+    async (
+      file: File,
+      fileHash: string,
+      result: {
+        model?: string;
+        document?: unknown;
+        parsedTables?: unknown;
+        assetMap?: unknown;
+      }
+    ) => {
+      handleExtractResponse({
+        document: (result.document ?? null) as any,
+        parsedTables: (result.parsedTables ?? undefined) as any,
+        assetMap: (result.assetMap ?? null) as Record<string, string> | null
+      });
+
+      const extractPayload = {
+        schemaVersion: EXTRACT_CACHE_SCHEMA_VERSION,
+        provider: 'task-proxy',
+        model: (result.model as string | undefined) ?? null,
+        document: result.document as StructuredDataDocument,
+        parsedTables: (result.parsedTables as any[]) ?? [],
+        assetMap: (result.assetMap as Record<string, string> | null | undefined) ?? null
+      };
+      await saveCachedExtractPayload({
+        fileHash,
+        extract: extractPayload
+      });
+      await saveCachedExtract({
+        file,
+        fileHash,
+        extract: extractPayload
+      });
+      await refreshCachedFiles();
+    },
+    [handleExtractResponse, refreshCachedFiles]
+  );
+
+  const runRemoteExtract = useCallback(
+    async (file: File, fileHash: string, refresh = false) => {
+      setExtractState({ status: 'loading' });
+      try {
+        const response = await uploadPdfAndStartDetection({
+          file,
+          fileHash,
+          refresh
+        });
+        persistTaskDocumentState(fileHash, {
+          documentId: response.document.id,
+          interactionCount: response.document.interactionCount,
+          detection: {
+            status: response.detection.status,
+            provider: response.detection.provider ?? response.document.detection.provider,
+            model: response.detection.model ?? response.document.detection.model
+          }
+        });
+
+        if (response.detection.status === 'error') {
+          throw new Error(response.detection.error ?? 'AI extraction failed.');
+        }
+
+        const resolved = response.detection.status === 'ready' && response.detection.result
+          ? response
+          : await waitForTaskDocumentDetection(response.document.id);
+
+        persistTaskDocumentState(fileHash, {
+          documentId: resolved.document.id,
+          interactionCount: resolved.document.interactionCount,
+          detection: {
+            status: resolved.detection.status,
+            provider: resolved.detection.provider ?? resolved.document.detection.provider,
+            model: resolved.detection.model ?? resolved.document.detection.model
+          }
+        });
+
+        if (resolved.detection.status !== 'ready' || !resolved.detection.result) {
+          throw new Error(resolved.detection.error ?? 'AI extraction did not return structured data.');
+        }
+
+        await persistExtractResult(file, fileHash, resolved.detection.result);
+        return resolved.detection.result;
+      } catch (error) {
+        setExtractedTables([]);
+        setExtractState({
+          status: 'error',
+          message: error instanceof Error ? error.message : 'Unable to extract table metadata.'
+        });
+        return null;
+      }
+    },
+    [persistExtractResult, persistTaskDocumentState]
+  );
+
+  const runExistingTaskExtract = useCallback(
+    async (file: File, fileHash: string, documentId: string) => {
+      setExtractState({ status: 'loading' });
+      try {
+        const resolved = await waitForTaskDocumentDetection(documentId);
+        persistTaskDocumentState(fileHash, {
+          documentId: resolved.document.id,
+          interactionCount: resolved.document.interactionCount,
+          detection: {
+            status: resolved.detection.status,
+            provider: resolved.detection.provider ?? resolved.document.detection.provider,
+            model: resolved.detection.model ?? resolved.document.detection.model
+          }
+        });
+
+        if (resolved.detection.status !== 'ready' || !resolved.detection.result) {
+          throw new Error(resolved.detection.error ?? 'AI extraction did not return structured data.');
+        }
+
+        await persistExtractResult(file, fileHash, resolved.detection.result);
+        return resolved.detection.result;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to restore prior AI extraction.';
+        if (message.includes('Unknown task document')) {
+          await deleteCachedTaskDocument(fileHash);
+          return runRemoteExtract(file, fileHash, false);
+        }
+        setExtractedTables([]);
+        setExtractState({
+          status: 'error',
+          message
+        });
+        return null;
+      }
+    },
+    [persistExtractResult, persistTaskDocumentState, runRemoteExtract]
+  );
+
   const runExtract = useCallback(
-    async (file: File, fileHashOverride?: string) => {
+    async (file: File, fileHashOverride?: string, refresh = true) => {
       if (!aiDetectionSupport.supported) {
         setExtractState({ status: 'idle' });
         return;
       }
 
-      setExtractState({ status: 'loading' });
-      setExtractedTables([]);
-      setExtractDocument(null);
-      setExtractParsedTables(undefined);
-      setExtractAssetMap(null);
-
       try {
         const fileHash = fileHashOverride ?? await computeFileHash(file);
         setLoadedFileHash(fileHash);
-
-        const loadedFromCache = await loadCachedExtractForFile(fileHash);
-        if (loadedFromCache) {
+        const result = await runRemoteExtract(file, fileHash, refresh);
+        if (!result) {
           return;
         }
-
-        const provider = getStructuredExtractProvider();
-        const model = getStructuredExtractModel(provider);
-        const apiKey = resolveApiKeyForExtract(provider);
-        if (!apiKey && !isProxyTransportEnabled()) {
-          if (isProxyOnlyProvider(provider)) {
-            throw new Error(`${getProviderDisplayName(provider)} structured extraction requires proxy transport.`);
-          }
-          throw new Error(
-            `${getProviderDisplayName(provider)} API key is required to extract structured table and image metadata.`
-          );
-        }
-
-        const client = createTransportedStructuredExtractApi({ provider, apiKey: apiKey ?? undefined, model: model ?? undefined });
-        const response = await client.extractStructuredData(file, { fileName: file.name });
-        handleExtractResponse({
-          document: response.document,
-          parsedTables: response.parsedTables,
-          assetMap: response.assetMap
-        });
-
-        const extractPayload = {
-          schemaVersion: EXTRACT_CACHE_SCHEMA_VERSION,
-          provider,
-          model: model ?? null,
-          document: response.document,
-          parsedTables: response.parsedTables ?? [],
-          assetMap: response.assetMap ?? null
-        };
-        void saveCachedExtractPayload({
-          fileHash,
-          extract: extractPayload
-        });
-        void saveCachedExtract({
-          file,
-          fileHash,
-          extract: extractPayload
-        });
-        void refreshCachedFiles();
       } catch (error) {
         setExtractedTables([]);
         setExtractState({
@@ -279,7 +385,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         });
       }
     },
-    [aiDetectionSupport.supported, handleExtractResponse, loadCachedExtractForFile, refreshCachedFiles]
+    [aiDetectionSupport.supported, runRemoteExtract]
   );
 
   const openFile = useCallback(
@@ -326,9 +432,26 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         setLoadedFileHash(fileHash);
 
         if (nextAiDetectionSupport.supported) {
+          const cachedTaskDocument = await loadCachedTaskDocument(fileHash);
+          if (cachedTaskDocument?.documentId) {
+            setTaskDocumentId(cachedTaskDocument.documentId);
+          }
           const loadedFromCache = await loadCachedExtractForFile(fileHash);
-          if (autoExtract && !loadedFromCache) {
-            void runExtract(file, fileHash);
+          if (loadedFromCache) {
+            return;
+          }
+
+          if (!loadedFromCache) {
+            setExtractState({ status: 'loading' });
+          }
+
+          if (cachedTaskDocument?.documentId) {
+            void runExistingTaskExtract(file, fileHash, cachedTaskDocument.documentId);
+            return;
+          }
+
+          if (autoExtract || !loadedFromCache) {
+            void runExtract(file, fileHash, false);
           }
         }
       } catch (error) {
@@ -339,7 +462,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         setIsOpeningFile(false);
       }
     },
-    [autoExtract, loadCachedExtractForFile, onDocumentLoad, resetExtractResults, runExtract]
+    [autoExtract, loadCachedExtractForFile, onDocumentLoad, resetExtractResults, runExistingTaskExtract, runExtract]
   );
 
   const triggerExtract = useCallback(async () => {
@@ -347,7 +470,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
       setExtractState({ status: 'error', message: 'No document loaded.' });
       return;
     }
-    await runExtract(loadedFile, loadedFileHash || undefined);
+    await runExtract(loadedFile, loadedFileHash || undefined, true);
   }, [loadedFile, loadedFileHash, runExtract]);
 
   const handleFileChange = useCallback(
@@ -377,6 +500,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
   const handleDeleteCachedFile = useCallback(
     async (fileHash: string) => {
       await deleteCachedFile(fileHash);
+      await deleteCachedTaskDocument(fileHash);
       await refreshCachedFiles();
     },
     [refreshCachedFiles]
@@ -388,6 +512,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
     isOpeningFile,
     loadedFileName,
     loadedFileHash,
+    taskDocumentId,
     loadedPdfData,
     aiDetectionSupport,
     extractState,
@@ -471,27 +596,6 @@ async function parsePdfDocumentInWorker(
       pdfData
     });
   });
-}
-
-function resolveApiKeyForExtract(provider: 'gemini' | 'openai' | 'codex'): string | null {
-  const existing = getStructuredExtractApiKey(provider);
-  if (existing) {
-    return existing;
-  }
-  if (isProxyTransportEnabled()) {
-    return null;
-  }
-  if (isProxyOnlyProvider(provider)) {
-    return null;
-  }
-  const providerName = getProviderDisplayName(provider);
-  const prompted = window.prompt(`Enter your ${providerName} API key to extract tables and images from this PDF:`);
-  const normalized = prompted?.trim();
-  if (!normalized) {
-    return null;
-  }
-  setStructuredExtractApiKey(provider, normalized);
-  return normalized;
 }
 
 function normalizeExtractTableBounds(value: unknown): TableBounds | null {

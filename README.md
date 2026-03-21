@@ -78,10 +78,34 @@ renderStructuredData(container, document, { assetMap });
 
 This repo now includes a separate TypeScript backend under [server/src/index.ts](/Users/rdolgov/code/simple-pdf-parser/server/src/index.ts). It is meant to sit between the browser UI and upstream LLM providers so the app can either:
 
-- call Gemini/OpenAI directly from the client, or
-- call your own backend proxy first and let that server forward upstream.
+- use task-oriented backend routes for all UI AI features, and
+- optionally expose provider-specific passthrough proxy routes for debugging or external tooling.
 
-Supported proxy routes:
+The web app now talks to functionality-based task routes instead of provider/model-specific URLs. The main task routes are:
+
+- `POST /api/tasks/documents` to upload a PDF, persist it server-side, and start backend detection
+- `GET /api/tasks/documents/<documentId>` to poll for detection status/result
+- `POST /api/tasks/ask-question`
+- `POST /api/tasks/generate-widget`
+- `POST /api/tasks/analyze-formula`
+- `POST /api/tasks/logical-structure`
+- `POST /api/tasks/analyze-relevance`
+- `POST /api/tasks/analyze-image`
+- `POST /api/tasks/generate-image`
+- `POST /api/tasks/generate-table-infographic`
+- `POST /api/tasks/build-semantic-index`
+- `POST /api/tasks/search-semantic`
+
+Route aliases also exist under `/proxy/api/tasks/...`, so the app can be opened at `/proxy` while still keeping the same backend task API contract.
+
+The backend keeps per-user/per-file state under `LLM_PROXY_TASKS_DIR`, including:
+
+- uploaded PDF bytes
+- structured detection results
+- semantic index caches
+- interaction logs for user/document/task activity
+
+Provider-specific passthrough proxy routes are still available on the server when you need raw upstream access:
 
 - `POST /api/llm/openai/responses`
 - `POST /api/llm/openai/embeddings`
@@ -92,8 +116,6 @@ Supported proxy routes:
 - `GET /api/auth/session`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
-
-Route aliases also exist under `/proxy/api/...`, so the app can be opened at `/proxy` while still keeping the original `/api/...` endpoints available.
 
 Server environment variables:
 
@@ -122,11 +144,12 @@ Server environment variables:
 - `LLM_PROXY_ASYNC_POLL_INTERVAL_MS` defaults to `1500` and controls client polling hints for long-running proxied LLM jobs
 - `LLM_PROXY_ASYNC_JOB_TTL_MS` defaults to `3600000` (1 hour) and controls how long completed async job results stay available for polling
 - `LLM_PROXY_ASYNC_MAX_JOBS` defaults to `100`
+- `LLM_PROXY_TASKS_DIR` defaults to `.cache/llm-proxy-tasks` and stores uploaded files, detection results, semantic indexes, and interaction logs for the task API
 - `LLM_PROXY_APP_DIR` defaults to `testApp/dist` and is used when serving the built app under `/proxy`
 
 The proxy server now auto-loads root-level `.env` and `.env.local` files on startup. Shell environment variables still win over file-loaded values.
 
-The proxy now persists successful upstream responses on disk and reuses them when the same request is issued again. It first computes a SHA-256 digest of the POST body, then derives the final cache key from provider, upstream route, normalized query params, request headers relevant to content negotiation, and that body digest. Each proxied response also includes:
+The provider passthrough proxy persists successful upstream responses on disk and reuses them when the same request is issued again. It first computes a SHA-256 digest of the POST body, then derives the final cache key from provider, upstream route, normalized query params, request headers relevant to content negotiation, and that body digest. Each proxied response also includes:
 
 - `X-LLM-Proxy-Cache: HIT|MISS|BYPASS`
 - `X-LLM-Proxy-Cache-Key: <sha256>`
@@ -135,13 +158,20 @@ The proxy now persists successful upstream responses on disk and reuses them whe
 
 For manual refresh/debugging, send `X-LLM-Proxy-Cache: bypass` or append `?cache=bypass` to skip the local cache for one request.
 
-When the shared client is pointed at the local proxy, long-running Gemini/OpenAI/Codex requests now automatically switch to an async flow:
+When the browser app uses the task API, startup document detection is:
+
+- `POST /api/tasks/documents`
+- if detection is still running, the response includes a `document.id`
+- the client polls `GET /api/tasks/documents/<documentId>` until `detection.status === ready`
+
+Long-running task and passthrough requests also switch to async job polling automatically:
 
 - initial `POST` returns `202 Accepted`
-- the response includes a poll URL under `/api/llm/jobs/<id>` or `/proxy/api/llm/jobs/<id>`
+- the response includes a poll URL under `/api/tasks/jobs/<id>` or `/proxy/api/tasks/jobs/<id>` for task requests
+- passthrough provider routes continue to use `/api/llm/jobs/<id>` or `/proxy/api/llm/jobs/<id>`
 - the client polls that URL until the final upstream payload is ready
 
-This avoids Cloudflare `524` timeouts for long public requests while keeping the existing client API shape the same.
+This avoids Cloudflare `524` timeouts for long public requests while keeping the browser-side task API stable.
 
 Example:
 
@@ -157,13 +187,12 @@ npm run start:server
 
 The app now supports two top-level access patterns:
 
-- `/` keeps the existing direct-provider workflow. Users can supply their own OpenAI/Gemini keys in the browser and can still manually switch transport to the proxy if needed.
-- `/proxy` forces proxy transport and uses cookie-backed login when `LLM_PROXY_USERS` is configured.
+- `/` serves the same app and uses the backend task API at `/api/tasks`.
+- `/proxy` serves the same app behind the proxy-gated route and uses cookie-backed login when `LLM_PROXY_USERS` is configured.
 
 When the browser loads `/proxy`:
 
-- the app automatically uses `/proxy/api/llm`
-- direct transport selection is disabled
+- the app automatically uses `/proxy/api/tasks`
 - the user is prompted to sign in once
 - the server sets an `HttpOnly` session cookie so later visits do not require logging in again until the cookie expires or the user signs out
 
@@ -192,7 +221,7 @@ Files:
 - setup guide: [docs/cloudflare-tunnel.md](/Users/rdolgov/code/simple-pdf-parser/docs/cloudflare-tunnel.md)
 - example tunnel config: [docs/cloudflared-config.example.yml](/Users/rdolgov/code/simple-pdf-parser/docs/cloudflared-config.example.yml)
 
-In the React app sidebar, root-route users can still switch `LLM Transport` to `Proxy server` and use `/api/llm` manually. On the `/proxy` route the app locks to proxy mode automatically.
+The current app is proxy-only for AI features. The browser no longer instantiates provider SDK clients directly.
 
 ### Debug Web App
 

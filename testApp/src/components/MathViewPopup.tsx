@@ -7,8 +7,7 @@ import {
   getCachedExplanation,
   setCachedExplanation
 } from '../storage/mathCache';
-import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
-import { getProviderDisplayName, isOpenAiCompatibleAppProvider } from '../utils/providerMetadata';
+import { analyzeFormulaTask } from '../api/proxyTaskApi';
 
 
 interface MathViewPopupProps {
@@ -17,7 +16,7 @@ interface MathViewPopupProps {
   onClose: () => void;
   isLoading?: boolean;
   error?: string | null;
-  apiKey?: string;
+  taskDocumentId?: string | null;
   provider?: 'gemini' | 'openai' | 'codex';
   model?: string | null;
 }
@@ -28,7 +27,7 @@ export function MathViewPopup({
   onClose,
   isLoading = false,
   error = null,
-  apiKey,
+  taskDocumentId,
   provider = 'gemini',
   model
 }: MathViewPopupProps): JSX.Element {
@@ -142,7 +141,7 @@ export function MathViewPopup({
   }, []);
 
   const handleExplainFormula = useCallback(async () => {
-    if (!apiKey || !latex || isExplaining) return;
+    if (!latex || isExplaining) return;
 
     setIsExplaining(true);
     setExplainError(null);
@@ -170,15 +169,12 @@ Important:
       - For the behavior section, describe the mathematical relationship
       - Only return the JSON, no markdown code blocks`;
 
-      const response = isOpenAiCompatibleAppProvider(provider)
-        ? await createTransportedOpenAiApi({
-            apiKey,
-            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
-          }, provider).generateText(prompt)
-        : await createTransportedGeminiApi({
-            apiKey,
-            model: model && model.trim().length > 0 ? model.trim() : 'gemini-3-pro-preview'
-          }).generateText(prompt);
+      const response = await analyzeFormulaTask({
+        ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+        prompt,
+        provider,
+        ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
+      });
       let jsonText = response.text.trim();
 
       // Clean up potential markdown code blocks
@@ -196,7 +192,7 @@ Important:
     } finally {
       setIsExplaining(false);
     }
-  }, [apiKey, latex, isExplaining, provider, model]);
+  }, [latex, isExplaining, provider, model, taskDocumentId]);
 
   const currentPosition = dragPosition ?? position;
   const positionStyle = {
@@ -250,8 +246,7 @@ Important:
                 type="button"
                 className="math-view-explain-btn"
                 onClick={handleExplainFormula}
-                disabled={!apiKey}
-                title={apiKey ? 'Explain this formula' : `${getProviderDisplayName(provider)} API key required`}
+                title="Explain this formula"
               >
                 <ExplainIcon />
                 <span>Explain Formula</span>

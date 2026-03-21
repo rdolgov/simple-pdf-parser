@@ -29,9 +29,9 @@ type TableViewerProps = {
   scaleY: number;
   sortState: TableSortState;
   onSortChange: (tableId: string, next: TableSortState) => void;
+  taskDocumentId?: string | null;
   imageProvider: ImageCapableProvider;
   imageModel?: string;
-  imageApiKey: string;
   onClose: () => void;
 };
 
@@ -43,9 +43,9 @@ export function TableViewer({
   scaleY,
   sortState,
   onSortChange,
+  taskDocumentId,
   imageProvider,
   imageModel,
-  imageApiKey,
   onClose
 }: TableViewerProps): JSX.Element {
   const [localSort, setLocalSort] = useState<TableSortState>(sortState);
@@ -128,13 +128,6 @@ export function TableViewer({
       setChartImageState({ status: 'error', message: 'Not enough table data to generate an infographic.' });
       return;
     }
-    if (!imageApiKey.trim()) {
-      setChartImageState({
-        status: 'error',
-        message: `${getProviderDisplayName(imageProvider)} access is required to generate an infographic.`
-      });
-      return;
-    }
 
     setChartImageState({ status: 'loading' });
 
@@ -157,8 +150,8 @@ export function TableViewer({
 
       const result = await generateAiTableChartImage({
         table,
+        taskDocumentId,
         provider: imageProvider,
-        apiKey: imageApiKey,
         ...(imageModel?.trim() ? { model: imageModel.trim() } : {})
       });
       setChartImageState({
@@ -180,7 +173,7 @@ export function TableViewer({
         message: error instanceof Error ? error.message : 'Failed to generate infographic.'
       });
     }
-  }, [chartImageCacheKey, chartImageState.status, hasChartableData, imageApiKey, imageModel, imageProvider, table]);
+  }, [chartImageCacheKey, chartImageState.status, hasChartableData, imageModel, imageProvider, table, taskDocumentId]);
 
   useEffect(() => {
     if (viewMode === 'chart-image' && chartImageState.status === 'idle') {

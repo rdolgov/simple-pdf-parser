@@ -28,6 +28,7 @@ interface ViewerColumnProps {
   state: LoadState;
   readyDocument: PDFDocument | null;
   documentId: string;
+  taskDocumentId?: string | null;
   backgroundRenderProgress: BackgroundRenderProgress;
   getCanvasRef: (pageNumber: number) => (element: HTMLCanvasElement | null) => void;
   getPageRenderState: (pageNumber: number) => CanvasPageRenderState;
@@ -76,6 +77,7 @@ export function ViewerColumn({
   state,
   readyDocument,
   documentId,
+  taskDocumentId,
   backgroundRenderProgress,
   getCanvasRef,
   getPageRenderState,
@@ -142,6 +144,7 @@ export function ViewerColumn({
                       page={page}
                       pageNumber={page.number}
                       documentId={documentId}
+                      taskDocumentId={taskDocumentId}
                       documentTitle={geminiExtraction?.document_title}
                       getCanvasRef={getCanvasRef}
                       renderState={getPageRenderState(page.number)}

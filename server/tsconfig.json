@@ -3,10 +3,10 @@
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "Node",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "outDir": "../dist-server",
-    "rootDir": "./src",
+    "rootDir": "..",
     "declaration": false,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -15,6 +15,6 @@
     "resolveJsonModule": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "../src/**/*.ts"],
   "exclude": ["../dist-server", "../node_modules"]
 }

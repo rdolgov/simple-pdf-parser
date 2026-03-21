@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { DEFAULT_GEMINI_BINARY_INPUT_MODEL } from 'pdf-layout-parser';
-import { canUseLocalStorage } from '../utils/storage';
-import { createTransportedStructuredExtractApi, hasRuntimeProviderAccess } from '../utils/llmClients';
+import { useCallback, useRef, useState, type ChangeEvent } from 'react';
+import { uploadPdfAndStartDetection } from '../api/proxyTaskApi';
 
 type ExtractResultState =
   | { status: 'idle' }
@@ -13,71 +11,27 @@ type ExtractResultState =
       fileName: string;
       elementCount: number;
       pageCount: number;
-      tableAssets: Record<string, ArrayBuffer>;
-      parsedTables: { name: string; rows: string[][] }[];
+      parsedTables: { name?: string; rows: string[][] }[];
+      model: string | null;
     };
 
-const STORAGE_KEYS = {
-  apiKey: 'gemini-overlay-api-key',
-  model: 'structured-extract-gemini-model'
-} as const;
-
-const DEFAULT_MODEL = DEFAULT_GEMINI_BINARY_INPUT_MODEL;
+const DEFAULT_MODEL = 'gemini-3-pro-image-preview';
 
 export function StructuredExtractPlayground(): JSX.Element {
-  const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<ExtractResultState>({ status: 'idle' });
   const requestIdRef = useRef(0);
 
-  useEffect(() => {
-    if (!canUseLocalStorage()) {
-      return;
-    }
-    try {
-      const storedApiKey = window.localStorage.getItem(STORAGE_KEYS.apiKey);
-      const storedModel = window.localStorage.getItem(STORAGE_KEYS.model);
-      if (storedApiKey) {
-        setApiKey(storedApiKey);
-      }
-      if (storedModel) {
-        setModel(storedModel);
-      }
-    } catch (error) {
-      console.warn('Unable to restore Gemini extract settings from storage', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!canUseLocalStorage()) {
-      return;
-    }
-    try {
-      if (apiKey.trim()) {
-        window.localStorage.setItem(STORAGE_KEYS.apiKey, apiKey.trim());
-      }
-      window.localStorage.setItem(STORAGE_KEYS.model, model.trim() || DEFAULT_MODEL);
-    } catch (error) {
-      console.warn('Unable to persist Gemini extract settings', error);
-    }
-  }, [apiKey, model]);
-
   const handleFileChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    const next = event.target.files?.[0] ?? null;
-    setFile(next);
+    setFile(event.target.files?.[0] ?? null);
   }, []);
 
-  const canSubmit = !!file && result.status !== 'loading' && hasRuntimeProviderAccess('gemini', apiKey);
+  const canSubmit = Boolean(file) && result.status !== 'loading';
 
   const handleExtract = useCallback(async () => {
     if (!file) {
       setResult({ status: 'error', message: 'Choose a PDF file to upload.' });
-      return;
-    }
-    const trimmedApiKey = apiKey.trim();
-    if (!hasRuntimeProviderAccess('gemini', trimmedApiKey)) {
-      setResult({ status: 'error', message: 'Provide a Gemini API key.' });
       return;
     }
 
@@ -86,48 +40,50 @@ export function StructuredExtractPlayground(): JSX.Element {
     setResult({ status: 'loading' });
 
     try {
-      const client = createTransportedStructuredExtractApi({
+      const response = await uploadPdfAndStartDetection({
+        file,
         provider: 'gemini',
-        apiKey: trimmedApiKey,
-        model: model.trim() || DEFAULT_MODEL
+        model: model.trim() || DEFAULT_MODEL,
+        refresh: true
       });
-      const response = await client.extractStructuredData(file, {
-        fileName: file.name
-      });
+      const payload = response.detection.result as {
+        document?: any;
+        parsedTables?: { name?: string; rows: string[][] }[];
+        model?: string;
+      } | null;
+      if (!payload?.document) {
+        throw new Error('Structured extraction did not return a document payload.');
+      }
 
       if (requestIdRef.current === requestId) {
         setResult({
           status: 'ready',
-          document: response.document,
+          document: payload.document,
           fileName: file.name,
-          elementCount: response.document.elements?.length ?? 0,
-          pageCount: response.document.pages?.length ?? 0,
-          tableAssets: response.tableAssets,
-          parsedTables: response.parsedTables
+          elementCount: payload.document.elements?.length ?? 0,
+          pageCount: payload.document.pages?.length ?? 0,
+          parsedTables: payload.parsedTables ?? [],
+          model: payload.model ?? null
         });
       }
     } catch (error) {
       if (requestIdRef.current === requestId) {
         setResult({
           status: 'error',
-          message:
-            error instanceof Error
-              ? error.message
-              : 'Gemini extraction failed. Check API key and model configuration.'
+          message: error instanceof Error ? error.message : 'Structured extraction failed.'
         });
       }
     }
-  }, [apiKey, file, model]);
+  }, [file, model]);
 
   return (
     <div className="structured-extract-playground">
       <header className="structured-extract-header">
         <div>
-          <p className="structured-extract-kicker">Single Provider Extract</p>
+          <p className="structured-extract-kicker">Backend Structured Extract</p>
           <h2>Upload a PDF and inspect extracted JSON</h2>
           <p className="structured-extract-subtitle">
-            Uses Gemini plus the currently configured direct/proxy transport to extract structured text, tables, and figure metadata in the same shape used by the
-            structured-data viewer.
+            Uses the proxy task API to upload the PDF once, run backend extraction, and return the normalized structured document JSON used by the app.
           </p>
         </div>
         {result.status === 'ready' && (
@@ -146,19 +102,6 @@ export function StructuredExtractPlayground(): JSX.Element {
 
       <div className="structured-extract-grid">
         <div className="structured-extract-card">
-          <div className="structured-extract-field">
-            <label htmlFor="structured-extract-api-key">Gemini API key</label>
-            <input
-              id="structured-extract-api-key"
-              type="password"
-              autoComplete="off"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder="Paste your API key"
-            />
-            <p className="structured-extract-help">Stored locally in this browser for reuse.</p>
-          </div>
-
           <div className="structured-extract-field">
             <label htmlFor="structured-extract-model">Gemini model</label>
             <input
@@ -180,17 +123,13 @@ export function StructuredExtractPlayground(): JSX.Element {
             <button type="button" onClick={handleExtract} disabled={!canSubmit}>
               {result.status === 'loading' ? 'Extracting…' : 'Run Extract'}
             </button>
-            <p className="structured-extract-footnote">Provider: Gemini only. Transport follows the global direct/proxy setting.</p>
+            <p className="structured-extract-footnote">Requests go through `/api/tasks/documents`; no browser-side provider clients are used.</p>
           </div>
         </div>
 
         <div className="structured-extract-card structured-extract-response">
-          {result.status === 'idle' && (
-            <div className="structured-extract-placeholder">
-              Choose a PDF and run extract to inspect the JSON response here.
-            </div>
-          )}
-          {result.status === 'loading' && <div className="structured-extract-placeholder">Calling Gemini…</div>}
+          {result.status === 'idle' && <div className="structured-extract-placeholder">Choose a PDF and run extract to inspect the JSON response here.</div>}
+          {result.status === 'loading' && <div className="structured-extract-placeholder">Uploading PDF and waiting for backend extraction…</div>}
           {result.status === 'error' && <div className="structured-extract-error">{result.message}</div>}
           {result.status === 'ready' && (
             <div className="structured-extract-output">
@@ -199,19 +138,20 @@ export function StructuredExtractPlayground(): JSX.Element {
                   <span className="structured-extract-chip-label">File</span>
                   <span className="structured-extract-chip-value">{result.fileName}</span>
                 </div>
+                {result.model ? (
+                  <div className="structured-extract-chip">
+                    <span className="structured-extract-chip-label">Model</span>
+                    <span className="structured-extract-chip-value">{result.model}</span>
+                  </div>
+                ) : null}
               </div>
 
               <div className="structured-extract-json">
                 <h4>Response</h4>
                 <pre>{JSON.stringify(result.document, null, 2)}</pre>
-                {result.tableAssets && Object.keys(result.tableAssets).length > 0 && (
+                {result.parsedTables.length > 0 && (
                   <div className="structured-extract-footnote">
-                    Received {Object.keys(result.tableAssets).length} table asset(s).
-                  </div>
-                )}
-                {result.parsedTables && result.parsedTables.length > 0 && (
-                  <div className="structured-extract-footnote">
-                    Parsed {result.parsedTables.length} table(s) from Gemini table rows.
+                    Parsed {result.parsedTables.length} table(s) from the extraction response.
                   </div>
                 )}
               </div>

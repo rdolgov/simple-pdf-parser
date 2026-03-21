@@ -16,7 +16,7 @@
     "cloudflare:origin:build": "node ./scripts/build-cloudflare-origin.mjs",
     "cloudflare:origin:start": "node ./scripts/run-cloudflare-origin.mjs",
     "dev:server": "tsc -p server/tsconfig.json --watch",
-    "start:server": "npm run build:server && node dist-server/index.js",
+    "start:server": "npm run build:server && node dist-server/server/src/index.js",
     "pages:build": "bash ./scripts/github-pages-build.sh",
     "pages:publish": "bash ./scripts/github-pages-publish.sh",
     "clean": "rimraf dist",

@@ -86,4 +86,53 @@ describe('fetchWithLlmProxyPolling', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('X-LLM-Proxy-Async')).toBeNull();
   });
+
+  it('resolves relative task request URLs before following async polling', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/proxy/api/tasks/jobs/job-42')) {
+        expect(url).toBe('http://localhost/proxy/api/tasks/jobs/job-42?key=proxy-token');
+        expect(init?.method).toBe('GET');
+        return new Response(JSON.stringify({ text: 'final answer' }), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        jobId: 'job-42',
+        status: 'pending',
+        pollUrl: '/proxy/api/tasks/jobs/job-42',
+        retryAfterMs: 1
+      }), {
+        status: 202,
+        headers: {
+          'Content-Type': 'application/json',
+          Location: '/proxy/api/tasks/jobs/job-42',
+          'Retry-After': '0.001'
+        }
+      });
+    });
+
+    const response = await fetchWithLlmProxyPolling(
+      fetchMock as unknown as typeof fetch,
+      '/proxy/api/tasks/ask-question?key=proxy-token',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ prompt: 'hello' })
+      },
+      {
+        timeoutMs: 1000
+      }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ text: 'final answer' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

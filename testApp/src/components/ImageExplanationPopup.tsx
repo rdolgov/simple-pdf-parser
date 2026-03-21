@@ -1,9 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { resolveGeminiBinaryInputModel } from 'pdf-layout-parser';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
-import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
-import { getProviderDisplayName, isOpenAiCompatibleAppProvider } from '../utils/providerMetadata';
+import { analyzeImageTask } from '../api/proxyTaskApi';
 
 
 export interface ImageExplanationData {
@@ -15,7 +13,7 @@ interface ImageExplanationPopupProps {
   imageDataUri: string;
   position: { top: number; left: number };
   onClose: () => void;
-  apiKey?: string;
+  taskDocumentId?: string | null;
   provider?: 'gemini' | 'openai' | 'codex';
   model?: string | null;
   savedExplanation?: ImageExplanationData | null;
@@ -27,7 +25,7 @@ export function ImageExplanationPopup({
   imageDataUri,
   position,
   onClose,
-  apiKey,
+  taskDocumentId,
   provider = 'gemini',
   model,
   savedExplanation,
@@ -105,11 +103,6 @@ export function ImageExplanationPopup({
   }, []);
 
   const handleExplain = useCallback(async () => {
-    if (!apiKey) {
-      setError(`${getProviderDisplayName(provider)} API key is required`);
-      return;
-    }
-
     setIsLoading(true);
     setError(null);
 
@@ -127,15 +120,13 @@ export function ImageExplanationPopup({
 4. **Context**: How might this relate to the surrounding document content?
 
       Keep the explanation concise but thorough, suitable for someone trying to understand the document.`;
-      const result = isOpenAiCompatibleAppProvider(provider)
-        ? await createTransportedOpenAiApi({
-            apiKey,
-            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
-          }, provider).generateFromImage(base64Data, mimeType, prompt)
-        : await createTransportedGeminiApi({
-            apiKey,
-            imageModel: resolveGeminiBinaryInputModel(model)
-          }).generateFromImage(base64Data, mimeType, prompt, { mediaResolution: 'high' });
+      const result = await analyzeImageTask({
+        prompt,
+        imageDataUri,
+        ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+        provider: provider === 'openai' ? 'openai' : 'gemini',
+        ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
+      });
 
       setExplanation(result.text);
       onSaveExplanation(result.text);
@@ -144,7 +135,7 @@ export function ImageExplanationPopup({
     } finally {
       setIsLoading(false);
     }
-  }, [apiKey, imageDataUri, onSaveExplanation, provider, model]);
+  }, [imageDataUri, onSaveExplanation, provider, model, taskDocumentId]);
 
   const handleDelete = useCallback(() => {
     setExplanation(null);
@@ -174,7 +165,7 @@ export function ImageExplanationPopup({
           icon={isLoading ? <LoadingIcon /> : <ExplainIcon />}
           label="Explain image"
           title={explanation ? 'Re-explain this image' : 'Explain this image with AI'}
-          disabled={isLoading || !apiKey}
+          disabled={isLoading}
         />
       </OverlayToolbar>
       <div className="image-explanation-content">

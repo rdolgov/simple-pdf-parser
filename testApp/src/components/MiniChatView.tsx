@@ -1,6 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
-import { createGoogleSearchTool } from 'pdf-layout-parser';
 import 'katex/dist/katex.min.css';
 import {
   type ChatMessage,
@@ -11,19 +10,18 @@ import {
   deleteAnnotation,
   findAnnotationAtBounds
 } from '../storage/annotationStorage';
-import { createTransportedGeminiApi, createTransportedOpenAiApi } from '../utils/llmClients';
-import { getProviderDisplayName, isOpenAiCompatibleAppProvider } from '../utils/providerMetadata';
+import { askQuestionTask } from '../api/proxyTaskApi';
 import { renderMarkdownToHtml } from '../utils/markdownRenderer';
 
 
 interface MiniChatViewProps {
   contextText: string;
-  apiKey: string;
   provider?: 'gemini' | 'openai' | 'codex';
   model?: string | null;
   onClose: () => void;
   position?: { top: number; left: number };
   documentId: string;
+  taskDocumentId?: string | null;
   pageNumber: number;
   bounds: AnnotationBounds;
   onAnnotationChange?: () => void;
@@ -45,12 +43,12 @@ Answer the user's questions based on this context. If the question cannot be ans
 
 export function MiniChatView({
   contextText,
-  apiKey,
   provider = 'gemini',
   model,
   onClose,
   position,
   documentId,
+  taskDocumentId,
   pageNumber,
   bounds,
   onAnnotationChange,
@@ -218,7 +216,7 @@ export function MiniChatView({
 
   const handleSubmit = useCallback(async (queryOverride?: string) => {
     const trimmed = (queryOverride ?? input).trim();
-    if (!trimmed || isLoading || !apiKey) {
+    if (!trimmed || isLoading) {
       return;
     }
 
@@ -245,16 +243,13 @@ export function MiniChatView({
         (conversationHistory ? `\n\nPrevious conversation:\n${conversationHistory}\n\n` : '\n\n') +
         `User: ${trimmed}`;
 
-      const result = isOpenAiCompatibleAppProvider(provider)
-        ? await createTransportedOpenAiApi({
-            apiKey,
-            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
-          }, provider).generateText(fullPrompt)
-        : await createTransportedGeminiApi({
-            apiKey,
-            tools: enableWebSearch ? [createGoogleSearchTool()] : undefined,
-            ...(model && model.trim().length > 0 ? { model: model.trim() } : {})
-          }).generateText(fullPrompt);
+      const result = await askQuestionTask({
+        ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+        prompt: fullPrompt,
+        provider,
+        ...(model && model.trim().length > 0 ? { model: model.trim() } : {}),
+        enableWebSearch
+      });
       const assistantMessage: ChatMessage = { role: 'assistant', content: result.text, timestamp: Date.now() };
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (err) {
@@ -263,7 +258,7 @@ export function MiniChatView({
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, apiKey, model, messages, contextText, enableWebSearch, provider]);
+  }, [input, isLoading, model, messages, contextText, enableWebSearch, provider, taskDocumentId]);
 
   // Auto-send initial query if provided
   useEffect(() => {
@@ -271,13 +266,12 @@ export function MiniChatView({
       initialQuery &&
       !hasAutoSentRef.current &&
       !isLoadingHistory &&
-      apiKey &&
       messages.length === 0
     ) {
       hasAutoSentRef.current = true;
       void handleSubmit(initialQuery);
     }
-  }, [initialQuery, isLoadingHistory, apiKey, messages.length, handleSubmit]);
+  }, [initialQuery, isLoadingHistory, messages.length, handleSubmit]);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
@@ -403,24 +397,18 @@ export function MiniChatView({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={isLoading || !apiKey}
+          disabled={isLoading}
         />
         <button
           type="button"
           className="mini-chat-send"
           onClick={() => void handleSubmit()}
-          disabled={!input.trim() || isLoading || !apiKey}
+          disabled={!input.trim() || isLoading}
           aria-label="Send"
         >
           <SendIcon />
         </button>
       </div>
-
-      {!apiKey && (
-        <div className="mini-chat-no-key">
-          {getProviderDisplayName(provider) + ' API key required.'}
-        </div>
-      )}
       <div className="mini-chat-resize-handle" aria-hidden="true">
         <ResizeIcon />
       </div>

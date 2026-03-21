@@ -5,13 +5,11 @@ import type { ExtractState, GeminiExtractionState } from '../hooks';
 import { TabBar } from './TabBar';
 import {
   loadStructuredExtractStoredSettings,
-  setStructuredExtractApiKey,
   setStructuredExtractModel,
   setStructuredExtractProvider
 } from '../utils/structuredExtractSettings';
 import {
   loadSemanticSearchStoredSettings,
-  setSemanticSearchApiKey,
   setSemanticSearchModel,
   setSemanticSearchProvider,
   type SemanticSearchProvider
@@ -23,7 +21,6 @@ import {
 } from '../utils/rewriteProfileSettings';
 import {
   loadRewriteProviderStoredSettings,
-  setRewriteApiKey,
   setRewriteModel,
   setRewriteProvider,
   type RewriteProvider
@@ -31,12 +28,9 @@ import {
 import {
   loadLlmTransportStoredSettings,
   setLlmProxyAuthToken,
-  setLlmProxyBaseUrl,
-  setLlmTransportMode,
-  type LlmTransportMode
+  setLlmProxyBaseUrl
 } from '../utils/llmTransportSettings';
-import { hasRuntimeProviderAccess } from '../utils/llmClients';
-import { getProviderDisplayName, isOpenAiCompatibleAppProvider, isProxyOnlyProvider } from '../utils/providerMetadata';
+import { getProviderDisplayName, isOpenAiCompatibleAppProvider } from '../utils/providerMetadata';
 import { resetLocalAppData } from '../utils/resetLocalAppData';
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
 import { DEFAULT_SEMANTIC_SEARCH_PROVIDER, DEFAULT_TEXT_PROVIDER } from '../utils/providerDefaults';
@@ -121,15 +115,10 @@ export function ControlsSidebar({
   onProxyLogout
 }: ControlsSidebarProps): JSX.Element {
   const [extractProvider, setExtractProviderState] = useState<StructuredExtractProvider>(DEFAULT_TEXT_PROVIDER);
-  const [extractGeminiApiKey, setExtractGeminiApiKey] = useState('');
-  const [extractOpenAiApiKey, setExtractOpenAiApiKey] = useState('');
-  const [extractCodexApiKey, setExtractCodexApiKey] = useState('');
   const [extractGeminiModel, setExtractGeminiModel] = useState('');
   const [extractOpenAiModel, setExtractOpenAiModel] = useState('');
   const [extractCodexModel, setExtractCodexModel] = useState('');
   const [semanticSearchProvider, setSemanticSearchProviderState] = useState<SemanticSearchProvider>(DEFAULT_SEMANTIC_SEARCH_PROVIDER);
-  const [semanticSearchGeminiApiKey, setSemanticSearchGeminiApiKey] = useState('');
-  const [semanticSearchOpenAiApiKey, setSemanticSearchOpenAiApiKey] = useState('');
   const [semanticSearchGeminiModel, setSemanticSearchGeminiModel] = useState('');
   const [semanticSearchOpenAiModel, setSemanticSearchOpenAiModel] = useState('');
   const [rewriteMathLevel, setRewriteMathLevel] = useState<ReaderKnowledgeLevel>('intermediate');
@@ -138,13 +127,9 @@ export function ControlsSidebar({
   const [rewritePreference, setRewritePreference] = useState('');
   const [rewriteMemoryNotes, setRewriteMemoryNotes] = useState('');
   const [rewriteProvider, setRewriteProviderState] = useState<RewriteProvider>(DEFAULT_TEXT_PROVIDER);
-  const [rewriteGeminiApiKey, setRewriteGeminiApiKey] = useState('');
-  const [rewriteOpenAiApiKey, setRewriteOpenAiApiKey] = useState('');
-  const [rewriteCodexApiKey, setRewriteCodexApiKey] = useState('');
   const [rewriteGeminiModel, setRewriteGeminiModel] = useState('');
   const [rewriteOpenAiModel, setRewriteOpenAiModel] = useState('');
   const [rewriteCodexModel, setRewriteCodexModel] = useState('');
-  const [llmTransportMode, setLlmTransportModeState] = useState<LlmTransportMode>('direct');
   const [proxyBaseUrl, setProxyBaseUrlState] = useState('');
   const [proxyAuthToken, setProxyAuthTokenState] = useState('');
   const [isResettingLocalData, setIsResettingLocalData] = useState(false);
@@ -152,23 +137,17 @@ export function ControlsSidebar({
 
   useEffect(() => {
     const transportSettings = loadLlmTransportStoredSettings();
-    setLlmTransportModeState(transportSettings.mode);
     setProxyBaseUrlState(transportSettings.proxyBaseUrl);
     setProxyAuthTokenState(transportSettings.proxyAuthToken);
 
     const settings = loadStructuredExtractStoredSettings();
     setExtractProviderState(settings.provider);
-    setExtractGeminiApiKey(settings.geminiApiKey);
-    setExtractOpenAiApiKey(settings.openaiApiKey);
-    setExtractCodexApiKey(settings.codexApiKey);
     setExtractGeminiModel(settings.geminiModel);
     setExtractOpenAiModel(settings.openaiModel);
     setExtractCodexModel(settings.codexModel);
 
     const semanticSearchSettings = loadSemanticSearchStoredSettings();
     setSemanticSearchProviderState(semanticSearchSettings.provider);
-    setSemanticSearchGeminiApiKey(semanticSearchSettings.geminiApiKey);
-    setSemanticSearchOpenAiApiKey(semanticSearchSettings.openaiApiKey);
     setSemanticSearchGeminiModel(semanticSearchSettings.geminiModel);
     setSemanticSearchOpenAiModel(semanticSearchSettings.openaiModel);
 
@@ -181,61 +160,31 @@ export function ControlsSidebar({
 
     const rewriteProviderSettings = loadRewriteProviderStoredSettings();
     setRewriteProviderState(rewriteProviderSettings.provider);
-    setRewriteGeminiApiKey(rewriteProviderSettings.geminiApiKey);
-    setRewriteOpenAiApiKey(rewriteProviderSettings.openaiApiKey);
-    setRewriteCodexApiKey(rewriteProviderSettings.codexApiKey);
     setRewriteGeminiModel(rewriteProviderSettings.geminiModel);
     setRewriteOpenAiModel(rewriteProviderSettings.openaiModel);
     setRewriteCodexModel(rewriteProviderSettings.codexModel);
   }, []);
 
-  const currentExtractApiKey = extractProvider === 'openai'
-    ? extractOpenAiApiKey
-    : extractProvider === 'codex'
-      ? extractCodexApiKey
-      : extractGeminiApiKey;
   const currentExtractModel = extractProvider === 'openai'
     ? extractOpenAiModel
     : extractProvider === 'codex'
       ? extractCodexModel
       : extractGeminiModel;
-  const currentSemanticSearchApiKey = semanticSearchProvider === 'openai'
-    ? semanticSearchOpenAiApiKey
-    : semanticSearchGeminiApiKey;
   const currentSemanticSearchModel = semanticSearchProvider === 'openai'
     ? semanticSearchOpenAiModel
     : semanticSearchGeminiModel;
-  const currentRewriteApiKey = rewriteProvider === 'openai'
-    ? rewriteOpenAiApiKey
-    : rewriteProvider === 'codex'
-      ? rewriteCodexApiKey
-      : rewriteGeminiApiKey;
   const currentRewriteModel = rewriteProvider === 'openai'
     ? rewriteOpenAiModel
     : rewriteProvider === 'codex'
       ? rewriteCodexModel
       : rewriteGeminiModel;
-  const isProxyTransport = llmTransportMode === 'proxy';
   const isAiDetectionRunning = extractState.status === 'loading' || geminiExtractionState.status === 'loading';
   const isAiDetectionReady = extractState.status === 'ready' && geminiExtractionState.status === 'ready';
-  const canRunFocusWithCurrentTransport =
-    useRecordingPlayback ||
-    (isOpenAiCompatibleAppProvider(focusProvider) && hasRuntimeProviderAccess(focusProvider, openAiConfig.apiKey ?? ''));
+  const canRunFocusWithCurrentTransport = useRecordingPlayback || isOpenAiCompatibleAppProvider(focusProvider);
 
   const handleExtractProviderChange = (provider: StructuredExtractProvider) => {
     setExtractProviderState(provider);
     setStructuredExtractProvider(provider);
-  };
-
-  const handleExtractApiKeyChange = (value: string) => {
-    if (extractProvider === 'openai') {
-      setExtractOpenAiApiKey(value);
-    } else if (extractProvider === 'codex') {
-      setExtractCodexApiKey(value);
-    } else {
-      setExtractGeminiApiKey(value);
-    }
-    setStructuredExtractApiKey(extractProvider, value);
   };
 
   const handleExtractModelChange = (value: string) => {
@@ -252,15 +201,6 @@ export function ControlsSidebar({
   const handleSemanticSearchProviderChange = (provider: SemanticSearchProvider) => {
     setSemanticSearchProviderState(provider);
     setSemanticSearchProvider(provider);
-  };
-
-  const handleSemanticSearchApiKeyChange = (value: string) => {
-    if (semanticSearchProvider === 'openai') {
-      setSemanticSearchOpenAiApiKey(value);
-    } else {
-      setSemanticSearchGeminiApiKey(value);
-    }
-    setSemanticSearchApiKey(semanticSearchProvider, value);
   };
 
   const handleSemanticSearchModelChange = (value: string) => {
@@ -293,17 +233,6 @@ export function ControlsSidebar({
     setRewriteProvider(provider);
   };
 
-  const handleRewriteApiKeyChange = (value: string) => {
-    if (rewriteProvider === 'openai') {
-      setRewriteOpenAiApiKey(value);
-    } else if (rewriteProvider === 'codex') {
-      setRewriteCodexApiKey(value);
-    } else {
-      setRewriteGeminiApiKey(value);
-    }
-    setRewriteApiKey(rewriteProvider, value);
-  };
-
   const handleRewriteModelChange = (value: string) => {
     if (rewriteProvider === 'openai') {
       setRewriteOpenAiModel(value);
@@ -320,7 +249,7 @@ export function ControlsSidebar({
       return;
     }
     const confirmed = window.confirm(
-      'Clear all local app data (cached PDFs, extracted data, annotations, search caches, and saved API keys) and reload?'
+      'Clear all local app data (cached PDFs, extracted data, annotations, search caches, and saved settings) and reload?'
     );
     if (!confirmed) {
       return;
@@ -402,15 +331,10 @@ export function ControlsSidebar({
             <div className="openai-config">
               <input
                 type="password"
-                value={openAiConfig.apiKey ?? ''}
-                placeholder={
-                  isProxyTransport
-                    ? `Direct-mode ${getProviderDisplayName(focusProvider)} API key (unused in proxy mode)`
-                    : isProxyOnlyProvider(focusProvider)
-                      ? `${getProviderDisplayName(focusProvider)} proxy token`
-                      : `${getProviderDisplayName(focusProvider)} API key`
-                }
-                onChange={(event) => setOpenAiConfig({ ...openAiConfig, apiKey: event.target.value.trim() })}
+                value=""
+                placeholder={`Backend-managed ${getProviderDisplayName(focusProvider)} access`}
+                disabled
+                readOnly
               />
               <input
                 type="text"
@@ -418,19 +342,9 @@ export function ControlsSidebar({
                 placeholder={focusProvider === 'codex' ? 'Model (e.g., gpt-5-codex)' : 'Model (e.g., gpt-5.2)'}
                 onChange={(event) => setOpenAiConfig({ ...openAiConfig, model: event.target.value.trim() })}
               />
-              {!isProxyTransport && !useRecordingPlayback && (!openAiConfig.apiKey || openAiConfig.apiKey.length === 0) && (
-                <span className="focus-warning">
-                  {isProxyOnlyProvider(focusProvider)
-                    ? `${getProviderDisplayName(focusProvider)} focus requires proxy transport`
-                    : `API key required for ${getProviderDisplayName(focusProvider)}`}
-                </span>
-              )}
-              {isProxyTransport && (
-                <span className="structured-extract-settings-note">
-                  Focus requests will use the configured proxy server. This field is only used when transport is set back
-                  to direct.
-                </span>
-              )}
+              <span className="structured-extract-settings-note">
+                Focus requests run through the backend task API. Only the model selection here affects the request.
+              </span>
             </div>
           )}
 
@@ -440,61 +354,49 @@ export function ControlsSidebar({
 
         <div className="gemini-extraction-controls">
           <div className="structured-extract-settings">
-            <div className="structured-extract-settings-title">LLM Transport</div>
+            <div className="structured-extract-settings-title">Proxy Backend</div>
             <select
-              value={llmTransportMode}
-              onChange={(event) => {
-                const nextMode = event.target.value as LlmTransportMode;
-                setLlmTransportModeState(nextMode);
-                setLlmTransportMode(nextMode);
-              }}
-              disabled={isProxyRouteManaged}
+              value="proxy"
+              disabled
             >
-              <option value="direct">Direct provider calls</option>
               <option value="proxy">Proxy server</option>
             </select>
-            {isProxyTransport && (
-              <>
-                <input
-                  type="text"
-                  value={proxyBaseUrl}
-                  placeholder={isProxyRouteManaged ? '/proxy/api/llm' : '/api/llm'}
-                  disabled={isProxyRouteManaged}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setProxyBaseUrlState(value);
-                    setLlmProxyBaseUrl(value);
-                  }}
-                />
-                {!isProxyRouteManaged && (
-                  <input
-                    type="password"
-                    value={proxyAuthToken}
-                    placeholder="Optional proxy auth token"
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setProxyAuthTokenState(value);
-                      setLlmProxyAuthToken(value);
-                    }}
-                  />
-                )}
-                {isProxyRouteManaged && proxySessionUsername && (
-                  <div className="structured-extract-settings-note">
-                    Signed in as <strong>{proxySessionUsername}</strong>.
-                    {' '}
-                    <button type="button" className="inline-link-button" onClick={() => void onProxyLogout()}>
-                      Sign out
-                    </button>
-                  </div>
-                )}
-              </>
+            <input
+              type="text"
+              value={proxyBaseUrl}
+              placeholder={isProxyRouteManaged ? '/proxy/api/tasks' : '/api/tasks'}
+              disabled={isProxyRouteManaged}
+              onChange={(event) => {
+                const value = event.target.value;
+                setProxyBaseUrlState(value);
+                setLlmProxyBaseUrl(value);
+              }}
+            />
+            {!isProxyRouteManaged && (
+              <input
+                type="password"
+                value={proxyAuthToken}
+                placeholder="Optional proxy auth token"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setProxyAuthTokenState(value);
+                  setLlmProxyAuthToken(value);
+                }}
+              />
+            )}
+            {isProxyRouteManaged && proxySessionUsername && (
+              <div className="structured-extract-settings-note">
+                Signed in as <strong>{proxySessionUsername}</strong>.
+                {' '}
+                <button type="button" className="inline-link-button" onClick={() => void onProxyLogout()}>
+                  Sign out
+                </button>
+              </div>
             )}
             <span className="structured-extract-settings-note">
               {isProxyRouteManaged
-                ? 'This /proxy route is locked to the server proxy and uses a cookie-backed login session. Direct provider keys stay available when you open the app on the root route instead.'
-                : isProxyTransport
-                  ? 'Gemini, OpenAI, and Codex calls go through the proxy base URL below. Provider API key fields remain stored for direct mode, but are ignored on the client while proxy mode is active.'
-                  : 'The browser calls Gemini and OpenAI directly. Codex is proxy-only.'}
+                ? 'This /proxy route is locked to the server proxy and uses a cookie-backed login session.'
+                : 'The browser now talks only to the backend proxy/task API. Provider keys stay on the server.'}
             </span>
           </div>
           <div className="structured-extract-settings">
@@ -509,21 +411,10 @@ export function ControlsSidebar({
             </select>
             <input
               type="password"
-              value={currentRewriteApiKey}
-              placeholder={
-                isProxyTransport
-                  ? rewriteProvider === 'openai'
-                    ? 'Direct-mode OpenAI API key'
-                    : rewriteProvider === 'codex'
-                      ? 'Direct-mode Codex token'
-                      : 'Direct-mode Gemini API key'
-                  : rewriteProvider === 'openai'
-                    ? 'OpenAI API key'
-                    : rewriteProvider === 'codex'
-                      ? 'Codex proxy token'
-                      : 'Gemini API key'
-              }
-              onChange={(event) => handleRewriteApiKeyChange(event.target.value)}
+              value=""
+              placeholder="Backend-managed provider access"
+              disabled
+              readOnly
             />
             <input
               type="text"
@@ -608,17 +499,10 @@ export function ControlsSidebar({
             </select>
             <input
               type="password"
-              value={currentSemanticSearchApiKey}
-              placeholder={
-                isProxyTransport
-                  ? semanticSearchProvider === 'openai'
-                    ? 'Direct-mode OpenAI API key'
-                    : 'Direct-mode Gemini API key'
-                  : semanticSearchProvider === 'openai'
-                    ? 'OpenAI API key'
-                    : 'Gemini API key'
-              }
-              onChange={(event) => handleSemanticSearchApiKeyChange(event.target.value)}
+              value=""
+              placeholder="Backend-managed provider access"
+              disabled
+              readOnly
             />
             <input
               type="text"
@@ -646,21 +530,10 @@ export function ControlsSidebar({
             </select>
             <input
               type="password"
-              value={currentExtractApiKey}
-              placeholder={
-                isProxyTransport
-                  ? extractProvider === 'openai'
-                    ? 'Direct-mode OpenAI API key'
-                    : extractProvider === 'codex'
-                      ? 'Direct-mode Codex token'
-                      : 'Direct-mode Gemini API key'
-                  : extractProvider === 'openai'
-                    ? 'OpenAI API key'
-                    : extractProvider === 'codex'
-                      ? 'Codex proxy token'
-                      : 'Gemini API key'
-              }
-              onChange={(event) => handleExtractApiKeyChange(event.target.value)}
+              value=""
+              placeholder="Backend-managed provider access"
+              disabled
+              readOnly
             />
             <input
               type="text"
@@ -770,7 +643,7 @@ export function ControlsSidebar({
             {isResettingLocalData ? 'Clearing local data…' : 'Clear local cache / DB and reload'}
           </button>
           <span className="structured-extract-settings-note">
-            Clears this app&apos;s IndexedDB caches and localStorage settings (including saved API keys), then reloads.
+            Clears this app&apos;s IndexedDB caches and localStorage settings, then reloads.
           </span>
           {resetLocalDataError && <span className="focus-error">{resetLocalDataError}</span>}
         </div>

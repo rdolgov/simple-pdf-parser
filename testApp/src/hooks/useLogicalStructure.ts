@@ -20,11 +20,13 @@ import { STRUCTURED_EXTRACT_SETTINGS_CHANGED_EVENT } from '../utils/structuredEx
 
 interface UseLogicalStructureOptions {
   fileHash: string;
+  taskDocumentId?: string | null;
   htmlLayout: HtmlDocumentLayout | null;
 }
 
 export function useLogicalStructure({
   fileHash,
+  taskDocumentId,
   htmlLayout
 }: UseLogicalStructureOptions): HtmlDocumentLogicalStructure | null {
   const heuristicStructure = useMemo(() => {
@@ -86,7 +88,7 @@ export function useLogicalStructure({
       }
 
       try {
-        const extracted = await extractLlmLogicalStructure(htmlLayout, runtimeSettings);
+        const extracted = await extractLlmLogicalStructure(htmlLayout, runtimeSettings, taskDocumentId ?? undefined);
         if (cancelled) {
           return;
         }
@@ -108,7 +110,7 @@ export function useLogicalStructure({
     return () => {
       cancelled = true;
     };
-  }, [cacheKey, fileHash, heuristicStructure, htmlLayout, runtimeSettings]);
+  }, [cacheKey, fileHash, heuristicStructure, htmlLayout, runtimeSettings, taskDocumentId]);
 
   return resolvedStructure ?? heuristicStructure;
 }

@@ -8,17 +8,13 @@ import {
   MockRelevanceService,
   DefaultRelevanceAugmenter,
   getOpenAiCompatibleProviderLabel,
-  OpenAiRelevanceService,
   type HtmlDocumentLayout,
   type HtmlPageLayout,
   type PDFLayout,
-  type RelevanceDebugExchange,
   type RelevanceServiceConfig
 } from 'pdf-layout-parser';
 import { buildStructuredTables, type TableModel } from '@viewer/htmlStructuredDataRenderer';
 import { loadStructuredData, renderStructuredData, SAMPLE_STRUCTURED_ASSETS_BASE } from '@viewer/htmlStructuredDataRenderer';
-
-import OpenAI from 'openai';
 
 import type {
   FocusProvider,
@@ -59,10 +55,10 @@ import {
   parseAiDetectionMode,
   shouldAutoRunStructuredExtract
 } from './utils/aiDetectionActivation';
-import { applyTransportToRelevanceConfig, hasRuntimeProviderAccess } from './utils/llmClients';
 import { isProxyAppRoute } from './utils/proxyRoute';
 import { ProxyLoginGate } from './components/ProxyLoginGate';
 import { isOpenAiCompatibleAppProvider } from './utils/providerMetadata';
+import { analyzeRelevanceTask } from './api/proxyTaskApi';
 
 export default function App(): JSX.Element {
   const isManagedProxyRoute = useMemo(() => isProxyAppRoute(), []);
@@ -103,7 +99,6 @@ export default function App(): JSX.Element {
     setRecordFocusExchanges,
     useRecordingPlayback,
     setUseRecordingPlayback,
-    focusExchangeRef,
     handleClearRecordings,
     selectedRecording: selectedRecordingFromHook
   } = useRecordings();
@@ -141,6 +136,7 @@ export default function App(): JSX.Element {
     isOpeningFile,
     loadedFileName,
     loadedFileHash,
+    taskDocumentId,
     loadedPdfData,
     aiDetectionSupport,
     extractState,
@@ -287,16 +283,17 @@ export default function App(): JSX.Element {
   }, [pdfLayout]);
   const logicalStructure = useLogicalStructure({
     fileHash: loadedFileHash,
+    taskDocumentId,
     htmlLayout
   });
 
   // Semantic search document data - prefer htmlLayout for block-level chunking
   const semanticDocumentData = useMemo(() => {
-    if (!readyDocument || !loadedFileHash) {
+    if (!readyDocument || !loadedFileHash || !taskDocumentId) {
       return null;
     }
     return {
-      documentId: loadedFileName || 'document',
+      documentId: taskDocumentId,
       documentHash: loadedFileHash,
       // Include htmlLayout for block-level semantic chunking (paragraphs, headings, tables)
       htmlLayout: htmlLayout ?? undefined,
@@ -309,7 +306,7 @@ export default function App(): JSX.Element {
         }))
       }))
     };
-  }, [readyDocument, loadedFileHash, loadedFileName, htmlLayout]);
+  }, [readyDocument, loadedFileHash, taskDocumentId, htmlLayout]);
 
   // Semantic search hook
   const {
@@ -492,36 +489,6 @@ export default function App(): JSX.Element {
     setCanvasHighlight(null);
   }, [htmlLayout]);
 
-  const createFocusService = useCallback(
-    (provider: FocusProvider, config: RelevanceServiceConfig) => {
-      if (isOpenAiCompatibleAppProvider(provider)) {
-        if (!hasRuntimeProviderAccess(provider, config.apiKey)) {
-          throw new Error(`${getOpenAiCompatibleProviderLabel(provider)} API key is required`);
-        }
-        const transportedConfig = applyTransportToRelevanceConfig({
-          ...config,
-          provider,
-          model: config.model && config.model.length > 0 ? config.model : 'gpt-5.2'
-        });
-        const clientFactory = () =>
-          new OpenAI({
-            apiKey: transportedConfig.apiKey!,
-            baseURL: transportedConfig.endpoint,
-              dangerouslyAllowBrowser: true
-            });
-        return new OpenAiRelevanceService(
-          {
-            ...transportedConfig,
-            dangerouslyAllowBrowser: true
-          },
-          clientFactory
-        );
-      }
-      return new MockRelevanceService();
-    },
-    []
-  );
-
   const layoutJson = useMemo(() => {
     if (state.status !== 'ready') {
       return '';
@@ -565,10 +532,6 @@ export default function App(): JSX.Element {
         };
     return JSON.stringify(htmlLayout, replacer, 2);
   }, [htmlLayout, includeImageData]);
-
-  const handleCaptureExchange = useCallback((exchange: RelevanceDebugExchange) => {
-    focusExchangeRef.current = exchange;
-  }, []);
 
   const handleProxyLogout = useCallback(async () => {
     await logoutProxySession();
@@ -643,46 +606,21 @@ export default function App(): JSX.Element {
       return;
     }
 
-    if (
-      !useRecordingPlayback &&
-      isOpenAiCompatibleAppProvider(focusProvider) &&
-      !hasRuntimeProviderAccess(focusProvider, openAiConfig.apiKey)
-    ) {
-      setFocusState({
-        status: 'error',
-        message: `Provide a ${getOpenAiCompatibleProviderLabel(focusProvider)} API key to use focus mode.`
-      });
-      return;
-    }
-
     setFocusState({ status: 'loading', query });
-    focusExchangeRef.current = null;
-
-    let service: MockRelevanceService | OpenAiRelevanceService;
 
     try {
-      const serviceConfig =
-        isOpenAiCompatibleAppProvider(focusProvider)
-          ? {
-              ...openAiConfig,
-              provider: focusProvider,
-              dangerouslyAllowBrowser: true,
-              debugRecorder: recordFocusExchanges ? handleCaptureExchange : undefined
-            }
-          : openAiConfig;
-      service = createFocusService(focusProvider, serviceConfig);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to configure focus service.';
-      setFocusState({ status: 'error', message });
-      return;
-    }
-
-    try {
-      const response = await service.analyze({
-        query,
-        document: currentLayout,
-        maxContextTokens: isOpenAiCompatibleAppProvider(focusProvider) ? 6000 : undefined
-      });
+      const response = focusProvider === 'mock'
+        ? await new MockRelevanceService().analyze({
+            query,
+            document: currentLayout
+          })
+        : await analyzeRelevanceTask({
+            query,
+            document: currentLayout as unknown as Record<string, unknown>,
+            provider: focusProvider,
+            model: openAiConfig.model && openAiConfig.model.length > 0 ? openAiConfig.model : 'gpt-5.2',
+            maxContextTokens: 6000
+          });
       const augmented = augmenter.augment(currentLayout, response, { query, defaultState: 'hidden' });
       applyFocusQueryContext(augmented, query);
       const hasHighlights = augmented.pages.some((page) =>
@@ -698,24 +636,34 @@ export default function App(): JSX.Element {
       setFocusState({ status: 'ready', query, layout: augmented });
       showFocusView('focus-pdf');
 
-      if (isOpenAiCompatibleAppProvider(focusProvider) && recordFocusExchanges && focusExchangeRef.current) {
+      if (isOpenAiCompatibleAppProvider(focusProvider) && recordFocusExchanges) {
         const recording = createFocusRecording({
           provider: focusProvider,
           query,
           response,
           layout: currentLayout,
-          exchange: focusExchangeRef.current
+          exchange: {
+            provider: focusProvider,
+            query,
+            prompt: '[handled via proxy task analyze-relevance]',
+            requestPayload: {
+              query,
+              provider: focusProvider,
+              model: openAiConfig.model,
+              pageCount: currentLayout.pages.length
+            },
+            responsePayload: response
+          }
         });
         setFocusRecordings((prev) => [recording, ...prev]);
         setSelectedRecordingId(recording.id);
-        focusExchangeRef.current = null;
       }
     } catch (error) {
       const message =
         error instanceof Error
           ? error.message
           : isOpenAiCompatibleAppProvider(focusProvider)
-            ? `Unable to query ${getOpenAiCompatibleProviderLabel(focusProvider)}. Check your API key and model.`
+            ? `Unable to query ${getOpenAiCompatibleProviderLabel(focusProvider)}. Check the backend provider configuration and selected model.`
             : 'Unable to highlight relevant sections.';
       setFocusState({ status: 'error', message });
     }
@@ -727,8 +675,6 @@ export default function App(): JSX.Element {
     focusProvider,
     openAiConfig,
     recordFocusExchanges,
-    handleCaptureExchange,
-    createFocusService,
     showFocusView
   ]);
 
@@ -1065,6 +1011,7 @@ export default function App(): JSX.Element {
           state={state}
           readyDocument={readyDocument}
           documentId={loadedFileHash || loadedFileName || 'document'}
+          taskDocumentId={taskDocumentId}
           backgroundRenderProgress={backgroundRenderProgress}
           getCanvasRef={getCanvasRef}
           getPageRenderState={getPageRenderState}

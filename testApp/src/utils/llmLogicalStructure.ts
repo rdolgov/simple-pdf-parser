@@ -2,44 +2,32 @@ import {
   buildHtmlLogicalStructure,
   buildHtmlLogicalStructureFromTopicGroups,
   collectHtmlLogicalSectionBatches,
-  isOpenAiCompatibleProvider,
   normalizeHtmlLogicalTopicGroups,
   parseHtmlLogicalTopicProposals,
   type HtmlDocumentLayout,
   type HtmlDocumentLogicalStructure,
   type StructuredExtractProvider
 } from 'pdf-layout-parser';
-import { createTransportedGeminiApi, createTransportedOpenAiApi, hasRuntimeProviderAccess } from './llmClients';
-import { getLlmProxyBaseUrl, getLlmTransportMode, type LlmTransportMode } from './llmTransportSettings';
-import {
-  getStructuredExtractApiKey,
-  getStructuredExtractModel,
-  getStructuredExtractProvider
-} from './structuredExtractSettings';
+import { generateLogicalStructureTask } from '../api/proxyTaskApi';
+import { getStructuredExtractModel, getStructuredExtractProvider } from './structuredExtractSettings';
 
 export const LOGICAL_STRUCTURE_LLM_PROMPT_VERSION = 'v2';
 
 export interface LogicalStructureRuntimeSettings {
   provider: StructuredExtractProvider;
-  directApiKey: string;
   model: string;
-  transportMode: LlmTransportMode;
-  proxyBaseUrl: string;
 }
 
 export function loadLogicalStructureRuntimeSettings(): LogicalStructureRuntimeSettings {
   const provider = getStructuredExtractProvider();
   return {
     provider,
-    directApiKey: normalizeNonEmpty(getStructuredExtractApiKey(provider)),
-    model: normalizeNonEmpty(getStructuredExtractModel(provider)),
-    transportMode: getLlmTransportMode(),
-    proxyBaseUrl: normalizeNonEmpty(getLlmProxyBaseUrl())
+    model: normalizeNonEmpty(getStructuredExtractModel(provider))
   };
 }
 
 export function canExtractLogicalStructureWithLlm(settings: LogicalStructureRuntimeSettings): boolean {
-  return hasRuntimeProviderAccess(settings.provider, settings.directApiKey);
+  return settings.provider === 'gemini' || settings.provider === 'openai' || settings.provider === 'codex';
 }
 
 export function createLogicalStructureCacheFingerprint(settings: LogicalStructureRuntimeSettings): string {
@@ -47,22 +35,21 @@ export function createLogicalStructureCacheFingerprint(settings: LogicalStructur
     'llm-logical-structure',
     LOGICAL_STRUCTURE_LLM_PROMPT_VERSION,
     settings.provider,
-    settings.model || 'default-model',
-    settings.transportMode,
-    settings.proxyBaseUrl || 'default-proxy'
+    settings.model || 'default-model'
   ].join('|');
 }
 
 export async function extractLlmLogicalStructure(
   layout: HtmlDocumentLayout,
-  settings: LogicalStructureRuntimeSettings
+  settings: LogicalStructureRuntimeSettings,
+  taskDocumentId?: string
 ): Promise<HtmlDocumentLogicalStructure> {
   const baseStructure = buildHtmlLogicalStructure(layout);
   const batches = collectHtmlLogicalSectionBatches(layout, baseStructure);
   const topicGroups = [];
 
   for (const batch of batches) {
-    const responseText = await requestLogicalStructureBatch(batch, settings);
+    const responseText = await requestLogicalStructureBatch(batch, settings, taskDocumentId);
     const proposals = parseHtmlLogicalTopicProposals(responseText);
     topicGroups.push(...normalizeHtmlLogicalTopicGroups(batch, proposals));
   }
@@ -77,34 +64,15 @@ export async function extractLlmLogicalStructure(
 
 async function requestLogicalStructureBatch(
   batch: ReturnType<typeof collectHtmlLogicalSectionBatches>[number],
-  settings: LogicalStructureRuntimeSettings
+  settings: LogicalStructureRuntimeSettings,
+  taskDocumentId?: string
 ): Promise<string> {
   const prompt = buildLogicalStructurePrompt(batch);
-
-  if (isOpenAiCompatibleProvider(settings.provider)) {
-    const client = createTransportedOpenAiApi({
-      apiKey: settings.directApiKey,
-      ...(settings.model ? { model: settings.model } : {})
-    }, settings.provider);
-    const response = await client.generateText(prompt, {
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 1800
-      }
-    });
-    return response.text;
-  }
-
-  const client = createTransportedGeminiApi({
-    apiKey: settings.directApiKey,
+  const response = await generateLogicalStructureTask({
+    ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+    prompt,
+    provider: settings.provider,
     ...(settings.model ? { model: settings.model } : {})
-  });
-  const response = await client.generateText(prompt, {
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 1800,
-      responseMimeType: 'application/json'
-    }
   });
   return response.text;
 }

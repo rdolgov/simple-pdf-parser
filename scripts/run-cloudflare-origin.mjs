@@ -27,7 +27,7 @@ if (!env.LLM_PROXY_USERS && !env.LLM_PROXY_AUTH_TOKEN) {
   );
 }
 
-const child = spawn(process.execPath, ['dist-server/index.js'], {
+const child = spawn(process.execPath, ['dist-server/server/src/index.js'], {
   stdio: 'inherit',
   env,
   cwd: repoRoot

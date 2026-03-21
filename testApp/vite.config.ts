@@ -54,6 +54,10 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true
       },
+      '/api/tasks': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
       '/api/backoffice': {
         target: 'http://localhost:8787',
         changeOrigin: true

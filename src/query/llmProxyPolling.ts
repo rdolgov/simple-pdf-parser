@@ -159,10 +159,19 @@ function isLlmProxyUrl(value: string): boolean {
   } catch {
     // Keep raw string fallback.
   }
-  return /\/api\/llm\/(?:openai|gemini|codex)(?:\/|$)/.test(pathname);
+  return /\/api\/(?:llm\/(?:openai|gemini|codex)|tasks)(?:\/|$)/.test(pathname);
 }
 
 function resolveRequestUrl(input: RequestInfo | URL): string {
+  const raw = resolveRawRequestUrl(input);
+  try {
+    return new URL(raw, getDefaultRequestBaseUrl()).toString();
+  } catch {
+    return raw;
+  }
+}
+
+function resolveRawRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === 'string') {
     return input;
   }
@@ -170,6 +179,13 @@ function resolveRequestUrl(input: RequestInfo | URL): string {
     return input.toString();
   }
   return input.url;
+}
+
+function getDefaultRequestBaseUrl(): string {
+  if (typeof window !== 'undefined' && typeof window.location?.origin === 'string' && window.location.origin.length > 0) {
+    return window.location.origin;
+  }
+  return 'http://localhost';
 }
 
 function delay(ms: number): Promise<void> {

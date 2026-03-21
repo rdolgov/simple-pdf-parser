@@ -1,6 +1,5 @@
-import { resolveGeminiBinaryInputModel } from '../../../src/query/geminiModelSelection';
 import type { ExtractedTable } from '../types';
-import { createTransportedGeminiApi, createTransportedOpenAiApi } from './llmClients';
+import { generateTableInfographicTask } from '../api/proxyTaskApi';
 import { type ImageCapableProvider } from './providerMetadata';
 import { buildAiChartImagePrompt, tableToRows } from './tableChartSpec';
 
@@ -14,8 +13,8 @@ export interface AiTableChartImageResult {
 
 export async function generateAiTableChartImage(params: {
   table: ExtractedTable;
+  taskDocumentId?: string | null;
   provider: ImageCapableProvider;
-  apiKey: string;
   model?: string;
 }): Promise<AiTableChartImageResult> {
   const rows = tableToRows(params.table);
@@ -24,52 +23,17 @@ export async function generateAiTableChartImage(params: {
   }
 
   const prompt = buildAiChartImagePrompt(rows);
-  if (params.provider === 'openai') {
-    const client = createTransportedOpenAiApi(
-      {
-        apiKey: params.apiKey,
-        ...(params.model ? { model: params.model } : {})
-      },
-      'openai'
-    );
-    const response = await client.generateImage({
-      prompt,
-      size: '1536x1024',
-      background: 'opaque'
-    });
-    const image = response.images[0];
-    const mimeType = image?.mimeType ?? 'image/png';
-    const dataUri = image?.data ? `data:${mimeType};base64,${image.data}` : image?.url;
-    if (!dataUri) {
-      throw new Error('OpenAI image response did not include image data.');
-    }
-    return {
-      dataUri,
-      mimeType,
-      prompt: response.text,
-      raw: response.raw,
-      model: response.model
-    };
-  }
-
-  const geminiModel = resolveGeminiBinaryInputModel(params.model);
-  const client = createTransportedGeminiApi({
-    apiKey: params.apiKey,
-    model: geminiModel,
-    imageModel: geminiModel
+  const response = await generateTableInfographicTask({
+    ...(params.taskDocumentId ? { documentId: params.taskDocumentId } : {}),
+    prompt,
+    provider: params.provider,
+    ...(params.model ? { model: params.model } : {})
   });
-  const response = await client.generateImage(prompt);
-  const image = response.images[0];
-  const mimeType = image?.mimeType ?? 'image/png';
-  const dataUri = image?.data ? `data:${mimeType};base64,${image.data}` : null;
-  if (!dataUri) {
-    throw new Error('Gemini image response did not include inline image data.');
-  }
   return {
-    dataUri,
-    mimeType,
-    prompt: response.text,
-    raw: response.raw,
+    dataUri: response.dataUri,
+    mimeType: response.mimeType,
+    prompt: response.prompt,
+    raw: response,
     model: response.model
   };
 }

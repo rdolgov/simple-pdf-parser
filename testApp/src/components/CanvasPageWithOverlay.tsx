@@ -3,8 +3,6 @@ import type { MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import {
   findHtmlLogicalUnitById,
   getHtmlLogicalUnitPageSegment,
-  resolveGeminiBinaryInputModel,
-  resolveGeminiTextModel,
   resolveHtmlLogicalUnitForSelection,
   type HtmlDocumentLogicalStructure,
   type HtmlPageLayout,
@@ -15,7 +13,7 @@ import type { CanvasHighlightSelection, CanvasPageRenderState, FocusProvider, Ex
 import type { KeywordSearchResult, SemanticSearchResult } from '../search';
 import { TableViewer, type TableSortState } from './TableViewer';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
-import { ExploreIcon, ImageIcon, LoadingIcon, MathIcon, WidgetIcon } from './OverlayIcons';
+import { ExploreIcon, ImageIcon, LoadingIcon, WidgetIcon } from './OverlayIcons';
 import { MiniChatView } from './MiniChatView';
 import { ImagePreviewPopup } from './ImagePreviewPopup';
 import { MathViewPopup } from './MathViewPopup';
@@ -65,22 +63,9 @@ import {
   alignElementBounds
 } from '../utils/elementBoundsAligner';
 import { buildRewriteHighlightPrompt, loadRewriteProfileSettings } from '../utils/rewriteProfileSettings';
-import {
-  getRewriteApiKey,
-  getRewriteModel,
-  getRewriteProvider,
-  setRewriteApiKey
-} from '../utils/rewriteProviderSettings';
-import {
-  createTransportedGeminiApi,
-  createTransportedOpenAiApi,
-  hasRuntimeProviderAccess,
-  resolveRuntimeProviderApiKey
-} from '../utils/llmClients';
+import { getRewriteModel, getRewriteProvider } from '../utils/rewriteProviderSettings';
 import {
   getProviderDisplayName,
-  isOpenAiCompatibleAppProvider,
-  isProxyOnlyProvider,
   resolveImageCapableProvider,
   usesGeminiImageFallback
 } from '../utils/providerMetadata';
@@ -106,17 +91,22 @@ import {
   type LassoBounds,
   type LassoPoint
 } from '../utils/lassoSelection';
-import { isProxyTransportEnabled } from '../utils/llmTransportSettings';
 import {
   buildChatContextText,
   describeSelectionScope,
   resolveTextSelectionContext,
   trimSelectionContextText
 } from '../utils/logicalUnitContext';
+import {
+  analyzeFormulaTask,
+  analyzeImageTask,
+  askQuestionTask,
+  generateImageTask,
+  generateWidgetTask
+} from '../api/proxyTaskApi';
 
 const HIGHLIGHT_PADDING = 12;
 const TABLE_HIT_TOLERANCE = 6;
-const GEMINI_STORAGE_KEY = 'gemini-overlay-api-key';
 const IMAGE_PANEL_WIDTH = 500;
 const DEFAULT_PAGE_WIDTH = 612;
 const DEFAULT_PAGE_HEIGHT = 792;
@@ -173,6 +163,7 @@ interface CanvasPageWithOverlayProps {
   page: PDFPage;
   pageNumber: number;
   documentId: string;
+  taskDocumentId?: string | null;
   documentTitle?: string;
   getCanvasRef: (pageNumber: number) => (element: HTMLCanvasElement | null) => void;
   renderState: CanvasPageRenderState;
@@ -207,6 +198,7 @@ export function CanvasPageWithOverlay({
   page,
   pageNumber,
   documentId,
+  taskDocumentId,
   documentTitle,
   getCanvasRef,
   renderState,
@@ -246,7 +238,6 @@ export function CanvasPageWithOverlay({
   const [highlightTextOverrides, setHighlightTextOverrides] = useState<Record<string, string>>({});
   const [rewriteLoading, setRewriteLoading] = useState<Record<string, boolean>>({});
   const [rewriteError, setRewriteError] = useState<Record<string, string>>({});
-  const [geminiApiKey, setGeminiApiKey] = useState('');
   const [imageMap, setImageMap] = useState<Record<string, { dataUri: string; mimeType?: string; text?: string }>>({});
   const [imageLoading, setImageLoading] = useState<Record<string, boolean>>({});
   const [imageError, setImageError] = useState<Record<string, string>>({});
@@ -381,17 +372,6 @@ export function CanvasPageWithOverlay({
       setAlignedElements(null);
     }
   }, [geminiExtraction, page, pageNumber]);
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(GEMINI_STORAGE_KEY);
-      if (stored) {
-        setGeminiApiKey(stored);
-      }
-    } catch (error) {
-      console.warn('Unable to load Gemini API key from storage', error);
-    }
-  }, []);
 
   // Load annotations for this page
   useEffect(() => {
@@ -684,89 +664,21 @@ export function CanvasPageWithOverlay({
     setConnectionChatState(null);
   }, []);
 
-  const ensureGeminiApiKey = useCallback((): string | null => {
-    const trimmed = geminiApiKey.trim();
-    if (trimmed.length > 0) {
-      return resolveRuntimeProviderApiKey('gemini', trimmed);
-    }
-    const storedRewriteKey = getRewriteApiKey('gemini');
-    if (storedRewriteKey && storedRewriteKey.trim().length > 0) {
-      setGeminiApiKey(storedRewriteKey.trim());
-      return resolveRuntimeProviderApiKey('gemini', storedRewriteKey.trim());
-    }
-    if (isProxyTransportEnabled()) {
-      return resolveRuntimeProviderApiKey('gemini');
-    }
-    const entered = window.prompt('Enter your Gemini API key to use Gemini features on this PDF:');
-    if (entered && entered.trim().length > 0) {
-      const value = entered.trim();
-      setGeminiApiKey(value);
-      try {
-        window.localStorage.setItem(GEMINI_STORAGE_KEY, value);
-      } catch (error) {
-        console.warn('Unable to persist Gemini API key', error);
-      }
-      setRewriteApiKey('gemini', value);
-      return resolveRuntimeProviderApiKey('gemini', value);
-    }
-    return null;
-  }, [geminiApiKey]);
-
-  const ensureOpenAiCompatibleApiKey = useCallback((provider: 'openai' | 'codex'): string | null => {
-    const stored = getRewriteApiKey(provider);
-    if (stored && stored.trim().length > 0) {
-      return resolveRuntimeProviderApiKey(provider, stored.trim());
-    }
-    if (isProxyTransportEnabled()) {
-      return resolveRuntimeProviderApiKey(provider);
-    }
-    if (isProxyOnlyProvider(provider)) {
-      return null;
-    }
-    const entered = window.prompt(`Enter your ${getProviderDisplayName(provider)} API key to use ${getProviderDisplayName(provider)} features on this PDF:`);
-    if (entered && entered.trim().length > 0) {
-      const value = entered.trim();
-      setRewriteApiKey(provider, value);
-      return resolveRuntimeProviderApiKey(provider, value);
-    }
-    return null;
-  }, []);
-
   const runVisionPromptOnDataUri = useCallback(
     async (imageDataUri: string, prompt: string): Promise<string> => {
-      const { mimeType, base64Data } = parseDataUri(imageDataUri);
       const selectedProvider = getRewriteProvider();
       const provider = resolveImageCapableProvider(selectedProvider);
-
-      if (provider === 'openai') {
-        const openAiKey = ensureOpenAiCompatibleApiKey('openai');
-        if (!openAiKey) {
-          throw new Error(`${getProviderDisplayName(provider)} API key required.`);
-        }
-        const configuredModel = getRewriteModel(selectedProvider === 'openai' ? 'openai' : provider)?.trim();
-        const textModel =
-          configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
-            ? configuredModel
-            : undefined;
-        const response = await createTransportedOpenAiApi({
-          apiKey: openAiKey,
-          ...(textModel ? { model: textModel } : {})
-        }, 'openai').generateFromImage(base64Data, mimeType, prompt);
-        return response.text.trim();
-      }
-
-      const geminiKey = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
-      if (!geminiKey) {
-        throw new Error('Gemini API key required.');
-      }
-      const configuredModel = getRewriteModel('gemini')?.trim();
-      const response = await createTransportedGeminiApi({
-        apiKey: geminiKey,
-        imageModel: resolveGeminiBinaryInputModel(configuredModel)
-      }).generateFromImage(base64Data, mimeType, prompt, { mediaResolution: 'high' });
+      const configuredModel = getRewriteModel(provider === 'openai' ? 'openai' : 'gemini')?.trim();
+      const response = await analyzeImageTask({
+        ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+        prompt,
+        imageDataUri,
+        provider: provider === 'openai' ? 'openai' : 'gemini',
+        ...(configuredModel ? { model: configuredModel } : {})
+      });
       return response.text.trim();
     },
-    [ensureGeminiApiKey, ensureOpenAiCompatibleApiKey]
+    [taskDocumentId]
   );
 
   const handleRewriteHighlight = useCallback(
@@ -791,34 +703,13 @@ export function CanvasPageWithOverlay({
           profile
         });
         const rewriteProvider = getRewriteProvider();
-        const response =
-          isOpenAiCompatibleAppProvider(rewriteProvider)
-            ? await (async () => {
-                const openAiKey = ensureOpenAiCompatibleApiKey(rewriteProvider);
-                if (!openAiKey) {
-                  throw new Error(`${getProviderDisplayName(rewriteProvider)} API key required for rewrite.`);
-                }
-                const configuredModel = getRewriteModel(rewriteProvider)?.trim();
-                const openAiModel =
-                  configuredModel && !/^gemini-/i.test(configuredModel)
-                    ? configuredModel
-                    : undefined;
-                const client = createTransportedOpenAiApi({
-                  apiKey: openAiKey,
-                  ...(openAiModel ? { model: openAiModel } : {})
-                }, rewriteProvider);
-                return client.generateText(prompt);
-              })()
-            : await (async () => {
-                const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
-                if (!key) {
-                  throw new Error('Gemini API key required for rewrite.');
-                }
-                const configuredModel = getRewriteModel('gemini')?.trim();
-                const geminiModel = resolveGeminiTextModel(configuredModel);
-                const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel });
-                return client.generateText(prompt);
-              })();
+        const configuredModel = getRewriteModel(rewriteProvider)?.trim();
+        const response = await askQuestionTask({
+          ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+          prompt,
+          provider: rewriteProvider,
+          ...(configuredModel ? { model: configuredModel } : {})
+        });
         const rewritten = response.text.trim();
         if (!rewritten) {
           throw new Error('Empty rewrite response');
@@ -839,7 +730,7 @@ export function CanvasPageWithOverlay({
         });
       }
     },
-    [documentTitle, ensureGeminiApiKey, ensureOpenAiCompatibleApiKey]
+    [documentTitle, taskDocumentId]
   );
 
   const handleGenerateImage = useCallback(
@@ -863,42 +754,16 @@ export function CanvasPageWithOverlay({
         tracksInlineActivity = true;
         const selectedProvider = getRewriteProvider();
         const provider = resolveImageCapableProvider(selectedProvider);
-        const response = provider === 'openai'
-          ? await (async () => {
-              const openAiKey = ensureOpenAiCompatibleApiKey('openai');
-              if (!openAiKey) {
-                throw new Error(`${getProviderDisplayName(provider)} API key required for image generation.`);
-              }
-              const configuredModel = getRewriteModel(selectedProvider === 'openai' ? 'openai' : provider)?.trim();
-              const imageModel = configuredModel && /^(gpt-image-|dall-e-)/i.test(configuredModel)
-                ? configuredModel
-                : undefined;
-              const client = createTransportedOpenAiApi({
-                apiKey: openAiKey,
-                ...(imageModel ? { model: imageModel } : {})
-              }, 'openai');
-              return client.generateImage(trimmedPrompt);
-            })()
-          : await (async () => {
-              const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
-              if (!key) {
-                throw new Error('Gemini API key required for image generation.');
-              }
-              const configuredModel = getRewriteModel('gemini')?.trim();
-              const geminiModel = resolveGeminiBinaryInputModel(configuredModel);
-              const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel, imageModel: geminiModel });
-              return client.generateImage(trimmedPrompt);
-            })();
-
-        const image = response.images[0];
-        const mimeType = image?.mimeType ?? 'image/png';
-        const dataUri = image?.data
-          ? `data:${mimeType};base64,${image.data}`
-          : image?.url;
-        if (!dataUri) {
-          throw new Error('Image response did not include image data');
-        }
-        setImageMap((current) => ({ ...current, [blockKey]: { dataUri, mimeType, text: response.text } }));
+        const configuredModel = getRewriteModel(provider === 'openai' ? 'openai' : 'gemini')?.trim();
+        const response = await generateImageTask({
+          ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+          prompt: trimmedPrompt,
+          provider: provider === 'openai' ? 'openai' : 'gemini',
+          ...(configuredModel ? { model: configuredModel } : {})
+        });
+        const mimeType = response.mimeType ?? 'image/png';
+        const dataUri = response.dataUri;
+        setImageMap((current) => ({ ...current, [blockKey]: { dataUri, mimeType, text: response.prompt } }));
         // Save to storage
         try {
           const annotation = await saveOrUpdateImageAnnotation(documentId, pageNumber, bounds, dataUri, mimeType, trimmedPrompt);
@@ -933,12 +798,11 @@ export function CanvasPageWithOverlay({
       }
     },
     [
-      ensureGeminiApiKey,
-      ensureOpenAiCompatibleApiKey,
       documentId,
       getWidgetPopupPosition,
       pageNumber,
-      onInlineImageGenerationActivityChange
+      onInlineImageGenerationActivityChange,
+      taskDocumentId
     ]
   );
 
@@ -964,32 +828,13 @@ export function CanvasPageWithOverlay({
         provider,
         excerpt: summarizeForLog(trimmedText)
       });
-      const response = isOpenAiCompatibleAppProvider(provider)
-        ? await (async () => {
-            const openAiKey = ensureOpenAiCompatibleApiKey(provider);
-            if (!openAiKey) {
-              throw new Error(`${getProviderDisplayName(provider)} API key required`);
-            }
-            const configuredModel = getRewriteModel(provider)?.trim();
-            const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
-              ? configuredModel
-              : undefined;
-            const client = createTransportedOpenAiApi({
-              apiKey: openAiKey,
-              ...(textModel ? { model: textModel } : {})
-            }, provider);
-            return client.generateText(prompt);
-          })()
-        : await (async () => {
-            const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
-            if (!key) {
-              throw new Error('Gemini API key required');
-            }
-            const configuredModel = getRewriteModel('gemini')?.trim();
-            const geminiModel = resolveGeminiTextModel(configuredModel);
-            const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel });
-            return client.generateText(prompt);
-          })();
+      const configuredModel = getRewriteModel(provider)?.trim();
+      const response = await analyzeFormulaTask({
+        ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+        prompt,
+        provider,
+        ...(configuredModel ? { model: configuredModel } : {})
+      });
       const latex = parseMathDetectionResponse(response.text);
       console.debug(`${FORMULA_SUGGESTION_LOG_PREFIX} received LLM math analysis response`, {
         pageNumber,
@@ -1000,7 +845,7 @@ export function CanvasPageWithOverlay({
       });
       return latex;
     },
-    [ensureGeminiApiKey, ensureOpenAiCompatibleApiKey, pageNumber]
+    [pageNumber, taskDocumentId]
   );
 
   const handleDetectMath = useCallback(
@@ -1147,32 +992,13 @@ export function CanvasPageWithOverlay({
           sectionText
         });
         const provider = getRewriteProvider();
-        const response = isOpenAiCompatibleAppProvider(provider)
-          ? await (async () => {
-              const openAiKey = ensureOpenAiCompatibleApiKey(provider);
-              if (!openAiKey) {
-                throw new Error(`${getProviderDisplayName(provider)} API key required for interactive widgets.`);
-              }
-              const configuredModel = getRewriteModel(provider)?.trim();
-              const textModel = configuredModel && !/^(gpt-image-|dall-e-|gemini-)/i.test(configuredModel)
-                ? configuredModel
-                : undefined;
-              const client = createTransportedOpenAiApi({
-                apiKey: openAiKey,
-                ...(textModel ? { model: textModel } : {})
-              }, provider);
-              return client.generateText(prompt);
-            })()
-          : await (async () => {
-              const key = (getRewriteApiKey('gemini')?.trim() || ensureGeminiApiKey()) ?? null;
-              if (!key) {
-                throw new Error('Gemini API key required for interactive widgets.');
-              }
-              const configuredModel = getRewriteModel('gemini')?.trim();
-              const geminiModel = resolveGeminiTextModel(configuredModel);
-              const client = createTransportedGeminiApi({ apiKey: key, model: geminiModel });
-              return client.generateText(prompt);
-            })();
+        const configuredModel = getRewriteModel(provider)?.trim();
+        const response = await generateWidgetTask({
+          ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
+          prompt,
+          provider,
+          ...(configuredModel ? { model: configuredModel } : {})
+        });
 
         const spec = parseInteractiveWidgetSpec(response.text);
         const srcDoc = buildInteractiveWidgetSrcDoc(spec);
@@ -1215,12 +1041,11 @@ export function CanvasPageWithOverlay({
     [
       documentId,
       documentTitle,
-      ensureGeminiApiKey,
-      ensureOpenAiCompatibleApiKey,
       htmlPage,
       logicalStructure,
       onInteractiveWidgetGenerationActivityChange,
-      pageNumber
+      pageNumber,
+      taskDocumentId
     ]
   );
 
@@ -1501,14 +1326,8 @@ export function CanvasPageWithOverlay({
 
   const overlayAiProvider = getRewriteProvider();
   const overlayAiModel = getRewriteModel(overlayAiProvider);
-  const overlayAiKey = isOpenAiCompatibleAppProvider(overlayAiProvider)
-    ? resolveRuntimeProviderApiKey(overlayAiProvider, getRewriteApiKey(overlayAiProvider) ?? '')
-    : resolveRuntimeProviderApiKey('gemini', getRewriteApiKey('gemini') ?? geminiApiKey ?? '');
   const overlayImageProvider = resolveImageCapableProvider(overlayAiProvider);
   const overlayImageModel = getRewriteModel(overlayImageProvider === 'openai' ? 'openai' : 'gemini');
-  const overlayImageKey = overlayImageProvider === 'openai'
-    ? resolveRuntimeProviderApiKey('openai', getRewriteApiKey('openai') ?? '')
-    : resolveRuntimeProviderApiKey('gemini', getRewriteApiKey('gemini') ?? geminiApiKey ?? '');
   const activeTextSelection =
     !focusMode &&
     canvasHighlight?.pageNumber === page.number &&
@@ -2472,9 +2291,9 @@ export function CanvasPageWithOverlay({
                     [tableId]: next
                   }))
                 }
+                taskDocumentId={taskDocumentId}
                 imageProvider={overlayImageProvider}
                 imageModel={overlayImageModel}
-                imageApiKey={overlayImageKey}
                 onClose={() => setTableOverlay(null)}
               />
             )}
@@ -2487,12 +2306,12 @@ export function CanvasPageWithOverlay({
         <MiniChatView
           key={boundsKey}
           contextText={chatState.contextText}
-          apiKey={overlayAiKey}
           provider={overlayAiProvider}
           model={overlayAiModel}
           onClose={() => handleCloseMiniChat(boundsKey)}
           position={chatState.position}
           documentId={documentId}
+          taskDocumentId={taskDocumentId}
           pageNumber={pageNumber}
           bounds={chatState.bounds}
           onAnnotationChange={handleAnnotationChange}
@@ -2594,12 +2413,7 @@ export function CanvasPageWithOverlay({
               type="button"
               className="reference-popup-explain-btn"
               onClick={handleExplainConnection}
-              disabled={!hasRuntimeProviderAccess(overlayAiProvider, overlayAiKey)}
-              title={
-                hasRuntimeProviderAccess(overlayAiProvider, overlayAiKey)
-                  ? 'Explain how this reference connects to the paragraph'
-                  : `${getProviderDisplayName(overlayAiProvider)} API key required`
-              }
+              title="Explain how this reference connects to the paragraph"
             >
               <ConnectionIcon /> Explain Connection
             </button>
@@ -2611,12 +2425,12 @@ export function CanvasPageWithOverlay({
       {connectionChatState && (
         <MiniChatView
           contextText={connectionChatState.contextText}
-          apiKey={overlayAiKey}
           provider={overlayAiProvider}
           model={overlayAiModel}
           onClose={handleCloseConnectionChat}
           position={connectionChatState.position}
           documentId={documentId}
+          taskDocumentId={taskDocumentId}
           pageNumber={pageNumber}
           bounds={connectionChatState.bounds}
           onAnnotationChange={handleAnnotationChange}
@@ -2643,7 +2457,7 @@ export function CanvasPageWithOverlay({
           onClose={handleCloseMathView}
           isLoading={mathViewState.isLoading}
           error={mathViewState.error}
-          apiKey={overlayAiKey || undefined}
+          taskDocumentId={taskDocumentId}
           provider={overlayAiProvider}
           model={overlayAiModel}
         />
@@ -2655,7 +2469,7 @@ export function CanvasPageWithOverlay({
           imageDataUri={imageExplanationState.imageDataUri}
           position={imageExplanationState.position}
           onClose={handleCloseImageExplanation}
-          apiKey={overlayImageKey || undefined}
+          taskDocumentId={taskDocumentId}
           provider={overlayImageProvider}
           model={overlayImageModel}
           savedExplanation={imageExplanationState.savedExplanation}

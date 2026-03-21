@@ -19,19 +19,12 @@ export {
   type SemanticSearchConfig,
   type IndexDocumentOptions,
 
-  // Storage functions
-  storeDocumentEmbeddings,
-  loadDocumentEmbeddings,
-  loadEmbeddingsByHash,
-  deleteDocumentEmbeddings,
-  listStoredDocuments,
-
   // Processing functions
   chunkDocument,
   chunkDocumentByBlocks,
-  generateChunkEmbeddings,
   semanticSearch,
-  indexDocument
+  indexDocument,
+  isSemanticIndexCompatibleWithConfig
 } from './semanticSearch';
 
 export {

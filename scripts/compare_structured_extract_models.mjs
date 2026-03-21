@@ -47,7 +47,7 @@ for (let index = 0; index < models.length; index += 1) {
   const port = await findOpenPort();
   const authToken = `structured-compare-${Date.now()}-${index}`;
   const logPath = join(modelDir, 'proxy.log');
-  const server = spawn('node', ['dist-server/index.js'], {
+  const server = spawn('node', ['dist-server/server/src/index.js'], {
     cwd: repoRoot,
     env: {
       ...process.env,

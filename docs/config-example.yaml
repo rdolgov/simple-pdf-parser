@@ -52,15 +52,13 @@ llmProxy:
 
 testApp:
   llmTransport:
-    mode: "proxy" # or "direct"
-    proxyBaseUrl: "/api/llm"
+    proxyBaseUrl: "/api/tasks"
     proxyAuthToken: "OPTIONAL_SHARED_PROXY_TOKEN"
   proxyRoute:
     url: "/proxy"
     authBaseUrl: "/proxy/api/auth"
-    llmBaseUrl: "/proxy/api/llm"
+    taskBaseUrl: "/proxy/api/tasks"
 
 structuredExtract:
   provider: "gemini" # or "openai"
-  apiKey: "YOUR_API_KEY"
   model: "gemini-3-pro-preview"

@@ -15,6 +15,7 @@ const APP_LOCAL_STORAGE_EXACT_KEYS = [
 
 const APP_INDEXED_DB_NAMES = [
   'pdf-layout-file-cache',
+  'pdf-task-document-cache-db',
   'pdf-gemini-extraction-db',
   'pdf-annotations-db',
   'semantic-search-db',

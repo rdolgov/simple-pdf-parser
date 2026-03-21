@@ -7,11 +7,6 @@ export type SemanticSearchProvider = Extract<EmbeddingProvider, 'gemini' | 'open
 
 export const SEMANTIC_SEARCH_PROVIDER_STORAGE_KEY = 'semantic-search-provider';
 
-export const SEMANTIC_SEARCH_PROVIDER_API_KEY_STORAGE_KEYS: Record<SemanticSearchProvider, readonly string[]> = {
-  gemini: ['semantic-search-gemini-api-key', 'gemini-overlay-api-key', 'gemini-api-key'],
-  openai: ['semantic-search-openai-api-key', 'openai-api-key', 'openai-overlay-api-key']
-} as const;
-
 export const SEMANTIC_SEARCH_PROVIDER_MODEL_STORAGE_KEYS: Record<SemanticSearchProvider, string> = {
   gemini: 'semantic-search-gemini-model',
   openai: 'semantic-search-openai-model'
@@ -19,8 +14,6 @@ export const SEMANTIC_SEARCH_PROVIDER_MODEL_STORAGE_KEYS: Record<SemanticSearchP
 
 export type SemanticSearchStoredSettings = {
   provider: SemanticSearchProvider;
-  geminiApiKey: string;
-  openaiApiKey: string;
   geminiModel: string;
   openaiModel: string;
 };
@@ -28,8 +21,6 @@ export type SemanticSearchStoredSettings = {
 export function loadSemanticSearchStoredSettings(): SemanticSearchStoredSettings {
   return {
     provider: getSemanticSearchProvider(),
-    geminiApiKey: getSemanticSearchApiKey('gemini') ?? '',
-    openaiApiKey: getSemanticSearchApiKey('openai') ?? '',
     geminiModel: getSemanticSearchModel('gemini') ?? '',
     openaiModel: getSemanticSearchModel('openai') ?? ''
   };
@@ -54,40 +45,6 @@ export function setSemanticSearchProvider(provider: SemanticSearchProvider): voi
   }
   try {
     window.localStorage.setItem(SEMANTIC_SEARCH_PROVIDER_STORAGE_KEY, provider);
-  } catch {
-    // Ignore storage access issues.
-  }
-}
-
-export function getSemanticSearchApiKey(provider: SemanticSearchProvider): string | null {
-  if (!canUseLocalStorage()) {
-    return null;
-  }
-  for (const key of SEMANTIC_SEARCH_PROVIDER_API_KEY_STORAGE_KEYS[provider]) {
-    try {
-      const value = window.localStorage.getItem(key)?.trim();
-      if (value) {
-        return value;
-      }
-    } catch {
-      // Ignore storage access issues.
-    }
-  }
-  return null;
-}
-
-export function setSemanticSearchApiKey(provider: SemanticSearchProvider, value: string): void {
-  if (!canUseLocalStorage()) {
-    return;
-  }
-  const normalized = value.trim();
-  try {
-    const primaryKey = SEMANTIC_SEARCH_PROVIDER_API_KEY_STORAGE_KEYS[provider][0];
-    if (normalized.length > 0) {
-      window.localStorage.setItem(primaryKey, normalized);
-    } else {
-      window.localStorage.removeItem(primaryKey);
-    }
   } catch {
     // Ignore storage access issues.
   }

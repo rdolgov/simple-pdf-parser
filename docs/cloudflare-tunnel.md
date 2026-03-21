@@ -9,7 +9,7 @@ Recommended topology:
 
 Why this is the right fit here:
 
-- The Node server already serves the built app under `/proxy` and already owns `/api/llm/*` and `/proxy/api/llm/*`.
+- The Node server already serves the built app under `/proxy` and already owns `/api/tasks/*` and `/proxy/api/tasks/*` for the browser app.
 - You avoid running Vite in production.
 - You keep a single same-origin deployment for cookies, auth, and proxy calls.
 - Binding the origin to `127.0.0.1` means nothing listens on a public interface; only `cloudflared` reaches it.
@@ -49,7 +49,7 @@ Important environment notes:
 - `LLM_PROXY_GEMINI_DAILY_MAX_CALLS` defaults to `1000` and hard-blocks new Gemini upstream calls once the day cap is reached.
 - `LLM_PROXY_GEMINI_DAILY_MAX_TOKENS` defaults to `1000000` and hard-blocks new Gemini upstream calls once the recorded daily token cap is reached.
 - `/proxy/backoffice/gemini-analytics` exposes the server-side Gemini usage dashboard for a small hardcoded username allowlist.
-- Long-running proxied LLM requests now auto-switch to `202 + poll` under `/api/llm/jobs/...`, which avoids Cloudflare `524` timeouts without changing the browser-side app API.
+- Long-running browser task requests now auto-switch to `202 + poll` under `/api/tasks/jobs/...`, which avoids Cloudflare `524` timeouts without changing the browser-side app flow.
 - `CODEX_EXEC_ENABLED=1` still works in this deployment if you want Codex proxy support.
 
 Expected public flow:
