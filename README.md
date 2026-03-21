@@ -144,6 +144,11 @@ Server environment variables:
 - `LLM_PROXY_ASYNC_POLL_INTERVAL_MS` defaults to `1500` and controls client polling hints for long-running proxied LLM jobs
 - `LLM_PROXY_ASYNC_JOB_TTL_MS` defaults to `3600000` (1 hour) and controls how long completed async job results stay available for polling
 - `LLM_PROXY_ASYNC_MAX_JOBS` defaults to `100`
+- `LLM_PROXY_LOG_ENABLED` defaults to `true`
+- `LLM_PROXY_LOG_DIR` defaults to `.cache/llm-proxy-logs`
+- `LLM_PROXY_LOG_FILE` defaults to `server.log`
+- `LLM_PROXY_LOG_MAX_BYTES` defaults to `5242880` (5 MB before rolling)
+- `LLM_PROXY_LOG_MAX_FILES` defaults to `5` total files including the active log
 - `LLM_PROXY_TASKS_DIR` defaults to `.cache/llm-proxy-tasks` and stores uploaded files, detection results, semantic indexes, and interaction logs for the task API
 - `LLM_PROXY_TASKS_DETECT_PAGE_CONCURRENCY` defaults to `2` and controls how many per-page structured extraction jobs run in parallel when local page splitting is available
 - `LLM_PROXY_TASKS_DETECT_FIRST_PAGES` defaults to `3` and keeps the earliest pages as individual extraction calls so the first visible pages publish sooner

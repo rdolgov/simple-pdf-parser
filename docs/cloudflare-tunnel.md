@@ -48,6 +48,9 @@ Important environment notes:
 - `LLM_PROXY_GEMINI_BINARY_MODEL` is optional if you want a separate server-selected Gemini model for image/PDF inputs.
 - `LLM_PROXY_GEMINI_DAILY_MAX_CALLS` defaults to `1000` and hard-blocks new Gemini upstream calls once the day cap is reached.
 - `LLM_PROXY_GEMINI_DAILY_MAX_TOKENS` defaults to `1000000` and hard-blocks new Gemini upstream calls once the recorded daily token cap is reached.
+- `LLM_PROXY_LOG_DIR` defaults to `.cache/llm-proxy-logs`, and server console output is also written there on a rolling basis.
+- `LLM_PROXY_LOG_MAX_BYTES` defaults to `5242880` and rotates the active server log when it grows past 5 MB.
+- `LLM_PROXY_LOG_MAX_FILES` defaults to `5` total log files including the active one.
 - `/proxy/backoffice/gemini-analytics` exposes the server-side Gemini usage dashboard for a small hardcoded username allowlist.
 - Long-running browser task requests now auto-switch to `202 + poll` under `/api/tasks/jobs/...`, which avoids Cloudflare `524` timeouts without changing the browser-side app flow.
 - `LLM_PROXY_TASKS_DETECT_PAGE_CONCURRENCY` defaults to `2`.

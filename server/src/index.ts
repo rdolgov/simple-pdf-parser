@@ -20,6 +20,7 @@ import { loadLocalEnvFiles } from './loadLocalEnv.js';
 import { ProxySessionAuth, parseProxyUsers } from './sessionAuth.js';
 import { StaticProxyApp } from './staticProxyApp.js';
 import { formatDurationFields } from './logDuration.js';
+import { installRollingConsoleLogger } from './serverLogger.js';
 import {
   executeImageAnalysisTask,
   executeImageGenerationTask,
@@ -67,6 +68,13 @@ type ServerConfig = {
     retentionMs: number;
     maxJobs: number;
     pollIntervalMs: number;
+  };
+  logging: {
+    enabled: boolean;
+    dir: string;
+    fileName: string;
+    maxBytes: number;
+    maxFiles: number;
   };
   tasks: {
     dataDir: string;
@@ -137,6 +145,7 @@ const LOG_PREVIEW_STRING_LIMIT = 4;
 
 loadLocalEnvFiles();
 const config = loadConfig();
+const installedLogger = installRollingConsoleLogger(config.logging);
 const responseCache = new FileResponseCache({
   enabled: config.cacheEnabled,
   cacheDir: config.cacheDir,
@@ -202,6 +211,12 @@ server.listen(config.port, config.host, () => {
     `enabled pollIntervalMs=${config.asyncJobs.pollIntervalMs} retentionMs=${config.asyncJobs.retentionMs} maxJobs=${config.asyncJobs.maxJobs}`
   );
   console.log(
+    '[llm-proxy] Logs:',
+    config.logging.enabled
+      ? `enabled dir=${config.logging.dir} file=${installedLogger.getActiveLogPath()} maxBytes=${config.logging.maxBytes} maxFiles=${config.logging.maxFiles}`
+      : 'disabled'
+  );
+  console.log(
     '[llm-proxy] Gemini analytics:',
     `dir=${config.geminiAnalytics.dataDir} retentionDays=${config.geminiAnalytics.retentionDays} dailyMaxCalls=${config.geminiAnalytics.dailyMaxCalls} dailyMaxTotalTokens=${config.geminiAnalytics.dailyMaxTotalTokens}`
   );
@@ -213,6 +228,14 @@ server.listen(config.port, config.host, () => {
   console.log('[llm-proxy] Proxy app route:', `${PROXY_APP_PREFIX} -> ${staticProxyApp.appDir}`);
   console.log('[llm-proxy] Root redirect:', config.rootRedirectPath ? `/ -> ${config.rootRedirectPath}` : 'disabled');
 });
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    void installedLogger.close().finally(() => {
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    });
+  });
+}
 
 async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   writeCorsHeaders(response, config.corsOrigin);
@@ -2940,6 +2963,13 @@ function loadConfig(): ServerConfig {
       retentionMs: normalizePositiveNumber(env.LLM_PROXY_ASYNC_JOB_TTL_MS, 60 * 60 * 1000),
       maxJobs: normalizePositiveNumber(env.LLM_PROXY_ASYNC_MAX_JOBS, 100),
       pollIntervalMs: normalizePositiveNumber(env.LLM_PROXY_ASYNC_POLL_INTERVAL_MS, 1500)
+    },
+    logging: {
+      enabled: normalizeBoolean(env.LLM_PROXY_LOG_ENABLED, true),
+      dir: normalizeNonEmpty(env.LLM_PROXY_LOG_DIR) ?? '.cache/llm-proxy-logs',
+      fileName: normalizeNonEmpty(env.LLM_PROXY_LOG_FILE) ?? 'server.log',
+      maxBytes: normalizePositiveNumber(env.LLM_PROXY_LOG_MAX_BYTES, 5 * 1024 * 1024),
+      maxFiles: normalizePositiveNumber(env.LLM_PROXY_LOG_MAX_FILES, 5)
     },
     tasks: {
       dataDir: normalizeNonEmpty(env.LLM_PROXY_TASKS_DIR) ?? '.cache/llm-proxy-tasks',

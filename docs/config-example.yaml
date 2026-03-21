@@ -35,6 +35,12 @@ llmProxy:
     pollIntervalMs: 1500
     ttlMs: 3600000
     maxJobs: 100
+  log:
+    enabled: true
+    dir: ".cache/llm-proxy-logs"
+    file: "server.log"
+    maxBytes: 5242880
+    maxFiles: 5
   tasks:
     dir: ".cache/llm-proxy-tasks"
     detectPageConcurrency: 2
