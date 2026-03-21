@@ -40,6 +40,7 @@ llmProxy:
     detectPageConcurrency: 2
     detectFirstPages: 3
     detectBatchSize: 3 # progressive structured extraction uses local pdfseparate and pdfunite when available
+    detectMinSplitBytes: 1048576 # skip page splitting for small PDFs at or below this size
   openAI:
     apiKey: "YOUR_OPENAI_API_KEY"
     baseUrl: "https://api.openai.com/v1"

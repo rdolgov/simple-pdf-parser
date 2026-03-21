@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { splitPdfIntoPages } from './pdfPageSplit.js';
 import { buildPdfPageBatches } from './pdfPageBatching.js';
+import { decideStructuredDetectSplit } from './structuredDetectSplitPolicy.js';
 import {
   executeStructuredDetectTask,
   type TaskServerProvidersConfig,
@@ -25,6 +26,7 @@ export async function executeStructuredDetectTaskProgressive(
     structuredDetectPageConcurrency?: number;
     structuredDetectBatchSize?: number;
     structuredDetectInitialPageCount?: number;
+    structuredDetectMinSplitBytes?: number;
     structuredDetectTasksDataDir?: string;
   },
   options: {
@@ -32,6 +34,23 @@ export async function executeStructuredDetectTaskProgressive(
     onProgress?: (progress: StructuredDetectProgress) => Promise<void> | void;
   } = {}
 ): Promise<TaskStructuredDetectResult> {
+  const sourceFileStat = await stat(input.filePath);
+  const splitDecision = decideStructuredDetectSplit({
+    fileSizeBytes: sourceFileStat.size,
+    minSplitBytes: config.structuredDetectMinSplitBytes ?? 1024 * 1024
+  });
+
+  if (!splitDecision.shouldSplit) {
+    console.log(
+      `[structured-detect] skip-split reason=${splitDecision.reason} file=${input.filePath} bytes=${sourceFileStat.size} threshold=${config.structuredDetectMinSplitBytes ?? 1024 * 1024}`
+    );
+    const full = await executeStructuredDetectTask(input, config);
+    const progress = { totalPages: 1, completedPages: 1, publishedPages: 1 };
+    await options.onProgress?.(progress);
+    await options.onPartial?.(full, progress);
+    return full;
+  }
+
   const splitStartedAt = Date.now();
   const split = await splitPdfIntoPages(input.filePath, {
     workspaceRootDir: config.structuredDetectTasksDataDir
@@ -40,6 +59,9 @@ export async function executeStructuredDetectTaskProgressive(
     workspaceKey: input.filePath
   });
   if (!split || split.pageFiles.length <= 1) {
+    console.log(
+      `[structured-detect] skip-split reason=${split ? 'single-page-after-split' : 'split-tool-unavailable'} file=${input.filePath} bytes=${sourceFileStat.size}`
+    );
     const full = await executeStructuredDetectTask(input, config);
     const progress = { totalPages: 1, completedPages: 1, publishedPages: 1 };
     await options.onProgress?.(progress);
