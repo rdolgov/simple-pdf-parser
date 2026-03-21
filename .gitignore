@@ -16,5 +16,5 @@ coverage/
 .env
 .env.local
 .idea/
-.cache/llm-proxy/
+.cache/
 .artifacts/
