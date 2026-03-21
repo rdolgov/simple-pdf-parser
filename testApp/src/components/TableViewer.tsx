@@ -5,6 +5,7 @@ import {
   deleteCachedTableVisualization,
   generateTableVisualizationCacheKey,
   getCachedChartImage,
+  getLatestCachedChartImageForTable,
   setCachedChartImage
 } from '../storage/tableVisualizationCache';
 import { generateAiTableChartImage } from '../utils/aiTableVisualization';
@@ -32,8 +33,10 @@ type TableViewerProps = {
   taskDocumentId?: string | null;
   imageProvider: ImageCapableProvider;
   imageModel?: string;
+  initialViewMode?: ViewMode;
   onClose: () => void;
   onInfographicActivityChange?: (delta: number) => void;
+  onInfographicReady?: (tableId: string) => void;
 };
 
 export function TableViewer({
@@ -47,11 +50,13 @@ export function TableViewer({
   taskDocumentId,
   imageProvider,
   imageModel,
+  initialViewMode = 'table',
   onClose,
-  onInfographicActivityChange
+  onInfographicActivityChange,
+  onInfographicReady
 }: TableViewerProps): JSX.Element {
   const [localSort, setLocalSort] = useState<TableSortState>(sortState);
-  const [viewMode, setViewMode] = useState<ViewMode>('table');
+  const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
   const [chartImageState, setChartImageState] = useState<ChartImageState>({ status: 'idle' });
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
   const [panelSize, setPanelSize] = useState<{ width: number; height: number } | null>(null);
@@ -66,11 +71,14 @@ export function TableViewer({
   }, [sortState]);
 
   useEffect(() => {
-    setViewMode('table');
     setChartImageState({ status: 'idle' });
     setDragPosition(null);
     setPanelSize(null);
   }, [table.id, bounds.minX, bounds.minY, bounds.maxX, bounds.maxY, scaleX, scaleY, pageHeight]);
+
+  useEffect(() => {
+    setViewMode(initialViewMode);
+  }, [initialViewMode, table.id, bounds.minX, bounds.minY, bounds.maxX, bounds.maxY, scaleX, scaleY, pageHeight]);
 
   const canvasPadding = 16 * scaleX;
   const initialLeft = bounds.minX * scaleX + canvasPadding - 12;
@@ -149,6 +157,18 @@ export function TableViewer({
           });
           return;
         }
+
+        const fallbackCached = await getLatestCachedChartImageForTable(table.id);
+        if (fallbackCached) {
+          setChartImageState({
+            status: 'ready',
+            dataUri: fallbackCached.dataUri,
+            mimeType: fallbackCached.mimeType,
+            prompt: fallbackCached.prompt,
+            model: fallbackCached.model?.trim() || 'cached-image'
+          });
+          return;
+        }
       }
 
       onInfographicActivityChange?.(1);
@@ -171,6 +191,7 @@ export function TableViewer({
         mimeType: result.mimeType,
         prompt: result.prompt
       });
+      onInfographicReady?.(table.id);
     } catch (error) {
       await deleteCachedTableVisualization(chartImageCacheKey);
       setChartImageState({
@@ -189,6 +210,7 @@ export function TableViewer({
     imageModel,
     imageProvider,
     onInfographicActivityChange,
+    onInfographicReady,
     table,
     taskDocumentId
   ]);

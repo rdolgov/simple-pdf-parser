@@ -23,6 +23,7 @@ import { ImageExplanationPopup, type ImageExplanationData } from './ImageExplana
 import { LassoActionMenu } from './LassoActionMenu';
 import { InterestingTextOverlay } from './InterestingTextOverlay';
 import { getCachedImageExplanation, setCachedImageExplanation, deleteCachedImageExplanation } from '../storage/imageExplanationCache';
+import { hasCachedChartImageForTable } from '../storage/tableVisualizationCache';
 import {
   type AnnotationBounds,
   type AnnotationSummary,
@@ -260,6 +261,8 @@ export function CanvasPageWithOverlay({
     bounds: PDFImageBounds;
     model: ExtractedTable;
   } | null>(null);
+  const [tableOverlayInitialViewMode, setTableOverlayInitialViewMode] = useState<'table' | 'chart-image'>('table');
+  const [tableInfographicMarkerIds, setTableInfographicMarkerIds] = useState<Set<string>>(new Set());
   const [tableSortState, setTableSortState] = useState<Record<string, TableSortState>>({});
   const [miniChatStates, setMiniChatStates] = useState<Map<string, MiniChatState>>(new Map());
   const [pageAnnotations, setPageAnnotations] = useState<AnnotationSummary[]>([]);
@@ -328,6 +331,8 @@ export function CanvasPageWithOverlay({
     setImageError({});
     setImageLoading({});
     setTableOverlay(null);
+    setTableOverlayInitialViewMode('table');
+    setTableInfographicMarkerIds(new Set());
     setTableSortState({});
     setMiniChatStates(new Map());
     setImagePreview(null);
@@ -443,6 +448,46 @@ export function CanvasPageWithOverlay({
     setReferencePopup(null);
     setMathViewState(null);
   }, [lassoMode, onCanvasHighlight, resetLassoDraft]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadTableInfographicMarkers() {
+      const pageTables = extractedTables.filter(
+        (table) =>
+          table.page === page.number &&
+          table.bounds &&
+          typeof table.bounds.maxX === 'number' &&
+          typeof table.bounds.maxY === 'number'
+      );
+
+      if (pageTables.length === 0) {
+        setTableInfographicMarkerIds(new Set());
+        return;
+      }
+
+      const matches = await Promise.all(
+        pageTables.map(async (table) => ({
+          tableId: table.id,
+          hasInfographic: await hasCachedChartImageForTable(table.id)
+        }))
+      );
+
+      if (isCancelled) {
+        return;
+      }
+
+      setTableInfographicMarkerIds(
+        new Set(matches.filter((entry) => entry.hasInfographic).map((entry) => entry.tableId))
+      );
+    }
+
+    void loadTableInfographicMarkers();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [extractedTables, page.number]);
 
   const handleOpenMiniChat = useCallback(
     (
@@ -2044,6 +2089,7 @@ export function CanvasPageWithOverlay({
     });
     if (extractTableHit) {
       console.debug('Extracted table hit', extractTableHit);
+      setTableOverlayInitialViewMode('table');
       setTableOverlay(extractTableHit);
       onCanvasHighlight(null);
       return;
@@ -2051,6 +2097,44 @@ export function CanvasPageWithOverlay({
 
     setTableOverlay(null);
   }, [focusMode, htmlPage, lassoMode, logicalStructure, onCanvasHighlight, page.number, page.size.height, page.size.width, extractedTables, geminiExtraction, pageNumber, zoom, documentId, enableImageHighlight]);
+
+  const handleTableInfographicMarkerClick = useCallback((table: ExtractedTable) => {
+    if (!table.bounds) {
+      return;
+    }
+    setTableOverlayInitialViewMode('chart-image');
+    setTableOverlay({
+      bounds: table.bounds,
+      model: table
+    });
+    onCanvasHighlight(null);
+  }, [onCanvasHighlight]);
+
+  const refreshTableInfographicMarkers = useCallback(async () => {
+    const pageTables = extractedTables.filter(
+      (table) =>
+        table.page === page.number &&
+        table.bounds &&
+        typeof table.bounds.maxX === 'number' &&
+        typeof table.bounds.maxY === 'number'
+    );
+
+    if (pageTables.length === 0) {
+      setTableInfographicMarkerIds(new Set());
+      return;
+    }
+
+    const matches = await Promise.all(
+      pageTables.map(async (table) => ({
+        tableId: table.id,
+        hasInfographic: await hasCachedChartImageForTable(table.id)
+      }))
+    );
+
+    setTableInfographicMarkerIds(
+      new Set(matches.filter((entry) => entry.hasInfographic).map((entry) => entry.tableId))
+    );
+  }, [extractedTables, page.number]);
 
   const highlightBlocks: OverlayHighlightEntry[] = [];
 
@@ -2457,8 +2541,15 @@ export function CanvasPageWithOverlay({
                 taskDocumentId={taskDocumentId}
                 imageProvider={overlayImageProvider}
                 imageModel={overlayImageModel}
-                onClose={() => setTableOverlay(null)}
+                initialViewMode={tableOverlayInitialViewMode}
+                onClose={() => {
+                  setTableOverlay(null);
+                  setTableOverlayInitialViewMode('table');
+                }}
                 onInfographicActivityChange={onTableInfographicActivityChange}
+                onInfographicReady={() => {
+                  void refreshTableInfographicMarkers();
+                }}
               />
             )}
           </div>
@@ -2502,8 +2593,8 @@ export function CanvasPageWithOverlay({
         />
       )}
 
-      {/* Annotation markers for saved chats, images, and widgets */}
-      {pageAnnotations.length > 0 && canvasRef.current && (
+      {/* Annotation markers for saved chats, images, widgets, and table infographics */}
+      {(pageAnnotations.length > 0 || tableInfographicMarkerIds.size > 0) && canvasRef.current && (
         <div className="canvas-overlay-layer">
           {pageAnnotations
             .filter((annotation) => annotation.bounds && typeof annotation.bounds.maxX === 'number')
@@ -2546,6 +2637,35 @@ export function CanvasPageWithOverlay({
               </button>
             );
           })}
+          {extractedTables
+            .filter(
+              (table) =>
+                table.page === page.number &&
+                table.bounds &&
+                typeof table.bounds.maxX === 'number' &&
+                typeof table.bounds.maxY === 'number' &&
+                tableInfographicMarkerIds.has(table.id)
+            )
+            .map((table) => {
+              const canvasPadding = 16 * zoom;
+              const markerLeft = table.bounds!.maxX * scaleX + canvasPadding + 4;
+              const markerTop = (page.size.height - table.bounds!.maxY) * scaleY + canvasPadding + 26;
+              return (
+                <button
+                  type="button"
+                  key={`table-infographic:${table.id}`}
+                  className="annotation-marker annotation-marker--table-infographic"
+                  style={{
+                    left: `${markerLeft}px`,
+                    top: `${markerTop}px`
+                  }}
+                  title="Click to reopen table infographic"
+                  onClick={() => handleTableInfographicMarkerClick(table)}
+                >
+                  <TableInfographicMarkerIcon />
+                </button>
+              );
+            })}
         </div>
       )}
 
@@ -2734,6 +2854,21 @@ function WidgetMarkerIcon(): JSX.Element {
         strokeWidth="1.3"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function TableInfographicMarkerIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+      <rect x="1.5" y="2" width="13" height="11.5" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M4 10.8V8.7M7.1 10.8V6M10.2 10.8V7.4M13 10.8V4.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
       />
     </svg>
   );

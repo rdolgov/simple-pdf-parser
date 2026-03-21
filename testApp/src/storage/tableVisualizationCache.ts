@@ -10,6 +10,9 @@ type CachedChartImage = {
   mimeType?: string;
   prompt?: string;
   timestamp: number;
+  tableId?: string;
+  provider?: string;
+  model?: string;
 };
 
 type CacheEntry = CachedChartImage;
@@ -53,6 +56,47 @@ export async function getCachedChartImage(key: string): Promise<{
   };
 }
 
+export async function hasCachedChartImageForTable(tableId: string): Promise<boolean> {
+  const entry = await getLatestCachedChartImageForTable(tableId);
+  return Boolean(entry);
+}
+
+export async function getLatestCachedChartImageForTable(tableId: string): Promise<{
+  key: string;
+  dataUri: string;
+  mimeType?: string;
+  prompt?: string;
+  model?: string;
+} | null> {
+  const entries = await getAllEntries();
+  let latest: CachedChartImage | null = null;
+
+  for (const entry of entries) {
+    if (entry.kind !== 'chart-image') {
+      continue;
+    }
+    const entryTableId = entry.tableId ?? parseTableIdFromCacheKey(entry.key);
+    if (entryTableId !== tableId) {
+      continue;
+    }
+    if (!latest || entry.timestamp > latest.timestamp) {
+      latest = entry;
+    }
+  }
+
+  if (!latest) {
+    return null;
+  }
+
+  return {
+    key: latest.key,
+    dataUri: latest.dataUri,
+    mimeType: latest.mimeType,
+    prompt: latest.prompt,
+    model: latest.model ?? parseModelFromCacheKey(latest.key)
+  };
+}
+
 export async function setCachedChartImage(
   key: string,
   value: { dataUri: string; mimeType?: string; prompt?: string }
@@ -63,7 +107,10 @@ export async function setCachedChartImage(
     dataUri: value.dataUri,
     mimeType: value.mimeType,
     prompt: value.prompt,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    tableId: parseTableIdFromCacheKey(key) ?? undefined,
+    provider: parseProviderFromCacheKey(key) ?? undefined,
+    model: parseModelFromCacheKey(key) ?? undefined
   });
 }
 
@@ -137,6 +184,27 @@ async function getEntry(key: string): Promise<CacheEntry | null> {
   }
 }
 
+async function getAllEntries(): Promise<CacheEntry[]> {
+  try {
+    const db = await openDB();
+    return await new Promise((resolve) => {
+      const transaction = db.transaction(STORE_NAME, 'readonly');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.getAll();
+
+      request.onsuccess = () => {
+        resolve((request.result as CacheEntry[] | undefined) ?? []);
+      };
+
+      request.onerror = () => {
+        resolve([]);
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 async function putEntry(entry: CacheEntry): Promise<void> {
   try {
     const db = await openDB();
@@ -151,4 +219,19 @@ async function putEntry(entry: CacheEntry): Promise<void> {
   } catch {
     // Cache writes are best-effort.
   }
+}
+
+function parseTableIdFromCacheKey(key: string): string | null {
+  const parts = key.split('|');
+  return parts.length >= 6 ? parts[4] : null;
+}
+
+function parseProviderFromCacheKey(key: string): string | null {
+  const parts = key.split('|');
+  return parts.length >= 6 ? parts[2] : null;
+}
+
+function parseModelFromCacheKey(key: string): string | null {
+  const parts = key.split('|');
+  return parts.length >= 6 ? parts[3] : null;
 }

@@ -4746,6 +4746,16 @@ footer code {
   box-shadow: 0 5px 16px rgba(15, 118, 110, 0.56);
 }
 
+.annotation-marker--table-infographic {
+  background: linear-gradient(135deg, #0f766e, #0891b2);
+  color: #ffffff;
+  box-shadow: 0 3px 10px rgba(8, 145, 178, 0.38);
+}
+
+.annotation-marker--table-infographic:hover {
+  box-shadow: 0 5px 16px rgba(8, 145, 178, 0.54);
+}
+
 .annotation-marker--note {
   background: linear-gradient(135deg, #10b981, #059669);
   color: #ffffff;
