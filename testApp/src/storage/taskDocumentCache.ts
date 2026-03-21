@@ -4,6 +4,7 @@ export interface CachedTaskDocumentRecord {
   detectionStatus: 'idle' | 'pending' | 'ready' | 'error';
   provider?: string;
   model?: string;
+  extractSchemaVersion?: number;
   interactionCount?: number;
   updatedAt: number;
 }

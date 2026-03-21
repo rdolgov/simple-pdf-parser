@@ -1,6 +1,7 @@
 import { PDFDocument } from '../pdfDocument.js';
 import { GeminiAPI, type GeminiApiConfig, type GeminiContentParts } from './geminiApi.js';
 import { resolveGeminiBinaryInputModel } from './geminiModelSelection.js';
+import { normalizeParsedTableRows } from './tableCellText.js';
 
 export type StructuredExtractFileInput = Blob | File | ArrayBuffer | Uint8Array;
 
@@ -652,17 +653,7 @@ function normalizeTextValue(value: unknown): string | undefined {
 
 function readTableRows(raw: LlmElement): string[][] {
   const value = raw.table_rows ?? raw.rows;
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const rows: string[][] = [];
-  for (const row of value) {
-    if (!Array.isArray(row)) {
-      continue;
-    }
-    rows.push(row.map((cell) => String(cell ?? '').trim()));
-  }
-  return rows.filter((row) => row.length > 0);
+  return normalizeParsedTableRows(value);
 }
 
 function attachTableData(elements: StructuredDataElement[]): ParsedTable[] {

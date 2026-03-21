@@ -27,8 +27,9 @@ import {
   loadCachedTaskDocument,
   saveCachedTaskDocument
 } from '../storage/taskDocumentCache';
+import { normalizeParsedTableRows } from '../utils/tableCellText';
 
-const EXTRACT_CACHE_SCHEMA_VERSION = 5;
+const EXTRACT_CACHE_SCHEMA_VERSION = 6;
 
 export interface ExtractState {
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -160,15 +161,16 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
       };
 
       if (parsedForTable && Array.isArray(parsedForTable.rows)) {
+        const normalizedRows = normalizeParsedTableRows(parsedForTable.rows);
         const cells: ExtractedTable['cells'] = [];
-        const headers = parsedForTable.rows[0]?.map((value: any) => String(value ?? '')) ?? [];
-        for (let rowIndex = 0; rowIndex < parsedForTable.rows.length; rowIndex += 1) {
-          const row = parsedForTable.rows[rowIndex];
+        const headers = normalizedRows[0] ?? [];
+        for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
+          const row = normalizedRows[rowIndex] ?? [];
           for (let colIndex = 0; colIndex < row.length; colIndex += 1) {
             cells.push({
               row: rowIndex + 1,
               col: colIndex + 1,
-              text: String(row[colIndex] ?? ''),
+              text: row[colIndex] ?? '',
               kind: rowIndex === 0 ? 'th' : 'td'
             });
           }
@@ -216,6 +218,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         provider?: string;
         model?: string;
       };
+      extractSchemaVersion?: number;
     }) => {
       setTaskDocumentId(input.documentId);
       void saveCachedTaskDocument({
@@ -224,6 +227,7 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
         detectionStatus: input.detection.status,
         provider: input.detection.provider,
         model: input.detection.model,
+        extractSchemaVersion: input.extractSchemaVersion,
         interactionCount: input.interactionCount,
         updatedAt: Date.now()
       });
@@ -304,7 +308,8 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
             status: resolved.detection.status,
             provider: resolved.detection.provider ?? resolved.document.detection.provider,
             model: resolved.detection.model ?? resolved.document.detection.model
-          }
+          },
+          extractSchemaVersion: EXTRACT_CACHE_SCHEMA_VERSION
         });
 
         if (resolved.detection.status !== 'ready' || !resolved.detection.result) {
@@ -337,7 +342,8 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
             status: resolved.detection.status,
             provider: resolved.detection.provider ?? resolved.document.detection.provider,
             model: resolved.detection.model ?? resolved.document.detection.model
-          }
+          },
+          extractSchemaVersion: EXTRACT_CACHE_SCHEMA_VERSION
         });
 
         if (resolved.detection.status !== 'ready' || !resolved.detection.result) {
@@ -445,13 +451,16 @@ export function useDocumentLoader(options: UseDocumentLoaderOptions = {}): UseDo
             setExtractState({ status: 'loading' });
           }
 
-          if (cachedTaskDocument?.documentId) {
+          if (
+            cachedTaskDocument?.documentId &&
+            cachedTaskDocument.extractSchemaVersion === EXTRACT_CACHE_SCHEMA_VERSION
+          ) {
             void runExistingTaskExtract(file, fileHash, cachedTaskDocument.documentId);
             return;
           }
 
           if (autoExtract || !loadedFromCache) {
-            void runExtract(file, fileHash, false);
+            void runExtract(file, fileHash, true);
           }
         }
       } catch (error) {
