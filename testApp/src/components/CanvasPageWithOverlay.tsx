@@ -107,6 +107,7 @@ import {
 } from '../api/proxyTaskApi';
 
 const HIGHLIGHT_PADDING = 12;
+const LOGICAL_FRAGMENT_PADDING = 6;
 const TABLE_HIT_TOLERANCE = 6;
 const IMAGE_PANEL_WIDTH = 500;
 const DEFAULT_PAGE_WIDTH = 612;
@@ -157,6 +158,7 @@ type LassoSelectionState = {
 type OverlayHighlightEntry = {
   highlight: HighlightBlockData;
   text?: string;
+  fragments?: HighlightBlockData[];
   blockIndex?: number;
   isPrimary: boolean;
 };
@@ -239,6 +241,7 @@ export function CanvasPageWithOverlay({
   onInlineSuggestionAnalysisActivityChange
 }: CanvasPageWithOverlayProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const activeTextHoverBlockRef = useRef<HTMLDivElement | null>(null);
   const formulaSuggestionAttentionTimeoutRef = useRef<number | null>(null);
   const previousFormulaSuggestionSignatureRef = useRef<Record<string, string>>({});
   const lassoPointerIdRef = useRef<number | null>(null);
@@ -1539,6 +1542,30 @@ export function CanvasPageWithOverlay({
     }
   }, [canvasHighlight, onCanvasHighlight, page.number]);
 
+  const isPointWithinActiveTextHoverShell = useCallback((clientX: number, clientY: number): boolean => {
+    const blockElement = activeTextHoverBlockRef.current;
+    if (!blockElement || canvasHighlight?.kind !== 'text' || canvasHighlight.pageNumber !== page.number) {
+      return false;
+    }
+
+    const blockRect = blockElement.getBoundingClientRect();
+    if (isPointInClientRect(blockRect, clientX, clientY, 4)) {
+      return true;
+    }
+
+    const toolbarElement = blockElement.querySelector('.overlay-toolbar') as HTMLElement | null;
+    if (!toolbarElement) {
+      return false;
+    }
+
+    const toolbarRect = toolbarElement.getBoundingClientRect();
+    if (isPointInClientRect(toolbarRect, clientX, clientY, 6)) {
+      return true;
+    }
+
+    return isPointInClientRect(mergeClientRects(blockRect, toolbarRect), clientX, clientY, 6);
+  }, [canvasHighlight, page.number]);
+
   const updateHoverTextSelection = useCallback(
     (pdfX: number, pdfY: number) => {
       if (!htmlPage) {
@@ -1609,11 +1636,27 @@ export function CanvasPageWithOverlay({
     }
 
     const rect = canvasRef.current.getBoundingClientRect();
+    const blockElement = activeTextHoverBlockRef.current;
+    if (blockElement && target && blockElement.contains(target)) {
+      if (hoveredElement) {
+        setHoveredElement(null);
+      }
+      return;
+    }
     const relativeX = event.clientX - rect.left;
     const relativeY = event.clientY - rect.top;
+    const withinActiveTextHoverShell = isPointWithinActiveTextHoverShell(event.clientX, event.clientY);
+
+    if (withinActiveTextHoverShell) {
+      if (hoveredElement) {
+        setHoveredElement(null);
+      }
+      return;
+    }
 
     if (relativeX < 0 || relativeY < 0 || relativeX > rect.width || relativeY > rect.height) {
       if (hoveredElement) setHoveredElement(null);
+      clearTextHoverSelection();
       return;
     }
 
@@ -1721,12 +1764,17 @@ export function CanvasPageWithOverlay({
     page.size.height,
     page.size.width,
     pageNumber,
+    isPointWithinActiveTextHoverShell,
     updateHoverTextSelection,
     zoom
   ]);
 
   // Clear hover on mouse leave
-  const handleCanvasMouseLeave = useCallback(() => {
+  const handleCanvasMouseLeave = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    const relatedTarget = event.relatedTarget;
+    if (relatedTarget instanceof Node && activeTextHoverBlockRef.current?.contains(relatedTarget)) {
+      return;
+    }
     setHoveredElement(null);
     clearTextHoverSelection();
   }, [clearTextHoverSelection]);
@@ -1989,11 +2037,15 @@ export function CanvasPageWithOverlay({
             : htmlPage.content[blockIndex]
         )
         .filter(isParagraphBlock);
+      const fragmentHighlights = sourceBlocks
+        .map((block) => buildHighlightBlockData(block))
+        .filter((highlight): highlight is HighlightBlockData => highlight !== null);
       const mergedHighlight = buildMergedTextHighlightBlockData(sourceBlocks);
-      if (mergedHighlight) {
+      if (mergedHighlight && fragmentHighlights.length > 0) {
         highlightBlocks.push({
           highlight: mergedHighlight,
           text: pageSegment.text,
+          fragments: fragmentHighlights,
           isPrimary: true
         });
       }
@@ -2204,6 +2256,11 @@ export function CanvasPageWithOverlay({
               const blockTop = (page.size.height - bounds.maxY) * scaleY + canvasPadding; // Flip Y coordinate
               const blockWidth = (bounds.maxX - bounds.minX) * scaleX;
               const blockHeight = (bounds.maxY - bounds.minY) * scaleY;
+              const usesLogicalHoverFragments =
+                isLogicalTextHoverOverlay &&
+                entry.isPrimary &&
+                Array.isArray(entry.fragments) &&
+                entry.fragments.length > 0;
               const logicalHoverClass =
                 isLogicalTextHoverOverlay && entry.isPrimary
                   ? ' canvas-overlay-highlight-block--logical-hover-primary'
@@ -2212,11 +2269,15 @@ export function CanvasPageWithOverlay({
                   : entry.isPrimary
                   ? ''
                   : ' canvas-overlay-highlight-block--secondary';
+              const logicalShellClass = usesLogicalHoverFragments
+                ? ' canvas-overlay-highlight-block--logical-hover-shell'
+                : '';
 
               return (
                 <div
                   key={index}
-                  className={`canvas-overlay-highlight-block${logicalHoverClass}`}
+                  className={`canvas-overlay-highlight-block${logicalHoverClass}${logicalShellClass}`}
+                  ref={entry.isPrimary && isLogicalTextHoverOverlay ? activeTextHoverBlockRef : null}
                   style={{
                     left: `${blockLeft - HIGHLIGHT_PADDING}px`,
                     top: `${blockTop - HIGHLIGHT_PADDING}px`,
@@ -2263,6 +2324,40 @@ export function CanvasPageWithOverlay({
                         />
                       </OverlayToolbar>
                       <div className="canvas-overlay-highlight-inner canvas-overlay-highlight-inner--interactive-text">
+                        {usesLogicalHoverFragments && (
+                          <div className="canvas-overlay-logical-fragments" aria-hidden="true">
+                            {entry.fragments?.map((fragment, fragmentIndex) => {
+                              const fragmentBounds = fragment.bounds;
+                              const fragmentLeft =
+                                (fragmentBounds.minX - bounds.minX) * scaleX +
+                                HIGHLIGHT_PADDING -
+                                LOGICAL_FRAGMENT_PADDING;
+                              const fragmentTop =
+                                (bounds.maxY - fragmentBounds.maxY) * scaleY +
+                                HIGHLIGHT_PADDING -
+                                LOGICAL_FRAGMENT_PADDING;
+                              const fragmentWidth =
+                                (fragmentBounds.maxX - fragmentBounds.minX) * scaleX +
+                                LOGICAL_FRAGMENT_PADDING * 2;
+                              const fragmentHeight =
+                                (fragmentBounds.maxY - fragmentBounds.minY) * scaleY +
+                                LOGICAL_FRAGMENT_PADDING * 2;
+
+                              return (
+                                <div
+                                  key={`${blockKey}:fragment:${fragmentIndex}`}
+                                  className="canvas-overlay-logical-fragment"
+                                  style={{
+                                    left: `${fragmentLeft}px`,
+                                    top: `${fragmentTop}px`,
+                                    width: `${fragmentWidth}px`,
+                                    height: `${fragmentHeight}px`
+                                  }}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
                         <InterestingTextOverlay
                           blockBounds={bounds}
                           lines={block.lines}
@@ -2589,6 +2684,32 @@ function ConnectionIcon(): JSX.Element {
       <path d="M6.5 8h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
+}
+
+function isPointInClientRect(
+  rect: Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom'>,
+  clientX: number,
+  clientY: number,
+  padding = 0
+): boolean {
+  return (
+    clientX >= rect.left - padding &&
+    clientX <= rect.right + padding &&
+    clientY >= rect.top - padding &&
+    clientY <= rect.bottom + padding
+  );
+}
+
+function mergeClientRects(
+  left: Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom'>,
+  right: Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom'>
+): { left: number; top: number; right: number; bottom: number } {
+  return {
+    left: Math.min(left.left, right.left),
+    top: Math.min(left.top, right.top),
+    right: Math.max(left.right, right.right),
+    bottom: Math.max(left.bottom, right.bottom)
+  };
 }
 
 function renderTableOverlay(

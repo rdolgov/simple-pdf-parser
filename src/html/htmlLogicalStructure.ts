@@ -104,9 +104,9 @@ const DEFAULT_OPTIONS: Required<HtmlLogicalStructureOptions> = {
 
 const LOGICAL_STRUCTURE_SCHEMA_VERSION = 1;
 const ROOT_SECTION_ID = 'section-root';
-const SHORT_SECTION_MAX_PARAGRAPHS = 3;
-const SHORT_SECTION_MAX_CHARS = 1400;
-const SHORT_SECTION_MAX_BLOCKS = 6;
+const SHORT_SECTION_MAX_PARAGRAPHS = 6;
+const SHORT_SECTION_MAX_CHARS = 3200;
+const SHORT_SECTION_MAX_BLOCKS = 12;
 
 const TRANSITION_PREFIXES = [
   'however',
@@ -574,11 +574,11 @@ function shouldPreferSectionForParagraphSelection(
   const isCompactSubsection =
     (sectionUnit.headingLevel ?? 0) >= 2 ||
     (!!sectionUnit.parentId && sectionUnit.parentId !== ROOT_SECTION_ID);
-  const topicIsStrictlySmaller = topicUnit.paragraphCount < sectionUnit.paragraphCount;
+  const topicIsNotLarger = topicUnit.paragraphCount <= sectionUnit.paragraphCount;
 
   return (
     isCompactSubsection &&
-    topicIsStrictlySmaller &&
+    topicIsNotLarger &&
     sectionUnit.paragraphCount > 0 &&
     sectionUnit.paragraphCount <= SHORT_SECTION_MAX_PARAGRAPHS &&
     sectionUnit.charLength <= SHORT_SECTION_MAX_CHARS &&

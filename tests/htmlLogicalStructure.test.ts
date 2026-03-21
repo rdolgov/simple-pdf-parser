@@ -115,7 +115,8 @@ describe('html logical structure', () => {
       blockIndex: 3,
       blockType: 'paragraph'
     });
-    expect(subsectionSelection.scope).toBe('topic');
+    expect(subsectionSelection.scope).toBe('section');
+    expect(subsectionSelection.logicalUnit?.title).toBe('Attention Heads');
     expect(subsectionSelection.sectionUnit?.title).toBe('Attention Heads');
     expect(subsectionSelection.sectionUnit?.parentId).toBe(methodsSection?.id);
   });
@@ -163,6 +164,54 @@ describe('html logical structure', () => {
     expect(paragraphSelection.logicalUnit?.kind).toBe('section');
     expect(paragraphSelection.logicalUnit?.title).toBe('3.3 Position-wise Feed-Forward Networks');
     expect(paragraphSelection.logicalUnit?.paragraphCount).toBe(2);
+  });
+
+  it('prefers the whole subsection when it is medium-sized but still self-contained', () => {
+    const layout: HtmlDocumentLayout = {
+      pages: [
+        {
+          number: 1,
+          width: 612,
+          height: 792,
+          content: [
+            headingBlock('Biology Overview', 2, bounds(72, 720, 360, 748)),
+            paragraphBlock(
+              'Biology examines living systems across cells, organisms, and ecosystems. It connects heredity, metabolism, and adaptation through one coherent explanatory frame that spans molecular to ecological scales.',
+              bounds(72, 658, 520, 704)
+            ),
+            paragraphBlock(
+              'Researchers compare structure and function, study how information is stored in genes, and track how organisms respond to changing environments over time. These ideas are taught together because they explain the same living processes.',
+              bounds(72, 604, 520, 648)
+            ),
+            paragraphBlock(
+              'The section remains focused on one introductory goal rather than splitting into separate subtopics, so the hover unit should stay at section level instead of narrowing to a smaller topic fragment.',
+              bounds(72, 552, 520, 594)
+            ),
+            paragraphBlock(
+              'Even with several sentences, the subsection is still short enough that treating it as one logical unit is more useful than breaking it apart for hover interactions.',
+              bounds(72, 504, 520, 544)
+            )
+          ]
+        }
+      ]
+    };
+
+    const structure = buildHtmlLogicalStructure(layout, {
+      minTopicChars: 120,
+      maxTopicChars: 260,
+      maxTopicParagraphs: 1
+    });
+
+    const paragraphSelection = resolveHtmlLogicalUnitForSelection(structure, {
+      pageNumber: 1,
+      blockIndex: 2,
+      blockType: 'paragraph'
+    });
+
+    expect(paragraphSelection.scope).toBe('section');
+    expect(paragraphSelection.logicalUnit?.kind).toBe('section');
+    expect(paragraphSelection.logicalUnit?.title).toBe('Biology Overview');
+    expect(paragraphSelection.logicalUnit?.paragraphCount).toBe(4);
   });
 });
 

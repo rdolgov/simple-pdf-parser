@@ -1107,6 +1107,12 @@ header p {
     0 10px 24px rgba(245, 158, 11, 0.1);
 }
 
+.canvas-overlay-highlight-block--logical-hover-shell {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .canvas-overlay-highlight-block--logical-hover-secondary {
   background: rgba(255, 255, 255, 0.03);
   border-style: dashed;
@@ -1131,6 +1137,23 @@ header p {
 .canvas-overlay-highlight-inner--interactive-text {
   background: transparent;
   overflow: visible;
+}
+
+.canvas-overlay-logical-fragments {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.canvas-overlay-logical-fragment {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: rgba(255, 251, 235, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(251, 191, 36, 0.14),
+    0 10px 24px rgba(245, 158, 11, 0.08);
 }
 
 .interesting-text-overlay {
