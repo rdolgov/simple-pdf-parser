@@ -12,6 +12,7 @@ import {
 import type { CanvasHighlightSelection, CanvasPageRenderState, FocusProvider, ExtractedTable } from '../types';
 import type { KeywordSearchResult, SemanticSearchResult } from '../search';
 import { TableViewer, type TableSortState } from './TableViewer';
+import { TableHoverIndicator } from './TableHoverIndicator';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
 import { ExploreIcon, ImageIcon, LoadingIcon, WidgetIcon } from './OverlayIcons';
 import { MiniChatView } from './MiniChatView';
@@ -293,6 +294,7 @@ export function CanvasPageWithOverlay({
     type: GeminiElementType;
     bounds: { minX: number; minY: number; maxX: number; maxY: number };
   } | null>(null);
+  const [hoveredExtractTable, setHoveredExtractTable] = useState<ExtractTableHit | null>(null);
   const [alignedElements, setAlignedElements] = useState<PageAlignedElements | null>(null);
   const [imageExplanationState, setImageExplanationState] = useState<{
     imageDataUri: string;
@@ -333,6 +335,7 @@ export function CanvasPageWithOverlay({
     setConnectionChatState(null);
     setMathViewState(null);
     setHoveredElement(null);
+    setHoveredExtractTable(null);
     setImageExplanationState(null);
     setInteractiveWidgetState(null);
     lassoDraftPointsRef.current = [];
@@ -436,6 +439,7 @@ export function CanvasPageWithOverlay({
 
     onCanvasHighlight(null);
     setTableOverlay(null);
+    setHoveredExtractTable(null);
     setReferencePopup(null);
     setMathViewState(null);
   }, [lassoMode, onCanvasHighlight, resetLassoDraft]);
@@ -1621,6 +1625,7 @@ export function CanvasPageWithOverlay({
   const handleCanvasMouseMove = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (lassoMode) {
       if (hoveredElement) setHoveredElement(null);
+      if (hoveredExtractTable) setHoveredExtractTable(null);
       clearTextHoverSelection();
       return;
     }
@@ -1632,6 +1637,7 @@ export function CanvasPageWithOverlay({
 
     if (focusMode || !canvasRef.current) {
       if (hoveredElement) setHoveredElement(null);
+      if (hoveredExtractTable) setHoveredExtractTable(null);
       clearTextHoverSelection();
       return;
     }
@@ -1641,6 +1647,9 @@ export function CanvasPageWithOverlay({
     if (blockElement && target && blockElement.contains(target)) {
       if (hoveredElement) {
         setHoveredElement(null);
+      }
+      if (hoveredExtractTable) {
+        setHoveredExtractTable(null);
       }
       return;
     }
@@ -1652,11 +1661,15 @@ export function CanvasPageWithOverlay({
       if (hoveredElement) {
         setHoveredElement(null);
       }
+      if (hoveredExtractTable) {
+        setHoveredExtractTable(null);
+      }
       return;
     }
 
     if (relativeX < 0 || relativeY < 0 || relativeX > rect.width || relativeY > rect.height) {
       if (hoveredElement) setHoveredElement(null);
+      if (hoveredExtractTable) setHoveredExtractTable(null);
       clearTextHoverSelection();
       return;
     }
@@ -1665,9 +1678,38 @@ export function CanvasPageWithOverlay({
     const pdfX = relativeX / zoom - padding;
     const pdfY = page.size.height - (relativeY / zoom - padding);
 
+    const extractTableHit = enableTableHighlight
+      ? detectExtractedTableAtPoint({
+          tables: extractedTables,
+          page,
+          x: pdfX,
+          y: pdfY
+        })
+      : null;
+
+    if (extractTableHit) {
+      if (
+        !hoveredExtractTable ||
+        hoveredExtractTable.model.id !== extractTableHit.model.id ||
+        hoveredExtractTable.bounds.minX !== extractTableHit.bounds.minX ||
+        hoveredExtractTable.bounds.minY !== extractTableHit.bounds.minY
+      ) {
+        setHoveredExtractTable(extractTableHit);
+      }
+      if (hoveredElement) {
+        setHoveredElement(null);
+      }
+      clearTextHoverSelection();
+      return;
+    }
+
+    if (hoveredExtractTable) {
+      setHoveredExtractTable(null);
+    }
+
     if (geminiExtraction) {
-      // Check for hoverable element types: formula, reference, table, image
-      const hoverableTypes: GeminiElementType[] = ['formula', 'reference', 'table', 'image'];
+      // Tables use extracted-table hover so the cue matches the actual clickable popup target.
+      const hoverableTypes: GeminiElementType[] = ['formula', 'reference', 'image'];
 
       // Use aligned elements when available (more accurate bounds from PDF text items)
       // Only fall back to Gemini bounds for element types that don't have aligned data
@@ -1758,10 +1800,14 @@ export function CanvasPageWithOverlay({
   }, [
     alignedElements,
     clearTextHoverSelection,
+    enableTableHighlight,
+    extractedTables,
     focusMode,
     geminiExtraction,
     hoveredElement,
+    hoveredExtractTable,
     lassoMode,
+    page,
     page.size.height,
     page.size.width,
     pageNumber,
@@ -1777,6 +1823,7 @@ export function CanvasPageWithOverlay({
       return;
     }
     setHoveredElement(null);
+    setHoveredExtractTable(null);
     clearTextHoverSelection();
   }, [clearTextHoverSelection]);
 
@@ -2109,12 +2156,11 @@ export function CanvasPageWithOverlay({
       style={{
         cursor: lassoMode
           ? 'crosshair'
-          : hoveredElement && (
+          : ((hoveredExtractTable && enableTableHighlight) || (hoveredElement && (
               (hoveredElement.type === 'formula' && enableFormulaHighlight) ||
-              (hoveredElement.type === 'table' && enableTableHighlight) ||
               (hoveredElement.type === 'image' && enableImageHighlight) ||
               (hoveredElement.type === 'reference')
-            ) ? 'pointer' : undefined
+            ))) ? 'pointer' : undefined
       }}
     >
       <canvas ref={handleCanvasRef} />
@@ -2232,6 +2278,17 @@ export function CanvasPageWithOverlay({
               }}
             />
           )}
+        </div>
+      )}
+      {canvasRef.current && hoveredExtractTable && !tableOverlay && !focusMode && !lassoMode && (
+        <div className="canvas-overlay-layer" aria-hidden="true">
+          <TableHoverIndicator
+            bounds={hoveredExtractTable.bounds}
+            pageHeight={page.size.height}
+            scaleX={scaleX}
+            scaleY={scaleY}
+            zoom={zoom}
+          />
         </div>
       )}
       {canvasRef.current && (highlightBlocks.length > 0 || tableOverlay) && (
