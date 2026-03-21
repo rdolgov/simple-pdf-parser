@@ -1,18 +1,7 @@
-import type { ChartConfiguration } from 'chart.js';
-
 const DB_NAME = 'table-visualization-cache-db';
 const DB_VERSION = 1;
 const STORE_NAME = 'table-visualization-cache';
 const CACHE_KEY_VERSION = 'v2';
-
-type CachedInteractiveChart = {
-  key: string;
-  kind: 'interactive-chart';
-  config: ChartConfiguration;
-  title?: string;
-  note?: string;
-  timestamp: number;
-};
 
 type CachedChartImage = {
   key: string;
@@ -23,7 +12,7 @@ type CachedChartImage = {
   timestamp: number;
 };
 
-type CacheEntry = CachedInteractiveChart | CachedChartImage;
+type CacheEntry = CachedChartImage;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -31,7 +20,7 @@ export function generateTableVisualizationCacheKey(input: {
   tableId: string;
   provider: string;
   model?: string;
-  variant: 'interactive-chart' | 'chart-image';
+  variant: 'chart-image';
   cells: Array<{ row: number; col: number; text: string }>;
 }): string {
   const cellsString = input.cells
@@ -46,36 +35,6 @@ export function generateTableVisualizationCacheKey(input: {
     input.tableId,
     cellsString
   ].join('|');
-}
-
-export async function getCachedInteractiveChart(key: string): Promise<{
-  config: ChartConfiguration;
-  title?: string;
-  note?: string;
-} | null> {
-  const entry = await getEntry(key);
-  if (!entry || entry.kind !== 'interactive-chart') {
-    return null;
-  }
-  return {
-    config: entry.config,
-    title: entry.title,
-    note: entry.note
-  };
-}
-
-export async function setCachedInteractiveChart(
-  key: string,
-  value: { config: ChartConfiguration; title?: string; note?: string }
-): Promise<void> {
-  await putEntry({
-    key,
-    kind: 'interactive-chart',
-    config: value.config,
-    title: value.title,
-    note: value.note,
-    timestamp: Date.now()
-  });
 }
 
 export async function getCachedChartImage(key: string): Promise<{

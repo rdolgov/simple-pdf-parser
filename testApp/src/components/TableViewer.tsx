@@ -1,33 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import Chart from 'chart.js/auto';
-import type { ChartConfiguration } from 'chart.js';
-import type { StructuredExtractProvider } from 'pdf-layout-parser';
 import type { ExtractedTable } from '../types';
 import {
   deleteCachedTableVisualization,
   generateTableVisualizationCacheKey,
   getCachedChartImage,
-  getCachedInteractiveChart,
-  setCachedChartImage,
-  setCachedInteractiveChart
+  setCachedChartImage
 } from '../storage/tableVisualizationCache';
-import {
-  generateAiInteractiveTableChart,
-  generateAiTableChartImage
-} from '../utils/aiTableVisualization';
+import { generateAiTableChartImage } from '../utils/aiTableVisualization';
 import { getProviderDisplayName, type ImageCapableProvider } from '../utils/providerMetadata';
 import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
 
 export type TableSortState = { column: number; direction: 'asc' | 'desc' } | null;
 
-type ViewMode = 'table' | 'interactive-chart' | 'chart-image';
-
-type InteractiveChartState =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; config: ChartConfiguration; title?: string; note?: string; model: string };
+type ViewMode = 'table' | 'chart-image';
 
 type ChartImageState =
   | { status: 'idle' }
@@ -43,9 +29,6 @@ type TableViewerProps = {
   scaleY: number;
   sortState: TableSortState;
   onSortChange: (tableId: string, next: TableSortState) => void;
-  chartProvider: StructuredExtractProvider;
-  chartModel?: string;
-  chartApiKey: string;
   imageProvider: ImageCapableProvider;
   imageModel?: string;
   imageApiKey: string;
@@ -60,9 +43,6 @@ export function TableViewer({
   scaleY,
   sortState,
   onSortChange,
-  chartProvider,
-  chartModel,
-  chartApiKey,
   imageProvider,
   imageModel,
   imageApiKey,
@@ -70,13 +50,10 @@ export function TableViewer({
 }: TableViewerProps): JSX.Element {
   const [localSort, setLocalSort] = useState<TableSortState>(sortState);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
-  const [interactiveChartState, setInteractiveChartState] = useState<InteractiveChartState>({ status: 'idle' });
   const [chartImageState, setChartImageState] = useState<ChartImageState>({ status: 'idle' });
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
   const [panelSize, setPanelSize] = useState<{ width: number; height: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const chartInstanceRef = useRef<Chart | null>(null);
   const isDraggingRef = useRef(false);
   const isResizingRef = useRef(false);
   const dragStartRef = useRef<{ mouseX: number; mouseY: number; elemX: number; elemY: number } | null>(null);
@@ -88,14 +65,9 @@ export function TableViewer({
 
   useEffect(() => {
     setViewMode('table');
-    setInteractiveChartState({ status: 'idle' });
     setChartImageState({ status: 'idle' });
     setDragPosition(null);
     setPanelSize(null);
-    if (chartInstanceRef.current) {
-      chartInstanceRef.current.destroy();
-      chartInstanceRef.current = null;
-    }
   }, [table.id, bounds.minX, bounds.minY, bounds.maxX, bounds.maxY, scaleX, scaleY, pageHeight]);
 
   const canvasPadding = 16 * scaleX;
@@ -136,18 +108,6 @@ export function TableViewer({
     setLocalSort(next);
   };
 
-  const interactiveChartCacheKey = useMemo(
-    () =>
-      generateTableVisualizationCacheKey({
-        tableId: table.id,
-        provider: chartProvider,
-        model: chartModel,
-        variant: 'interactive-chart',
-        cells: table.cells ?? []
-      }),
-    [chartModel, chartProvider, table.cells, table.id]
-  );
-
   const chartImageCacheKey = useMemo(
     () =>
       generateTableVisualizationCacheKey({
@@ -160,80 +120,18 @@ export function TableViewer({
     [imageModel, imageProvider, table.cells, table.id]
   );
 
-  const requestInteractiveChart = useCallback(async (forceRefresh = false) => {
-    if (interactiveChartState.status === 'loading') {
-      return;
-    }
-    if (!hasChartableData) {
-      setInteractiveChartState({ status: 'error', message: 'Not enough table data to generate a chart.' });
-      return;
-    }
-    if (!chartApiKey.trim()) {
-      setInteractiveChartState({
-        status: 'error',
-        message: `${getProviderDisplayName(chartProvider)} access is required to generate a chart.`
-      });
-      return;
-    }
-
-    setInteractiveChartState({ status: 'loading' });
-
-    try {
-      if (forceRefresh) {
-        await deleteCachedTableVisualization(interactiveChartCacheKey);
-      } else {
-        const cached = await getCachedInteractiveChart(interactiveChartCacheKey);
-        if (cached) {
-          setInteractiveChartState({
-            status: 'ready',
-            config: cached.config,
-            title: cached.title,
-            note: cached.note,
-            model: chartModel?.trim() || 'default-model'
-          });
-          return;
-        }
-      }
-
-      const result = await generateAiInteractiveTableChart({
-        table,
-        provider: chartProvider,
-        apiKey: chartApiKey,
-        ...(chartModel?.trim() ? { model: chartModel.trim() } : {})
-      });
-      setInteractiveChartState({
-        status: 'ready',
-        config: result.config,
-        title: result.title,
-        note: result.note,
-        model: result.model
-      });
-      await setCachedInteractiveChart(interactiveChartCacheKey, {
-        config: result.config,
-        title: result.title,
-        note: result.note
-      });
-    } catch (error) {
-      await deleteCachedTableVisualization(interactiveChartCacheKey);
-      setInteractiveChartState({
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Failed to generate interactive chart.'
-      });
-    }
-  }, [chartApiKey, chartModel, chartProvider, hasChartableData, interactiveChartCacheKey, interactiveChartState.status, table]);
-
   const requestChartImage = useCallback(async (forceRefresh = false) => {
     if (chartImageState.status === 'loading') {
       return;
     }
     if (!hasChartableData) {
-      setChartImageState({ status: 'error', message: 'Not enough table data to generate a chart image.' });
+      setChartImageState({ status: 'error', message: 'Not enough table data to generate an infographic.' });
       return;
     }
     if (!imageApiKey.trim()) {
       setChartImageState({
         status: 'error',
-        message: `${getProviderDisplayName(imageProvider)} access is required to generate a chart image.`
+        message: `${getProviderDisplayName(imageProvider)} access is required to generate an infographic.`
       });
       return;
     }
@@ -279,54 +177,16 @@ export function TableViewer({
       await deleteCachedTableVisualization(chartImageCacheKey);
       setChartImageState({
         status: 'error',
-        message: error instanceof Error ? error.message : 'Failed to generate chart image.'
+        message: error instanceof Error ? error.message : 'Failed to generate infographic.'
       });
     }
   }, [chartImageCacheKey, chartImageState.status, hasChartableData, imageApiKey, imageModel, imageProvider, table]);
-
-  useEffect(() => {
-    if (viewMode === 'interactive-chart' && interactiveChartState.status === 'idle') {
-      void requestInteractiveChart();
-    }
-  }, [interactiveChartState.status, requestInteractiveChart, viewMode]);
 
   useEffect(() => {
     if (viewMode === 'chart-image' && chartImageState.status === 'idle') {
       void requestChartImage();
     }
   }, [chartImageState.status, requestChartImage, viewMode]);
-
-  const activeChartConfig = viewMode === 'interactive-chart' && interactiveChartState.status === 'ready'
-    ? interactiveChartState.config
-    : null;
-
-  useEffect(() => {
-    if (!activeChartConfig) {
-      if (chartInstanceRef.current) {
-        chartInstanceRef.current.destroy();
-        chartInstanceRef.current = null;
-      }
-      return;
-    }
-
-    const canvas = chartCanvasRef.current;
-    const context = canvas?.getContext('2d');
-    if (!context) {
-      return;
-    }
-
-    if (chartInstanceRef.current) {
-      chartInstanceRef.current.destroy();
-    }
-    chartInstanceRef.current = new Chart(context, activeChartConfig);
-
-    return () => {
-      if (chartInstanceRef.current) {
-        chartInstanceRef.current.destroy();
-        chartInstanceRef.current = null;
-      }
-    };
-  }, [activeChartConfig]);
 
   const handlePointerStart = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
@@ -417,13 +277,6 @@ export function TableViewer({
     };
   }, []);
 
-  useEffect(() => {
-    if (!chartInstanceRef.current || viewMode !== 'interactive-chart' || interactiveChartState.status !== 'ready') {
-      return;
-    }
-    chartInstanceRef.current.resize();
-  }, [currentSize.height, currentSize.width, interactiveChartState.status, viewMode]);
-
   return (
     <div
       ref={containerRef}
@@ -445,18 +298,6 @@ export function TableViewer({
           icon={<TableIcon />}
           label="Table view"
           variant={viewMode === 'table' ? 'primary' : 'default'}
-        />
-        <OverlayToolbarButton
-          onClick={() => {
-            setViewMode('interactive-chart');
-            if (interactiveChartState.status === 'error') {
-              void requestInteractiveChart(true);
-            }
-          }}
-          icon={<InteractiveChartIcon />}
-          label="AI chart"
-          title={`Generate an interactive chart with ${getProviderDisplayName(chartProvider)}`}
-          variant={viewMode === 'interactive-chart' ? 'primary' : 'default'}
         />
         <OverlayToolbarButton
           onClick={() => {
@@ -530,58 +371,6 @@ export function TableViewer({
                 </table>
               )}
             </>
-          )}
-          {viewMode === 'interactive-chart' && (
-            <div className="table-chart-view table-chart-view--chartjs" role="img" aria-label="AI generated interactive chart">
-              {!hasChartableData && (
-                <div className="canvas-overlay-table-placeholder">Not enough numeric table structure to chart.</div>
-              )}
-              {hasChartableData && interactiveChartState.status === 'loading' && (
-                <div className="canvas-overlay-table-placeholder">
-                  Generating interactive chart with {getProviderDisplayName(chartProvider)}…
-                </div>
-              )}
-              {hasChartableData && interactiveChartState.status === 'error' && (
-                <div className="canvas-overlay-table-placeholder">
-                  <div style={{ marginBottom: 8 }}>{interactiveChartState.message}</div>
-                  <div className="table-chart-actions table-chart-actions--centered">
-                    <button
-                      type="button"
-                      className="table-chart-regenerate-button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void requestInteractiveChart(true);
-                      }}
-                    >
-                      Regenerate chart
-                    </button>
-                  </div>
-                </div>
-              )}
-              {hasChartableData && interactiveChartState.status === 'ready' && (
-                <>
-                  <div className="table-chart-actions">
-                    <button
-                      type="button"
-                      className="table-chart-regenerate-button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void requestInteractiveChart(true);
-                      }}
-                    >
-                      Regenerate chart
-                    </button>
-                  </div>
-                  {interactiveChartState.title && (
-                    <div className="table-chart-heading">{interactiveChartState.title}</div>
-                  )}
-                  <div className="table-chart-canvas-shell">
-                    <canvas ref={chartCanvasRef} />
-                  </div>
-                  {interactiveChartState.note && <div className="table-chart-note">{interactiveChartState.note}</div>}
-                </>
-              )}
-            </div>
           )}
           {viewMode === 'chart-image' && (
             <div className="table-chart-view table-chart-view--image" role="img" aria-label="AI generated infographic chart image">
@@ -695,18 +484,6 @@ function TableIcon(): JSX.Element {
       <line x1="2" y1="11" x2="16" y2="11" stroke="currentColor" strokeWidth="1.3" />
       <line x1="7" y1="3" x2="7" y2="15" stroke="currentColor" strokeWidth="1.3" />
       <line x1="11" y1="3" x2="11" y2="15" stroke="currentColor" strokeWidth="1.3" />
-    </svg>
-  );
-}
-
-function InteractiveChartIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
-      <rect x="2" y="9" width="3" height="6" rx="0.5" fill="currentColor" />
-      <rect x="7" y="5" width="3" height="10" rx="0.5" fill="currentColor" />
-      <rect x="12" y="2" width="3" height="13" rx="0.5" fill="currentColor" />
-      <circle cx="14" cy="4" r="2" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M13.1 4.1l0.7 0.7 1.2-1.6" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

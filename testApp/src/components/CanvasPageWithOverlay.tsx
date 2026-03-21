@@ -2472,9 +2472,6 @@ export function CanvasPageWithOverlay({
                     [tableId]: next
                   }))
                 }
-                chartProvider={overlayAiProvider}
-                chartModel={overlayAiModel}
-                chartApiKey={overlayAiKey}
                 imageProvider={overlayImageProvider}
                 imageModel={overlayImageModel}
                 imageApiKey={overlayImageKey}
