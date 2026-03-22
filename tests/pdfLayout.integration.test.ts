@@ -45,6 +45,16 @@ function loadLayerRedundancyDocument(): PDFDocument {
   return PDFDocument.from(readFileSync(fixtureUrl));
 }
 
+function loadAnthropicRoadmapDocument(): PDFDocument {
+  const fixtureUrl = new URL('../pdfs/2401.05375v1.pdf', import.meta.url);
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
+function loadPaperReducedDocument(): PDFDocument {
+  const fixtureUrl = new URL('../pdfs/Paper reduced size (2).pdf', import.meta.url);
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
 function baselineDelta(item: PDFTextItem): { dx: number; dy: number } {
   return {
     dx: (item.baselineEnd?.x ?? 0) - (item.baselineStart?.x ?? 0),
@@ -160,6 +170,39 @@ describe('PDF layout integration', () => {
     expect(context.textDraws.some((draw) => draw.text.includes('Skip-gram'))).toBe(true);
     expect(context.textDraws.some((draw) => draw.text === 'SUM')).toBe(true);
     expect(context.textDraws.some((draw) => draw.text === 'w(t-2)')).toBe(true);
+  });
+
+  it('preserves named ICCBased fill colors for the page-2 abstract banner in the anthropic roadmap paper', () => {
+    const document = loadAnthropicRoadmapDocument();
+    const page = document.getPage(2);
+
+    expect(page).toBeDefined();
+
+    const bannerPath = page!.pathItems?.find((item) =>
+      item.fillColor !== null &&
+      item.commands.length >= 4 &&
+      item.commands[0]?.op === 'M' &&
+      Math.abs(item.commands[0].x - 71.04) < 0.01 &&
+      Math.abs(item.commands[0].y - 719.52) < 0.01
+    );
+
+    expect(bannerPath).toBeDefined();
+    expect(bannerPath!.fillColor).toEqual([1, 1, 1, 1]);
+  });
+
+  it('preserves JPEG soft masks for page-6 figure images in the reduced paper fixture', () => {
+    const document = loadPaperReducedDocument();
+    const page = document.getPage(6);
+
+    expect(page).toBeDefined();
+
+    const figureImage = page!.imageItems.find((item) => item.name === 'Im2');
+
+    expect(figureImage).toBeDefined();
+    expect(figureImage!.dataUri?.startsWith('data:image/jpeg;base64,')).toBe(true);
+    expect(figureImage!.softMaskPixels).toBeDefined();
+    expect(figureImage!.softMaskPixels!.width).toBe(1906);
+    expect(figureImage!.softMaskPixels!.height).toBe(1396);
   });
 
   it('keeps word2vec page-1 title-case names and title words intact', () => {

@@ -1,10 +1,12 @@
 import type { PDFImageItem, PDFPage } from 'pdf-layout-parser';
 
 type SerializedPdfImageMask = NonNullable<PDFImageItem['mask']>;
+type SerializedPdfImageSoftMaskPixels = NonNullable<PDFImageItem['softMaskPixels']>;
 type SerializedPdfImagePixels = NonNullable<PDFImageItem['pixels']>;
 
-export interface SerializedPdfImageItem extends Omit<PDFImageItem, 'mask' | 'pixels'> {
+export interface SerializedPdfImageItem extends Omit<PDFImageItem, 'mask' | 'softMaskPixels' | 'pixels'> {
   mask?: SerializedPdfImageMask;
+  softMaskPixels?: SerializedPdfImageSoftMaskPixels;
   pixels?: SerializedPdfImagePixels;
 }
 
@@ -38,6 +40,14 @@ function serializePdfImageItem(image: PDFImageItem): SerializedPdfImageItem {
     };
   }
 
+  if (image.softMaskPixels) {
+    serialized.softMaskPixels = {
+      width: image.softMaskPixels.width,
+      height: image.softMaskPixels.height,
+      data: new Uint8ClampedArray(image.softMaskPixels.data)
+    };
+  }
+
   if (image.pixels) {
     serialized.pixels = {
       width: image.pixels.width,
@@ -54,7 +64,7 @@ function serializePdfImageItem(image: PDFImageItem): SerializedPdfImageItem {
 }
 
 function deserializePdfImageItem(image: SerializedPdfImageItem): PDFImageItem {
-  const { mask, pixels, ...rest } = image;
+  const { mask, softMaskPixels, pixels, ...rest } = image;
   const restored: PDFImageItem = { ...rest };
 
   if (mask) {
@@ -63,6 +73,14 @@ function deserializePdfImageItem(image: SerializedPdfImageItem): PDFImageItem {
       height: mask.height,
       data: new Uint8Array(mask.data),
       blackIs1: mask.blackIs1
+    });
+  }
+
+  if (softMaskPixels) {
+    defineHiddenProperty(restored, 'softMaskPixels', {
+      width: softMaskPixels.width,
+      height: softMaskPixels.height,
+      data: new Uint8ClampedArray(softMaskPixels.data)
     });
   }
 

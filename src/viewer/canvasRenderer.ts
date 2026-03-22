@@ -99,6 +99,13 @@ type ScriptAnchorSegment = {
   text: string;
 };
 
+type CachedRasterImage = {
+  source: CanvasImageSource | null;
+  loaded: boolean;
+  failed: boolean;
+  listeners: Set<() => void>;
+};
+
 export class CanvasRenderer {
   private readonly baseOptions: RenderOptions;
 
@@ -107,6 +114,10 @@ export class CanvasRenderer {
   private readonly initialScale: number;
 
   private currentScale: number;
+
+  private readonly rasterImageCache = new Map<string, CachedRasterImage>();
+
+  private readonly maskedRasterSourceCache = new WeakMap<Uint8ClampedArray, CanvasImageSource>();
 
   constructor(options: RenderOptions = {}) {
     this.baseOptions = { ...options };
@@ -147,6 +158,34 @@ export class CanvasRenderer {
 
   async preparePageRangeFonts(document: PDFDocument, pageNumbers: Iterable<number>): Promise<boolean> {
     return prepareEmbeddedFontsForPages(document, pageNumbers);
+  }
+
+  async preparePageImages(document: PDFDocument, pageNumber: number): Promise<boolean> {
+    return this.preparePageRangeImages(document, [pageNumber]);
+  }
+
+  async preparePageRangeImages(document: PDFDocument, pageNumbers: Iterable<number>): Promise<boolean> {
+    const imageUris = new Set<string>();
+    for (const pageNumber of pageNumbers) {
+      const page = document.getPage(pageNumber);
+      if (!page?.imageItems) {
+        continue;
+      }
+      for (const image of page.imageItems) {
+        if (image.dataUri) {
+          imageUris.add(image.dataUri);
+        }
+      }
+    }
+
+    if (imageUris.size === 0) {
+      return false;
+    }
+
+    const results = await Promise.all(
+      [...imageUris].map(async (dataUri) => this.prepareRasterImage(dataUri))
+    );
+    return results.some(Boolean);
   }
 
   render(canvas: CanvasLike, document: PDFDocument, pageNumber = 1): void {
@@ -538,28 +577,40 @@ export class CanvasRenderer {
           ? image.bounds.minY * options.scale + metrics.offsetY
           : metrics.offsetY - image.bounds.maxY * options.scale;
 
-      if (image.dataUri && typeof Image !== 'undefined') {
-        const imageElement = new Image();
-        let hasDrawn = false;
-        const handleLoad = () => {
-          if (hasDrawn) {
+      if (image.dataUri) {
+        const cacheEntry = this.getOrCreateRasterImage(image.dataUri);
+        const drawLoadedImage = () => {
+          if (!cacheEntry.source) {
             return;
           }
-          hasDrawn = true;
+          const renderedSource = this.resolveRenderableRasterSource(image, cacheEntry.source);
+          if (!renderedSource) {
+            return;
+          }
           // Apply scale transform for async image loading since context.restore() may have run
           context.save();
           context.setTransform(1, 0, 0, 1, 0, 0);
           context.scale(asyncScale, asyncScale);
           this.renderWithClipPaths(context, image.clipPaths, metrics, () => {
-            context.drawImage(imageElement, x, y, width, height);
+            context.drawImage(renderedSource, x, y, width, height);
           });
           context.restore();
           redrawOverlays();
         };
-        imageElement.onload = handleLoad;
-        imageElement.src = image.dataUri!;
-        if (imageElement.complete) {
-          handleLoad();
+
+        if (cacheEntry.loaded && cacheEntry.source) {
+          const renderedSource = this.resolveRenderableRasterSource(image, cacheEntry.source);
+          if (!renderedSource) {
+            continue;
+          }
+          this.renderWithClipPaths(context, image.clipPaths, metrics, () => {
+            context.drawImage(renderedSource, x, y, width, height);
+          });
+          continue;
+        }
+
+        if (!cacheEntry.failed) {
+          cacheEntry.listeners.add(drawLoadedImage);
         }
         continue;
       }
@@ -583,6 +634,149 @@ export class CanvasRenderer {
     }
 
     drawMaskLayers();
+  }
+
+  private getOrCreateRasterImage(dataUri: string): CachedRasterImage {
+    const cached = this.rasterImageCache.get(dataUri);
+    if (cached) {
+      return cached;
+    }
+
+    const entry: CachedRasterImage = {
+      source: null,
+      loaded: false,
+      failed: false,
+      listeners: new Set()
+    };
+
+    const notifyListeners = (): void => {
+      const listeners = [...entry.listeners];
+      entry.listeners.clear();
+      for (const listener of listeners) {
+        listener();
+      }
+    };
+
+    const finalizeLoaded = (source: CanvasImageSource): void => {
+      entry.source = source;
+      entry.loaded = true;
+      notifyListeners();
+    };
+
+    const startImageFallback = (): void => {
+      if (typeof Image === 'undefined') {
+        entry.failed = true;
+        notifyListeners();
+        return;
+      }
+      const element = new Image();
+      element.onload = () => {
+        finalizeLoaded(element);
+      };
+      element.onerror = () => {
+        entry.failed = true;
+        notifyListeners();
+      };
+      element.src = dataUri;
+      if (element.complete) {
+        finalizeLoaded(element);
+      }
+    };
+
+    const blob = this.dataUriToBlob(dataUri);
+    if (blob && typeof createImageBitmap === 'function') {
+      createImageBitmap(blob)
+        .then((bitmap) => {
+          finalizeLoaded(bitmap);
+        })
+        .catch(() => {
+          startImageFallback();
+        });
+    } else {
+      startImageFallback();
+    }
+
+    this.rasterImageCache.set(dataUri, entry);
+    return entry;
+  }
+
+  private async prepareRasterImage(dataUri: string): Promise<boolean> {
+    const entry = this.getOrCreateRasterImage(dataUri);
+    if (entry.loaded && entry.source) {
+      return true;
+    }
+    if (entry.failed) {
+      return false;
+    }
+
+    return new Promise<boolean>((resolve) => {
+      const settle = (): void => {
+        resolve(entry.loaded && Boolean(entry.source));
+      };
+      entry.listeners.add(settle);
+    });
+  }
+
+  private dataUriToBlob(dataUri: string): Blob | undefined {
+    if (typeof Blob === 'undefined') {
+      return undefined;
+    }
+
+    const match = dataUri.match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/);
+    if (!match) {
+      return undefined;
+    }
+
+    const mimeType = match[1] || 'application/octet-stream';
+    const isBase64 = Boolean(match[2]);
+    const payload = match[3] ?? '';
+
+    if (isBase64) {
+      if (typeof atob !== 'function') {
+        return undefined;
+      }
+      const binary = atob(payload);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return new Blob([bytes], { type: mimeType });
+    }
+
+    return new Blob([decodeURIComponent(payload)], { type: mimeType });
+  }
+
+  private resolveRenderableRasterSource(
+    image: PDFImageItem,
+    baseSource: CanvasImageSource
+  ): CanvasImageSource | undefined {
+    if (!image.softMaskPixels) {
+      return baseSource;
+    }
+
+    const cached = this.maskedRasterSourceCache.get(image.softMaskPixels.data);
+    if (cached) {
+      return cached;
+    }
+
+    const scratch = createScratchCanvas(image.softMaskPixels.width, image.softMaskPixels.height);
+    if (!scratch) {
+      return undefined;
+    }
+
+    const { canvas, context } = scratch;
+    context.clearRect(0, 0, image.softMaskPixels.width, image.softMaskPixels.height);
+    context.drawImage(baseSource, 0, 0, image.softMaskPixels.width, image.softMaskPixels.height);
+    const imageData = context.getImageData(0, 0, image.softMaskPixels.width, image.softMaskPixels.height);
+    const rgba = imageData.data;
+    const alphaSource = image.softMaskPixels.data;
+    const totalPixels = image.softMaskPixels.width * image.softMaskPixels.height;
+    for (let index = 0; index < totalPixels; index += 1) {
+      rgba[index * 4 + 3] = alphaSource[index * 4] ?? 255;
+    }
+    context.putImageData(imageData, 0, 0);
+    this.maskedRasterSourceCache.set(image.softMaskPixels.data, canvas);
+    return canvas;
   }
 
   private readSolidMaskPaint(mask: NonNullable<PDFImageItem['mask']>): boolean | undefined {

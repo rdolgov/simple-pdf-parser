@@ -47,6 +47,10 @@ class MockContext {
     this.operations.push(`fillText:${text}@${x},${y}`);
   }
 
+  drawImage(_image: unknown, x: number, y: number, width: number, height: number) {
+    this.operations.push(`drawImage:${x},${y},${width},${height}`);
+  }
+
   measureText(text: string) {
     return { width: Math.max(text.length * 10, 1) } as TextMetrics;
   }
@@ -449,6 +453,293 @@ describe('CanvasRenderer', () => {
     renderer.render(canvas, document, 1);
 
     expect(contextImpl.operations.some((entry) => entry.startsWith('fillRect:18,27,80,1'))).toBe(true);
+  });
+
+  it('retains HTML image elements so delayed image loads redraw and future renders reuse the loaded image', () => {
+    const originalImage = globalThis.Image;
+
+    class FakeImage {
+      static instances: FakeImage[] = [];
+      onload: null | (() => void) = null;
+      onerror: null | (() => void) = null;
+      complete = false;
+      src = '';
+
+      constructor() {
+        FakeImage.instances.push(this);
+      }
+
+      triggerLoad(): void {
+        this.complete = true;
+        this.onload?.();
+      }
+    }
+
+    globalThis.Image = FakeImage as unknown as typeof Image;
+
+    try {
+      const contextImpl = new MockContext();
+      const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+      const layout = {
+        pages: [
+          {
+            number: 1,
+            textItems: [],
+            imageItems: [
+              {
+                name: 'Im1',
+                bounds: { minX: 10, minY: 40, maxX: 90, maxY: 80 },
+                width: 80,
+                height: 40,
+                dataUri: 'data:image/png;base64,AAAA'
+              }
+            ],
+            lineItems: [],
+            rectItems: [],
+            size: { width: 100, height: 100 }
+          }
+        ]
+      };
+
+      const document = new PDFDocument(layout);
+      const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+      renderer.render(canvas, document, 1);
+
+      expect(FakeImage.instances).toHaveLength(1);
+      expect(contextImpl.operations.some((entry) => entry.startsWith('drawImage:'))).toBe(false);
+
+      FakeImage.instances[0].triggerLoad();
+
+      expect(contextImpl.operations.some((entry) => entry.startsWith('drawImage:18,28,80,40'))).toBe(true);
+
+      const drawCountAfterLoad = contextImpl.operations.filter((entry) => entry.startsWith('drawImage:')).length;
+      renderer.render(canvas, document, 1);
+
+      expect(FakeImage.instances).toHaveLength(1);
+      expect(contextImpl.operations.filter((entry) => entry.startsWith('drawImage:')).length).toBeGreaterThan(drawCountAfterLoad);
+    } finally {
+      globalThis.Image = originalImage;
+    }
+  });
+
+  it('renders data-uri images in worker-like environments without DOM Image by using createImageBitmap', async () => {
+    const originalImage = globalThis.Image;
+    const originalFetch = globalThis.fetch;
+    const originalCreateImageBitmap = globalThis.createImageBitmap;
+
+    globalThis.Image = undefined as unknown as typeof Image;
+    globalThis.fetch = (async () => ({
+      blob: async () => new Blob(['test'], { type: 'image/png' })
+    })) as typeof fetch;
+    globalThis.createImageBitmap = (async () => ({ kind: 'bitmap' } as unknown as ImageBitmap)) as typeof createImageBitmap;
+
+    try {
+      const contextImpl = new MockContext();
+      const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+      const layout = {
+        pages: [
+          {
+            number: 1,
+            textItems: [],
+            imageItems: [
+              {
+                name: 'ImWorker',
+                bounds: { minX: 10, minY: 40, maxX: 90, maxY: 80 },
+                width: 80,
+                height: 40,
+                dataUri: 'data:image/png;base64,AAAA'
+              }
+            ],
+            lineItems: [],
+            rectItems: [],
+            size: { width: 100, height: 100 }
+          }
+        ]
+      };
+
+      const document = new PDFDocument(layout);
+      const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+      renderer.render(canvas, document, 1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(contextImpl.operations.some((entry) => entry.startsWith('drawImage:18,28,80,40'))).toBe(true);
+    } finally {
+      globalThis.Image = originalImage;
+      globalThis.fetch = originalFetch;
+      globalThis.createImageBitmap = originalCreateImageBitmap;
+    }
+  });
+
+  it('preloads raster images so the first stable render includes them synchronously', async () => {
+    const originalImage = globalThis.Image;
+
+    class FakeImage {
+      static instances: FakeImage[] = [];
+      onload: null | (() => void) = null;
+      onerror: null | (() => void) = null;
+      complete = false;
+      src = '';
+
+      constructor() {
+        FakeImage.instances.push(this);
+      }
+
+      triggerLoad(): void {
+        this.complete = true;
+        this.onload?.();
+      }
+    }
+
+    globalThis.Image = FakeImage as unknown as typeof Image;
+
+    try {
+      const contextImpl = new MockContext();
+      const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+      const layout = {
+        pages: [
+          {
+            number: 1,
+            textItems: [],
+            imageItems: [
+              {
+                name: 'ImPreload',
+                bounds: { minX: 10, minY: 40, maxX: 90, maxY: 80 },
+                width: 80,
+                height: 40,
+                dataUri: 'data:image/png;base64,AAAA'
+              }
+            ],
+            lineItems: [],
+            rectItems: [],
+            size: { width: 100, height: 100 }
+          }
+        ]
+      };
+
+      const document = new PDFDocument(layout);
+      const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+      const preloadPromise = renderer.preparePageImages(document, 1);
+      expect(FakeImage.instances).toHaveLength(1);
+      FakeImage.instances[0].triggerLoad();
+      await preloadPromise;
+
+      renderer.render(canvas, document, 1);
+
+      expect(contextImpl.operations.some((entry) => entry.startsWith('drawImage:18,28,80,40'))).toBe(true);
+    } finally {
+      globalThis.Image = originalImage;
+    }
+  });
+
+  it('applies JPEG soft masks when drawing raster image sources', async () => {
+    const originalImage = globalThis.Image;
+    const originalDocument = globalThis.document;
+
+    class FakeImage {
+      static instances: FakeImage[] = [];
+      onload: null | (() => void) = null;
+      onerror: null | (() => void) = null;
+      complete = false;
+      src = '';
+
+      constructor() {
+        FakeImage.instances.push(this);
+      }
+
+      triggerLoad(): void {
+        this.complete = true;
+        this.onload?.();
+      }
+    }
+
+    const initialPixels = new Uint8ClampedArray([
+      10, 20, 30, 255,
+      40, 50, 60, 255
+    ]);
+    let compositedPixels: Uint8ClampedArray | null = null;
+    const scratchContext = {
+      clearRect() {},
+      drawImage() {},
+      getImageData() {
+        return {
+          data: new Uint8ClampedArray(initialPixels),
+          width: 2,
+          height: 1
+        } as ImageData;
+      },
+      putImageData(imageData: ImageData) {
+        compositedPixels = new Uint8ClampedArray(imageData.data);
+      }
+    };
+    const scratchCanvas = {
+      width: 0,
+      height: 0,
+      getContext(type: '2d') {
+        return type === '2d' ? (scratchContext as unknown as CanvasRenderingContext2D) : null;
+      }
+    };
+
+    globalThis.Image = FakeImage as unknown as typeof Image;
+    globalThis.document = {
+      createElement: () => scratchCanvas
+    } as unknown as Document;
+
+    try {
+      const contextImpl = new MockContext();
+      const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+      const layout = {
+        pages: [
+          {
+            number: 1,
+            textItems: [],
+            imageItems: [
+              {
+                name: 'ImSoftMask',
+                bounds: { minX: 10, minY: 40, maxX: 90, maxY: 80 },
+                width: 80,
+                height: 40,
+                dataUri: 'data:image/jpeg;base64,AAAA',
+                softMaskPixels: {
+                  width: 2,
+                  height: 1,
+                  data: new Uint8ClampedArray([
+                    0, 0, 0, 0,
+                    255, 255, 255, 255
+                  ])
+                }
+              }
+            ],
+            lineItems: [],
+            rectItems: [],
+            size: { width: 100, height: 100 }
+          }
+        ]
+      };
+
+      const document = new PDFDocument(layout);
+      const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+      const preloadPromise = renderer.preparePageImages(document, 1);
+      FakeImage.instances[0].triggerLoad();
+      await preloadPromise;
+
+      renderer.render(canvas, document, 1);
+
+      expect(compositedPixels).not.toBeNull();
+      expect(compositedPixels![3]).toBe(0);
+      expect(compositedPixels![7]).toBe(255);
+      expect(contextImpl.operations.some((entry) => entry.startsWith('drawImage:18,28,80,40'))).toBe(true);
+    } finally {
+      globalThis.Image = originalImage;
+      globalThis.document = originalDocument;
+    }
   });
 
   it('uses a small thin-stroke floor instead of forcing sub-point strokes to 0.5pt', () => {

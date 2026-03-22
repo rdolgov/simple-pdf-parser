@@ -344,8 +344,11 @@ export default function App(): JSX.Element {
         };
 
         renderMainThreadPages();
-        const didLoadEmbeddedFonts = await renderer.preparePageRangeFonts(readyDocument, mainThreadPageNumbers);
-        if (cancelled || !didLoadEmbeddedFonts) {
+        const [didLoadEmbeddedFonts, didLoadPageImages] = await Promise.all([
+          renderer.preparePageRangeFonts(readyDocument, mainThreadPageNumbers),
+          renderer.preparePageRangeImages(readyDocument, mainThreadPageNumbers)
+        ]);
+        if (cancelled || (!didLoadEmbeddedFonts && !didLoadPageImages)) {
           return;
         }
         renderMainThreadPages();

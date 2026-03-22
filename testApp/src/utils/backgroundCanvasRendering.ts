@@ -1,3 +1,5 @@
+import type { PDFPage } from 'pdf-layout-parser';
+
 const DEFAULT_PAGE_PADDING = 16;
 
 export const MAIN_THREAD_PAGE_RENDER_COUNT = 5;
@@ -12,6 +14,10 @@ export function supportsBackgroundCanvasRendering(): boolean {
   }
 
   return typeof HTMLCanvasElement.prototype.transferControlToOffscreen === 'function';
+}
+
+export function pageRequiresMainThreadRendering(page: PDFPage): boolean {
+  return page.imageItems.some((image) => Boolean(image.dataUri) && !image.pixels);
 }
 
 export function computeCanvasDisplaySize(

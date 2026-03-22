@@ -5,6 +5,7 @@ import type { BackgroundRenderProgress, CanvasPageRenderState, ViewMode } from '
 import {
   computeCanvasDisplaySize,
   MAIN_THREAD_PAGE_RENDER_COUNT,
+  pageRequiresMainThreadRendering,
   supportsBackgroundCanvasRendering
 } from '../utils/backgroundCanvasRendering';
 import { buildViewportPriorityPageOrder } from '../utils/backgroundPageScheduling';
@@ -80,9 +81,24 @@ export function useCanvasRenderCoordinator({
     pageSizesRef.current = pageSizes;
   }, [pageSizes]);
 
+  const mainThreadPageNumbers = useMemo(() => {
+    const pageNumbers = new Set<number>();
+    document?.pages.forEach((page) => {
+      if (page.number <= MAIN_THREAD_PAGE_RENDER_COUNT || pageRequiresMainThreadRendering(page)) {
+        pageNumbers.add(page.number);
+      }
+    });
+    return pageNumbers;
+  }, [document]);
+  const mainThreadPageNumbersRef = useRef(mainThreadPageNumbers);
+
   useEffect(() => {
     zoomRef.current = zoom;
   }, [zoom]);
+
+  useEffect(() => {
+    mainThreadPageNumbersRef.current = mainThreadPageNumbers;
+  }, [mainThreadPageNumbers]);
 
   const totalPages = document?.pages.length ?? 0;
 
@@ -93,16 +109,16 @@ export function useCanvasRenderCoordinator({
     if (viewMode !== 'canvas' && viewMode !== 'focus-pdf') {
       return false;
     }
-    return supportsBackgroundCanvasRendering() && document.pages.length > MAIN_THREAD_PAGE_RENDER_COUNT;
-  }, [document, pdfData, viewMode]);
+    return supportsBackgroundCanvasRendering() && document.pages.some((page) => !mainThreadPageNumbers.has(page.number));
+  }, [document, mainThreadPageNumbers, pdfData, viewMode]);
 
   useEffect(() => {
     shouldUseBackgroundRenderingRef.current = shouldUseBackgroundRendering;
   }, [shouldUseBackgroundRendering]);
 
   const shouldRenderPageOnMainThread = useCallback(
-    (pageNumber: number) => !shouldUseBackgroundRendering || pageNumber <= MAIN_THREAD_PAGE_RENDER_COUNT,
-    [shouldUseBackgroundRendering]
+    (pageNumber: number) => !shouldUseBackgroundRendering || mainThreadPageNumbers.has(pageNumber),
+    [mainThreadPageNumbers, shouldUseBackgroundRendering]
   );
 
   const setBackgroundPageRenderState = useCallback(
@@ -239,7 +255,7 @@ export function useCanvasRenderCoordinator({
 
         entries.forEach((entry) => {
           const pageNumber = Number(entry.target.getAttribute('data-page-number'));
-          if (!Number.isFinite(pageNumber) || pageNumber <= MAIN_THREAD_PAGE_RENDER_COUNT) {
+          if (!Number.isFinite(pageNumber) || mainThreadPageNumbersRef.current.has(pageNumber)) {
             return;
           }
 
@@ -430,7 +446,7 @@ export function useCanvasRenderCoordinator({
     }
 
     canvasRefs.current.forEach((element, pageNumber) => {
-      if (pageNumber <= MAIN_THREAD_PAGE_RENDER_COUNT) {
+      if (mainThreadPageNumbersRef.current.has(pageNumber)) {
         return;
       }
       backgroundCanvasElements.current.set(pageNumber, element);
@@ -455,7 +471,7 @@ export function useCanvasRenderCoordinator({
           canvasRefs.current.delete(pageNumber);
         }
 
-        if (shouldUseBackgroundRenderingRef.current && pageNumber > MAIN_THREAD_PAGE_RENDER_COUNT) {
+        if (shouldUseBackgroundRenderingRef.current && !mainThreadPageNumbersRef.current.has(pageNumber)) {
           if (element) {
             backgroundCanvasElements.current.set(pageNumber, element);
             setBackgroundPageRenderState(
@@ -512,7 +528,7 @@ export function useCanvasRenderCoordinator({
 
   const getPageRenderState = useCallback(
     (pageNumber: number): CanvasPageRenderState => {
-      if (!shouldUseBackgroundRendering || pageNumber <= MAIN_THREAD_PAGE_RENDER_COUNT) {
+      if (!shouldUseBackgroundRendering || mainThreadPageNumbers.has(pageNumber)) {
         return 'ready';
       }
 

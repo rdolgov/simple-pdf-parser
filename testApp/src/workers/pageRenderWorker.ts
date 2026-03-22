@@ -162,9 +162,12 @@ async function refinePageFonts(
   }
 
   try {
-    const didLoadEmbeddedFonts = await renderer.preparePageFonts(documentModel, pageNumber);
+    const [didLoadEmbeddedFonts, didLoadPageImages] = await Promise.all([
+      renderer.preparePageFonts(documentModel, pageNumber),
+      renderer.preparePageImages(documentModel, pageNumber)
+    ]);
     if (
-      !didLoadEmbeddedFonts ||
+      (!didLoadEmbeddedFonts && !didLoadPageImages) ||
       generation !== activeGeneration ||
       attachedCanvases.get(pageNumber) !== canvas ||
       !documentModel ||

@@ -63,6 +63,8 @@ import type {
   FontMap,
   ImageResource,
   ImageMap,
+  ColorSpaceMap,
+  GraphicsColorSpaceResource,
   ResourceContext,
   ParseContext,
   StreamLengthInfo,
@@ -635,7 +637,8 @@ export class PDFParser {
       const fallbackContext: ResourceContext = {
         fonts: new Map(),
         forms: new Map(),
-        images: new Map()
+        images: new Map(),
+        colorSpaces: new Map()
       };
       const extracted = this.parseTextStream(rawContent, fallbackContext, objects, rawContent);
       const finalizedTextItems = this.finalizeTextItems(this.assignPaintOrder(extracted.textItems));
@@ -753,8 +756,69 @@ export class PDFParser {
       }
       return value as number;
     };
+    const convertColorOperandsToRgba = (
+      colorSpace: GraphicsColorSpaceResource,
+      operands: number[]
+    ): [number, number, number, number] => {
+      const clamped = operands.map((value) => clampColor(value));
+      const effectiveKind = colorSpace.kind === 'ICCBased'
+        ? (colorSpace.alternate ?? this.deviceColorSpaceForComponentCount(colorSpace.componentCount))
+        : colorSpace.kind;
+
+      if (effectiveKind === 'DeviceGray') {
+        const gray = clamped[0] ?? 0;
+        return [gray, gray, gray, 1];
+      }
+
+      if (effectiveKind === 'DeviceCMYK') {
+        const c = clamped[0] ?? 0;
+        const m = clamped[1] ?? 0;
+        const y = clamped[2] ?? 0;
+        const kValue = clamped[3] ?? 0;
+        return [
+          1 - Math.min(1, c + kValue),
+          1 - Math.min(1, m + kValue),
+          1 - Math.min(1, y + kValue),
+          1
+        ];
+      }
+
+      const r = clamped[0] ?? 0;
+      const g = clamped[1] ?? r;
+      const b = clamped[2] ?? g;
+      return [r, g, b, 1];
+    };
+    const resolveGraphicsColorSpace = (
+      colorSpaceName: string | undefined
+    ): GraphicsColorSpaceResource | undefined => {
+      if (!colorSpaceName) {
+        return undefined;
+      }
+      return context.colorSpaces.get(colorSpaceName) ?? this.buildGraphicsColorSpaceResourceFromName(colorSpaceName);
+    };
+    const popColorOperands = (componentCount: number): number[] | undefined => {
+      if (componentCount <= 0) {
+        return [];
+      }
+      const operands: number[] = [];
+      for (let stackIndex = stack.length - 1; stackIndex >= 0 && operands.length < componentCount; stackIndex -= 1) {
+        const value = stack[stackIndex];
+        if (typeof value === 'number') {
+          operands.unshift(value);
+        }
+      }
+      return operands.length === componentCount ? operands : undefined;
+    };
     let currentFillColor: [number, number, number, number] = [0, 0, 0, 1];
     let currentStrokeColor: [number, number, number, number] = [0, 0, 0, 1];
+    let currentFillColorSpace: GraphicsColorSpaceResource = {
+      kind: 'DeviceGray',
+      componentCount: 1
+    };
+    let currentStrokeColorSpace: GraphicsColorSpaceResource = {
+      kind: 'DeviceGray',
+      componentCount: 1
+    };
     let currentLineWidth = 1;
     let currentLineCap = mapPdfLineCap(0);
     let currentLineJoin = mapPdfLineJoin(0);
@@ -765,6 +829,8 @@ export class PDFParser {
       matrix: Matrix;
       fillColor: [number, number, number, number];
       strokeColor: [number, number, number, number];
+      fillColorSpace: GraphicsColorSpaceResource;
+      strokeColorSpace: GraphicsColorSpaceResource;
       lineWidth: number;
       lineCap: PDFPathItem['lineCap'];
       lineJoin: PDFPathItem['lineJoin'];
@@ -775,6 +841,14 @@ export class PDFParser {
       matrix: identityMatrix(),
       fillColor: [0, 0, 0, 1],
       strokeColor: [0, 0, 0, 1],
+      fillColorSpace: {
+        kind: 'DeviceGray',
+        componentCount: 1
+      },
+      strokeColorSpace: {
+        kind: 'DeviceGray',
+        componentCount: 1
+      },
       lineWidth: 1,
       lineCap: mapPdfLineCap(0),
       lineJoin: mapPdfLineJoin(0),
@@ -940,6 +1014,13 @@ export class PDFParser {
             configurable: false
           });
         }
+        if (rendered?.softMaskPixels) {
+          Object.defineProperty(imageItem, 'softMaskPixels', {
+            value: rendered.softMaskPixels,
+            enumerable: false,
+            configurable: false
+          });
+        }
         if (rendered?.pixels) {
           Object.defineProperty(imageItem, 'pixels', {
             value: rendered.pixels,
@@ -961,6 +1042,8 @@ export class PDFParser {
           matrix: cloneMatrix(current),
           fillColor: [...currentFillColor] as [number, number, number, number],
           strokeColor: [...currentStrokeColor] as [number, number, number, number],
+          fillColorSpace: { ...currentFillColorSpace },
+          strokeColorSpace: { ...currentStrokeColorSpace },
           lineWidth: currentLineWidth,
           lineCap: currentLineCap,
           lineJoin: currentLineJoin,
@@ -982,6 +1065,8 @@ export class PDFParser {
           const restored = gStateStack[gStateStack.length - 1];
           currentFillColor = [...restored.fillColor] as [number, number, number, number];
           currentStrokeColor = [...restored.strokeColor] as [number, number, number, number];
+          currentFillColorSpace = { ...restored.fillColorSpace };
+          currentStrokeColorSpace = { ...restored.strokeColorSpace };
           currentLineWidth = restored.lineWidth;
           currentLineCap = restored.lineCap;
           currentLineJoin = restored.lineJoin;
@@ -1023,6 +1108,10 @@ export class PDFParser {
         const b = clampColor(this.popNumber(stack));
         const g = clampColor(this.popNumber(stack));
         const r = clampColor(this.popNumber(stack));
+        currentFillColorSpace = {
+          kind: 'DeviceRGB',
+          componentCount: 3
+        };
         currentFillColor = [r, g, b, 1];
         index += 2;
         stack.length = 0;
@@ -1033,6 +1122,10 @@ export class PDFParser {
         const b = clampColor(this.popNumber(stack));
         const g = clampColor(this.popNumber(stack));
         const r = clampColor(this.popNumber(stack));
+        currentStrokeColorSpace = {
+          kind: 'DeviceRGB',
+          componentCount: 3
+        };
         currentStrokeColor = [r, g, b, 1];
         index += 2;
         stack.length = 0;
@@ -1042,6 +1135,10 @@ export class PDFParser {
       // Gray color - lowercase 'g' = fill, uppercase 'G' = stroke
       if (this.isOperatorAt(streamContent, index, 'G')) {
         const gray = clampColor(this.popNumber(stack));
+        currentStrokeColorSpace = {
+          kind: 'DeviceGray',
+          componentCount: 1
+        };
         currentStrokeColor = [gray, gray, gray, 1];
         index += 1;
         stack.length = 0;
@@ -1059,6 +1156,10 @@ export class PDFParser {
         const r = 1 - Math.min(1, c + kValue);
         const g = 1 - Math.min(1, m + kValue);
         const b = 1 - Math.min(1, y + kValue);
+        currentStrokeColorSpace = {
+          kind: 'DeviceCMYK',
+          componentCount: 4
+        };
         currentStrokeColor = [r, g, b, 1];
         index += 1;
         stack.length = 0;
@@ -1073,8 +1174,46 @@ export class PDFParser {
         const r = 1 - Math.min(1, c + kValue);
         const g = 1 - Math.min(1, m + kValue);
         const b = 1 - Math.min(1, y + kValue);
+        currentFillColorSpace = {
+          kind: 'DeviceCMYK',
+          componentCount: 4
+        };
         currentFillColor = [r, g, b, 1];
         index += 1;
+        stack.length = 0;
+        continue;
+      }
+
+      if (this.isOperatorAt(streamContent, index, 'cs')) {
+        currentFillColorSpace = resolveGraphicsColorSpace(this.popName(stack)) ?? currentFillColorSpace;
+        index += 2;
+        stack.length = 0;
+        continue;
+      }
+
+      if (this.isOperatorAt(streamContent, index, 'CS')) {
+        currentStrokeColorSpace = resolveGraphicsColorSpace(this.popName(stack)) ?? currentStrokeColorSpace;
+        index += 2;
+        stack.length = 0;
+        continue;
+      }
+
+      if (this.isOperatorAt(streamContent, index, 'scn') || this.isOperatorAt(streamContent, index, 'sc')) {
+        const operands = popColorOperands(currentFillColorSpace.componentCount);
+        if (operands) {
+          currentFillColor = convertColorOperandsToRgba(currentFillColorSpace, operands);
+        }
+        index += this.isOperatorAt(streamContent, index, 'scn') ? 3 : 2;
+        stack.length = 0;
+        continue;
+      }
+
+      if (this.isOperatorAt(streamContent, index, 'SCN') || this.isOperatorAt(streamContent, index, 'SC')) {
+        const operands = popColorOperands(currentStrokeColorSpace.componentCount);
+        if (operands) {
+          currentStrokeColor = convertColorOperandsToRgba(currentStrokeColorSpace, operands);
+        }
+        index += this.isOperatorAt(streamContent, index, 'SCN') ? 3 : 2;
         stack.length = 0;
         continue;
       }
@@ -1103,10 +1242,15 @@ export class PDFParser {
                   for (const [imageName, resource] of formContext.images.entries()) {
                     mergedImages.set(imageName, resource);
                   }
+                  const mergedColorSpaces = new Map(context.colorSpaces);
+                  for (const [colorSpaceName, resource] of formContext.colorSpaces.entries()) {
+                    mergedColorSpaces.set(colorSpaceName, resource);
+                  }
                   const combinedContext: ParseContext = {
                     fonts: mergedFonts,
                     forms: mergedForms,
-                    images: mergedImages
+                    images: mergedImages,
+                    colorSpaces: mergedColorSpaces
                   };
                   const currentMatrix = graphicsStack[graphicsStack.length - 1];
                   const nested = this.parseTextStream(formStream, combinedContext, objects, rawContent, visitedForms);
@@ -1171,6 +1315,13 @@ export class PDFParser {
                 if (rendered.mask) {
                   Object.defineProperty(imageItem, 'mask', {
                     value: rendered.mask,
+                    enumerable: false,
+                    configurable: false
+                  });
+                }
+                if (rendered.softMaskPixels) {
+                  Object.defineProperty(imageItem, 'softMaskPixels', {
+                    value: rendered.softMaskPixels,
                     enumerable: false,
                     configurable: false
                   });
@@ -2374,6 +2525,7 @@ export class PDFParser {
     const fonts: FontMap = new Map();
     const forms: Map<string, PDFRawObject> = new Map();
     const images: ImageMap = new Map();
+    const colorSpaces: ColorSpaceMap = new Map();
     const resourceQueue: string[] = [];
     const visitedResourceKeys = new Set<string>();
     const visitedInlineResources = new Set<string>();
@@ -2393,6 +2545,7 @@ export class PDFParser {
         fonts,
         forms,
         images,
+        colorSpaces,
         resourceQueue,
         visitedResourceKeys,
         visitedInlineResources,
@@ -2426,6 +2579,7 @@ export class PDFParser {
         fonts,
         forms,
         images,
+        colorSpaces,
         resourceQueue,
         visitedResourceKeys,
         visitedInlineResources,
@@ -2435,7 +2589,7 @@ export class PDFParser {
       );
     }
 
-    return { fonts, forms, images };
+    return { fonts, forms, images, colorSpaces };
   }
 
   private extractResourcesFromDictionary(
@@ -2445,6 +2599,7 @@ export class PDFParser {
     fonts: FontMap,
     forms: Map<string, PDFRawObject>,
     images: ImageMap,
+    colorSpaces: ColorSpaceMap,
     resourceQueue: string[],
     visitedResourceKeys: Set<string>,
     visitedInlineResources: Set<string>,
@@ -2518,6 +2673,11 @@ export class PDFParser {
       }
     }
 
+    const colorSpaceSection = this.resolveResourceSection(dictionarySource, 'ColorSpace', objects);
+    if (colorSpaceSection) {
+      this.extractColorSpaceResources(colorSpaceSection, objects, colorSpaces);
+    }
+
     this.enqueueResourceDictionaries(
       dictionarySource,
       objects,
@@ -2525,6 +2685,197 @@ export class PDFParser {
       visitedResourceKeys,
       visitedInlineResources
     );
+  }
+
+  private extractColorSpaceResources(
+    sectionSource: string,
+    objects: Map<string, PDFRawObject>,
+    colorSpaces: ColorSpaceMap
+  ): void {
+    let index = 0;
+
+    while (index < sectionSource.length) {
+      index = skipWhitespace(sectionSource, index);
+      if (index >= sectionSource.length) {
+        break;
+      }
+      if (sectionSource[index] !== '/') {
+        index += 1;
+        continue;
+      }
+
+      const { value: resourceName, nextIndex: nameEnd } = readName(sectionSource, index + 1);
+      index = skipWhitespace(sectionSource, nameEnd + 1);
+      if (!resourceName || index >= sectionSource.length) {
+        continue;
+      }
+
+      let source: string | undefined;
+      if (sectionSource[index] === '[') {
+        const endIndex = this.skipArray(sectionSource, index);
+        source = sectionSource.slice(index, endIndex);
+        index = endIndex;
+      } else if (sectionSource[index] === '/') {
+        const { value, nextIndex } = readName(sectionSource, index + 1);
+        source = `/${value}`;
+        index = nextIndex + 1;
+      } else if (sectionSource[index] === '<' && sectionSource[index + 1] === '<') {
+        const { dictionary, nextIndex } = readDictionary(sectionSource, index);
+        source = dictionary;
+        index = nextIndex;
+      } else {
+        const refMatch = sectionSource.slice(index).match(/^(\d+)\s+(\d+)\s+R\b/);
+        if (refMatch) {
+          const resourceObject = objects.get(objectKey(Number(refMatch[1]), Number(refMatch[2])));
+          source = resourceObject?.dictionarySource ?? resourceObject?.raw;
+          index += refMatch[0].length;
+        }
+      }
+
+      if (!source) {
+        continue;
+      }
+
+      const resource = this.parseGraphicsColorSpaceSource(source, objects);
+      if (resource && !colorSpaces.has(resourceName)) {
+        colorSpaces.set(resourceName, resource);
+      }
+    }
+  }
+
+  private parseGraphicsColorSpaceSource(
+    source: string,
+    objects: Map<string, PDFRawObject>
+  ): GraphicsColorSpaceResource | undefined {
+    const trimmed = source.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    const directName = trimmed.match(/^\/([A-Za-z0-9._+-]+)$/);
+    if (directName) {
+      return this.buildGraphicsColorSpaceResourceFromName(directName[1]);
+    }
+
+    if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) {
+      return undefined;
+    }
+
+    const body = trimmed.slice(1, -1).trim();
+    const firstNameMatch = body.match(/^\/([A-Za-z0-9._+-]+)/);
+    if (!firstNameMatch) {
+      return undefined;
+    }
+    const spaceKind = firstNameMatch[1];
+
+    if (spaceKind === 'ICCBased') {
+      const refMatch = body.match(/^\/ICCBased\s+(\d+)\s+(\d+)\s+R\b/);
+      if (!refMatch) {
+        return undefined;
+      }
+      const profileObject = objects.get(objectKey(Number(refMatch[1]), Number(refMatch[2])));
+      if (!profileObject) {
+        return undefined;
+      }
+      const countMatch = profileObject.dictionarySource.match(/\/N\s+(\d+)/);
+      const componentCount = countMatch ? Number(countMatch[1]) : 3;
+      const alternateMatch = profileObject.dictionarySource.match(/\/Alternate\s*\/([A-Za-z0-9._+-]+)/);
+      return {
+        kind: 'ICCBased',
+        componentCount,
+        alternate: this.normalizeDeviceColorSpaceName(alternateMatch?.[1]) ?? this.deviceColorSpaceForComponentCount(componentCount)
+      };
+    }
+
+    if (spaceKind === 'Indexed') {
+      return {
+        kind: 'Indexed',
+        componentCount: 1
+      };
+    }
+
+    if (spaceKind === 'Separation') {
+      return {
+        kind: 'Separation',
+        componentCount: 1
+      };
+    }
+
+    if (spaceKind === 'DeviceN') {
+      const nameArrayMatch = body.match(/^\/DeviceN\s*\[([^\]]*)\]/);
+      const componentCount = nameArrayMatch
+        ? (nameArrayMatch[1].match(/\/[A-Za-z0-9._+-]+/g)?.length ?? 0)
+        : 0;
+      return {
+        kind: 'DeviceN',
+        componentCount
+      };
+    }
+
+    return this.buildGraphicsColorSpaceResourceFromName(spaceKind);
+  }
+
+  private buildGraphicsColorSpaceResourceFromName(name: string): GraphicsColorSpaceResource | undefined {
+    const normalized = this.normalizeDeviceColorSpaceName(name);
+    if (normalized) {
+      return {
+        kind: normalized,
+        componentCount: normalized === 'DeviceGray' ? 1 : normalized === 'DeviceRGB' ? 3 : 4
+      };
+    }
+
+    if (name === 'Pattern') {
+      return {
+        kind: 'Pattern',
+        componentCount: 0
+      };
+    }
+
+    if (name === 'CalGray') {
+      return {
+        kind: 'DeviceGray',
+        componentCount: 1
+      };
+    }
+
+    if (name === 'CalRGB' || name === 'Lab') {
+      return {
+        kind: 'DeviceRGB',
+        componentCount: 3
+      };
+    }
+
+    return undefined;
+  }
+
+  private normalizeDeviceColorSpaceName(
+    name: string | undefined
+  ): 'DeviceGray' | 'DeviceRGB' | 'DeviceCMYK' | undefined {
+    if (!name) {
+      return undefined;
+    }
+    if (name === 'DeviceGray' || name === 'G') {
+      return 'DeviceGray';
+    }
+    if (name === 'DeviceRGB' || name === 'RGB') {
+      return 'DeviceRGB';
+    }
+    if (name === 'DeviceCMYK' || name === 'CMYK') {
+      return 'DeviceCMYK';
+    }
+    return undefined;
+  }
+
+  private deviceColorSpaceForComponentCount(
+    componentCount: number
+  ): 'DeviceGray' | 'DeviceRGB' | 'DeviceCMYK' {
+    if (componentCount <= 1) {
+      return 'DeviceGray';
+    }
+    if (componentCount >= 4) {
+      return 'DeviceCMYK';
+    }
+    return 'DeviceRGB';
   }
 
   private resolveResourceSection(
@@ -4120,6 +4471,11 @@ export class PDFParser {
     width?: number;
     height?: number;
     mask?: CcittMask;
+    softMaskPixels?: {
+      width: number;
+      height: number;
+      data: Uint8ClampedArray;
+    };
     pixels?: {
       width: number;
       height: number;
@@ -4287,42 +4643,54 @@ export class PDFParser {
       };
     }
 
+    let softMaskPixels:
+      | {
+          width: number;
+          height: number;
+          data: Uint8ClampedArray;
+        }
+      | undefined;
+    if (resource.softMask && !isSoftMask) {
+      const maskKey = objectKey(resource.softMask.id, resource.softMask.generation);
+      const maskObject = objects.get(maskKey);
+      if (maskObject) {
+        const maskResource = this.buildImageResource(maskObject, objects, rawContent);
+        if (maskResource) {
+          const renderedMask = this.renderImageResource(maskResource, objects, rawContent, true);
+          let maskPixels: { width: number; height: number; data: Uint8ClampedArray } | undefined =
+            renderedMask?.pixels;
+          if (!maskPixels && renderedMask?.mask) {
+            maskPixels = ccittMaskToPixels(renderedMask.mask);
+          }
+          if (maskPixels && maskPixels.width === resource.width && maskPixels.height === resource.height) {
+            softMaskPixels = maskPixels;
+          }
+        }
+      }
+    }
+
     if (isJpeg) {
       const base64 = uint8ToBase64(bytes);
       return {
         mimeType: 'image/jpeg',
         dataUri: `data:image/jpeg;base64,${base64}`,
         width: resource.width,
-        height: resource.height
+        height: resource.height,
+        softMaskPixels
       };
     }
 
     const decodedPixels = decodeFlateImage(bytes, resource);
     if (decodedPixels) {
-      if (resource.softMask && !isSoftMask) {
-        const maskKey = objectKey(resource.softMask.id, resource.softMask.generation);
-        const maskObject = objects.get(maskKey);
-        if (maskObject) {
-          const maskResource = this.buildImageResource(maskObject, objects, rawContent);
-          if (maskResource) {
-            const renderedMask = this.renderImageResource(maskResource, objects, rawContent, true);
-            let maskPixels: { width: number; height: number; data: Uint8ClampedArray } | undefined =
-              renderedMask?.pixels;
-            if (!maskPixels && renderedMask?.mask) {
-              maskPixels = ccittMaskToPixels(renderedMask.mask);
-            }
-            if (
-              maskPixels &&
-              maskPixels.width === decodedPixels.width &&
-              maskPixels.height === decodedPixels.height
-            ) {
-              const alphaSource = maskPixels.data;
-              const rgba = decodedPixels.data;
-              for (let i = 0; i < decodedPixels.width * decodedPixels.height; i += 1) {
-                rgba[i * 4 + 3] = alphaSource[i * 4] ?? 255;
-              }
-            }
-          }
+      if (
+        softMaskPixels &&
+        softMaskPixels.width === decodedPixels.width &&
+        softMaskPixels.height === decodedPixels.height
+      ) {
+        const alphaSource = softMaskPixels.data;
+        const rgba = decodedPixels.data;
+        for (let i = 0; i < decodedPixels.width * decodedPixels.height; i += 1) {
+          rgba[i * 4 + 3] = alphaSource[i * 4] ?? 255;
         }
       }
 

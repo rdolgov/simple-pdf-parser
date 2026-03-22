@@ -68,11 +68,32 @@ export interface ImageResource {
 /** Map of image name to ImageResource */
 export type ImageMap = Map<string, ImageResource>;
 
+export type GraphicsColorSpaceKind =
+  | 'DeviceGray'
+  | 'DeviceRGB'
+  | 'DeviceCMYK'
+  | 'ICCBased'
+  | 'Indexed'
+  | 'Separation'
+  | 'DeviceN'
+  | 'Pattern'
+  | 'Unknown';
+
+export interface GraphicsColorSpaceResource {
+  kind: GraphicsColorSpaceKind;
+  componentCount: number;
+  alternate?: 'DeviceGray' | 'DeviceRGB' | 'DeviceCMYK';
+}
+
+/** Map of color-space name to GraphicsColorSpaceResource */
+export type ColorSpaceMap = Map<string, GraphicsColorSpaceResource>;
+
 /** Resource context for a page (fonts, forms, images) */
 export interface ResourceContext {
   fonts: FontMap;
   forms: Map<string, PDFRawObject>;
   images: ImageMap;
+  colorSpaces: ColorSpaceMap;
 }
 
 /** Parse context (alias for ResourceContext) */
@@ -80,6 +101,7 @@ export interface ParseContext {
   fonts: FontMap;
   forms: Map<string, PDFRawObject>;
   images: ImageMap;
+  colorSpaces: ColorSpaceMap;
 }
 
 /** Stream length as literal number or indirect reference */

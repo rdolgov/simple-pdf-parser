@@ -141,6 +141,11 @@ export interface PDFImageItem {
     data: Uint8Array;
     blackIs1: boolean;
   };
+  softMaskPixels?: {
+    width: number;
+    height: number;
+    data: Uint8ClampedArray;
+  };
   pixels?: {
     width: number;
     height: number;
