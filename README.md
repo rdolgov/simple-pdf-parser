@@ -74,6 +74,102 @@ renderStructuredData(container, document, { assetMap });
 - `npm test` – execute the Vitest suite.
 - `npm run lint` – run type-checking.
 
+## Docker
+
+The repo now includes a single-container deployment path for the built backend and frontend.
+
+The container runs the same production-origin path as `npm run cloudflare:origin:start`:
+
+- one local origin for the built React app and all proxy APIs
+- `/` redirects to `/proxy`
+- runtime task/cache/log data is stored in the named Docker volume `llm_proxy_data`
+- `poppler-utils` is installed in the image, so `pdfseparate` and `pdfunite` remain available for progressive page splitting/batching
+
+### Build and Run Locally
+
+```bash
+cp .env.example .env
+# set PUBLIC_ORIGIN, provider keys, and proxy auth in .env
+docker compose build
+docker compose up -d
+```
+
+The default `.env.example` keeps the origin bound to `127.0.0.1:8787`, which is the right fit for Cloudflare Tunnel. Point `cloudflared` at `http://127.0.0.1:${HOST_PORT}` on the host machine.
+
+Useful commands:
+
+```bash
+docker compose logs -f
+docker compose down
+docker compose ps
+```
+
+If you want a different bind address or host port, set `HOST_BIND` and `HOST_PORT` in `.env`.
+
+If you are not running behind HTTPS, set `LLM_PROXY_SESSION_COOKIE_SECURE=false`.
+
+### Private Transfer Without Any Registry
+
+If you want the image to stay private to you and avoid publishing anywhere, transfer it directly as a tarball:
+
+```bash
+docker compose build
+docker save simple-pdf-parser:latest | gzip > simple-pdf-parser-image.tar.gz
+```
+
+If you changed `IMAGE_NAME` in `.env`, save that tag instead of `simple-pdf-parser:latest`.
+
+Copy `simple-pdf-parser-image.tar.gz` and your `.env` file to the other machine using `scp`, `rsync`, an encrypted drive, Tailscale, or any other private channel you control. Treat `.env` as sensitive because it can contain provider API keys and auth settings.
+
+On the other machine:
+
+```bash
+docker load < simple-pdf-parser-image.tar.gz
+cp .env.example .env
+# or copy the already-configured .env from the source machine
+docker compose up -d --no-build
+```
+
+This is the most private option because the image never leaves your control and never lands in a hosted registry.
+
+### Private Registry Option
+
+If you want convenient pull-from-anywhere behavior, use a private registry you control. A practical choice is GitHub Container Registry (`ghcr.io`) with a private package under your personal account.
+
+Set `IMAGE_NAME` in `.env` to the private image name you want to publish, for example:
+
+```bash
+IMAGE_NAME=ghcr.io/<your-github-username>/simple-pdf-parser:latest
+```
+
+Build and push:
+
+```bash
+docker login ghcr.io
+docker compose build
+docker compose push
+```
+
+On another machine:
+
+```bash
+docker login ghcr.io
+docker pull ghcr.io/<your-github-username>/simple-pdf-parser:latest
+cp .env.example .env
+# keep IMAGE_NAME pointing at the same private registry tag
+docker compose up -d --no-build
+```
+
+For GitHub Container Registry:
+
+- first publish is private by default
+- pulling a private image requires authentication
+- for CLI use across machines, use a GitHub personal access token with the package scopes you need
+
+If you prefer Docker Hub private repos or a self-hosted registry, the same pattern applies: set `IMAGE_NAME` to that registry path, build, push, then pull on the other machine.
+
+If you rely on Codex execution routes, note that the image does not install the `codex` CLI itself. Keep `CODEX_EXEC_ENABLED=false` unless you derive a custom image that adds that binary.
+
 ### Optional LLM Proxy Backend
 
 This repo now includes a separate TypeScript backend under [server/src/index.ts](/Users/rdolgov/code/simple-pdf-parser/server/src/index.ts). It is meant to sit between the browser UI and upstream LLM providers so the app can either:

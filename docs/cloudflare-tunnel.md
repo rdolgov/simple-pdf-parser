@@ -38,6 +38,20 @@ OPENAI_API_KEY=... \
 npm run cloudflare:origin:start
 ```
 
+Dockerized origin flow:
+
+```bash
+cp .env.example .env
+# set PUBLIC_ORIGIN, provider keys, and auth in .env
+docker compose up --build -d
+```
+
+With the included Compose setup:
+
+- the host publishes the origin on `127.0.0.1:8787` by default
+- the container runs the same `run-cloudflare-origin.mjs` startup path as the non-Docker deployment
+- `cloudflared` should target `http://127.0.0.1:8787` on the host machine
+
 Important environment notes:
 
 - `PUBLIC_ORIGIN` is used to set `LLM_PROXY_CORS_ORIGIN` if you do not set it explicitly.

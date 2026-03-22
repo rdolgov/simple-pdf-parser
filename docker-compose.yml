@@ -1,0 +1,51 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${IMAGE_NAME:-simple-pdf-parser:latest}
+    command: ["node", "scripts/run-cloudflare-origin.mjs"]
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8787}:8787"
+    environment:
+      PORT: 8787
+      LLM_PROXY_HOST: 0.0.0.0
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
+      LLM_PROXY_ROOT_REDIRECT_PATH: ${LLM_PROXY_ROOT_REDIRECT_PATH:-/proxy}
+      LLM_PROXY_APP_DIR: /app/testApp/dist
+      LLM_PROXY_CORS_ORIGIN: ${LLM_PROXY_CORS_ORIGIN:-}
+      LLM_PROXY_AUTH_TOKEN: ${LLM_PROXY_AUTH_TOKEN:-}
+      LLM_PROXY_USERS: ${LLM_PROXY_USERS:-}
+      LLM_PROXY_SESSION_COOKIE_SECURE: ${LLM_PROXY_SESSION_COOKIE_SECURE:-true}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com}
+      LLM_PROXY_GEMINI_MODEL: ${LLM_PROXY_GEMINI_MODEL:-gemini-3-flash-preview}
+      LLM_PROXY_GEMINI_BINARY_MODEL: ${LLM_PROXY_GEMINI_BINARY_MODEL:-}
+      LLM_PROXY_CACHE_ENABLED: ${LLM_PROXY_CACHE_ENABLED:-true}
+      LLM_PROXY_CACHE_DIR: /data/cache
+      LLM_PROXY_TASKS_DIR: /data/tasks
+      LLM_PROXY_LOG_DIR: /data/logs
+      LLM_PROXY_GEMINI_ANALYTICS_DIR: /data/gemini-analytics
+      CODEX_EXEC_ENABLED: ${CODEX_EXEC_ENABLED:-false}
+      CODEX_EXEC_COMMAND: ${CODEX_EXEC_COMMAND:-codex}
+      CODEX_EXEC_WORKDIR: /data/codex-workspaces
+    volumes:
+      - llm_proxy_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  llm_proxy_data:

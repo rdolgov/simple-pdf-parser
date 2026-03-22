@@ -1,0 +1,14 @@
+.git
+.idea
+.artifacts
+.cache
+.DS_Store
+coverage
+dist
+dist-server
+node_modules
+testApp/dist
+testApp/node_modules
+.env
+.env.local
+*.log
