@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { KeyboardEvent, FocusEvent, MouseEvent as ReactMouseEvent } from 'react';
+import type { KeyboardEvent, FocusEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import type { IndexingProgress, KeywordSearchResult, SemanticSearchResult } from '../search';
 import type { ExtractState, GeminiExtractionState } from '../hooks';
 import type { AiDetectionSupport } from '../utils/aiDetectionSupport';
@@ -24,6 +24,8 @@ interface SemanticSearchBarProps {
   onZoomReset: () => void;
   isLassoMode: boolean;
   onToggleLasso: () => void;
+  isDocumentChatOpen: boolean;
+  onToggleDocumentChat: () => void;
   onSearch: (query: string) => Promise<SemanticSearchResult[]>;
   onClearSearch: () => void;
   searchResults: SemanticSearchResult[];
@@ -44,6 +46,7 @@ interface SemanticSearchBarProps {
   aiDetectionModeDescription: string;
   onRunAiDetection: () => Promise<void>;
   topTaskStatus?: TopTaskStatusView | null;
+  documentChatPanel?: ReactNode;
 }
 
 export function SemanticSearchBar({
@@ -57,6 +60,8 @@ export function SemanticSearchBar({
   onZoomReset,
   isLassoMode,
   onToggleLasso,
+  isDocumentChatOpen,
+  onToggleDocumentChat,
   onSearch,
   onClearSearch,
   searchResults,
@@ -76,7 +81,8 @@ export function SemanticSearchBar({
   aiDetectionSupport,
   aiDetectionModeDescription,
   onRunAiDetection,
-  topTaskStatus = null
+  topTaskStatus = null,
+  documentChatPanel = null
 }: SemanticSearchBarProps): JSX.Element {
   const [searchMode, setSearchMode] = useState<'semantic' | 'keyword'>('semantic');
   const [semanticQuery, setSemanticQuery] = useState('');
@@ -503,12 +509,28 @@ export function SemanticSearchBar({
           onClick={onToggleLasso}
           disabled={disabled}
           aria-pressed={isLassoMode}
+          aria-label={isLassoMode ? 'Lasso mode is on. Draw on a page to select a region.' : 'Turn on lasso mode'}
           title={isLassoMode ? 'Lasso mode is on. Draw on a page to select a region.' : 'Turn on lasso mode'}
         >
           <LassoIcon />
-          <span>{isLassoMode ? 'Draw' : 'Lasso'}</span>
+        </button>
+        <button
+          type="button"
+          className={`semantic-search-doc-chat-btn${isDocumentChatOpen ? ' semantic-search-doc-chat-btn--active' : ''}`}
+          onClick={onToggleDocumentChat}
+          disabled={disabled}
+          aria-pressed={isDocumentChatOpen}
+          aria-label={isDocumentChatOpen ? 'Close document-wide chat' : 'Open chat against the whole document'}
+          title={isDocumentChatOpen ? 'Close document-wide chat' : 'Open chat against the whole document'}
+        >
+          <ChatIcon />
         </button>
         </div>
+        {documentChatPanel ? (
+          <div className="semantic-search-docked-panel">
+            {documentChatPanel}
+          </div>
+        ) : null}
       </div>
       <div className="semantic-search-utility-dock">
         {topTaskStatus ? <TopTaskStatusStrip status={topTaskStatus} /> : null}
@@ -569,6 +591,20 @@ export function SemanticSearchBar({
         </div>
       </div>
     </>
+  );
+}
+
+function ChatIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <path
+        d="M4 5.5A2.5 2.5 0 0 1 6.5 3h7A2.5 2.5 0 0 1 16 5.5v5A2.5 2.5 0 0 1 13.5 13H9l-3.7 3v-3H6.5A2.5 2.5 0 0 1 4 10.5z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

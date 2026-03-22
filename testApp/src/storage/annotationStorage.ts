@@ -22,9 +22,12 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export type ChatScope = 'selection' | 'document';
+
 export interface ChatAnnotationContent {
   messages: ChatMessage[];
   contextText: string;
+  scope?: ChatScope;
 }
 
 export interface ImageAnnotationContent {
@@ -85,6 +88,13 @@ export interface AnnotationSummary {
 const DB_NAME = 'pdf-annotations-db';
 const DB_VERSION = 1;
 const STORE_NAME = 'annotations';
+const DOCUMENT_CHAT_PAGE_NUMBER = -1;
+const DOCUMENT_CHAT_BOUNDS: AnnotationBounds = {
+  minX: -1,
+  minY: -1,
+  maxX: -1,
+  maxY: -1
+};
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -335,7 +345,8 @@ export async function saveOrUpdateChatAnnotation(
   pageNumber: number,
   bounds: AnnotationBounds,
   contextText: string,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  scope: ChatScope = 'selection'
 ): Promise<Annotation> {
   const existing = await findAnnotationAtBounds(documentId, pageNumber, bounds, 'chat');
   const now = Date.now();
@@ -343,7 +354,7 @@ export async function saveOrUpdateChatAnnotation(
   if (existing) {
     const updated: Annotation = {
       ...existing,
-      content: { messages, contextText } as ChatAnnotationContent,
+      content: { messages, contextText, scope } as ChatAnnotationContent,
       updatedAt: now
     };
     await saveAnnotation(updated);
@@ -356,7 +367,7 @@ export async function saveOrUpdateChatAnnotation(
     type: 'chat',
     pageNumber,
     bounds,
-    content: { messages, contextText } as ChatAnnotationContent,
+    content: { messages, contextText, scope } as ChatAnnotationContent,
     createdAt: now,
     updatedAt: now
   };
@@ -371,6 +382,33 @@ export async function getChatAnnotation(
   bounds: AnnotationBounds
 ): Promise<Annotation | null> {
   return findAnnotationAtBounds(documentId, pageNumber, bounds, 'chat');
+}
+
+export async function saveOrUpdateDocumentChatAnnotation(
+  documentId: string,
+  contextText: string,
+  messages: ChatMessage[]
+): Promise<Annotation> {
+  return saveOrUpdateChatAnnotation(
+    documentId,
+    DOCUMENT_CHAT_PAGE_NUMBER,
+    DOCUMENT_CHAT_BOUNDS,
+    contextText,
+    messages,
+    'document'
+  );
+}
+
+export async function getDocumentChatAnnotation(documentId: string): Promise<Annotation | null> {
+  return getChatAnnotation(documentId, DOCUMENT_CHAT_PAGE_NUMBER, DOCUMENT_CHAT_BOUNDS);
+}
+
+export async function deleteDocumentChatAnnotation(documentId: string): Promise<void> {
+  const existing = await getDocumentChatAnnotation(documentId);
+  if (!existing) {
+    return;
+  }
+  await deleteAnnotation(existing.id);
 }
 
 // ============================================================================

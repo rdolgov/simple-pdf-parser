@@ -4,34 +4,60 @@ import 'katex/dist/katex.min.css';
 import {
   type ChatMessage,
   type ChatAnnotationContent,
+  type ChatScope,
   type AnnotationBounds,
   saveOrUpdateChatAnnotation,
+  saveOrUpdateDocumentChatAnnotation,
   getChatAnnotation,
+  getDocumentChatAnnotation,
   deleteAnnotation,
+  deleteDocumentChatAnnotation,
   findAnnotationAtBounds
 } from '../storage/annotationStorage';
 import { askQuestionTask } from '../api/proxyTaskApi';
 import { renderMarkdownToHtml } from '../utils/markdownRenderer';
 
+type ChatVariant = 'floating' | 'docked';
+type ChatProvider = 'gemini' | 'openai' | 'codex';
+
+interface ChatPromptBuildInput {
+  query: string;
+  messages: ChatMessage[];
+  contextText: string;
+  enableWebSearch: boolean;
+  provider: ChatProvider;
+}
+
+type ChatPromptBuildResult =
+  | string
+  | {
+      prompt: string;
+      contextText?: string;
+    };
 
 interface MiniChatViewProps {
   contextText: string;
-  provider?: 'gemini' | 'openai' | 'codex';
+  provider?: ChatProvider;
   model?: string | null;
   onClose: () => void;
   position?: { top: number; left: number };
   documentId: string;
   taskDocumentId?: string | null;
-  pageNumber: number;
-  bounds: AnnotationBounds;
+  pageNumber?: number;
+  bounds?: AnnotationBounds;
   onAnnotationChange?: () => void;
-  /** If provided, this query will be auto-sent when the chat opens */
   initialQuery?: string;
-  /** If provided, seeds the chat when there is no saved history for these bounds */
   initialMessages?: ChatMessage[];
-  /** When enabled, allows Gemini to search the web for additional context */
   enableWebSearch?: boolean;
   onChatActivityChange?: (delta: number) => void;
+  chatScope?: ChatScope;
+  variant?: ChatVariant;
+  title?: string;
+  subtitle?: string;
+  emptyStateMessage?: string;
+  inputPlaceholder?: string;
+  inputDisabled?: boolean;
+  buildPrompt?: (input: ChatPromptBuildInput) => Promise<ChatPromptBuildResult> | ChatPromptBuildResult;
 }
 
 const SYSTEM_PROMPT = `You are a helpful assistant analyzing a specific paragraph from a PDF document.
@@ -41,6 +67,38 @@ Context from PDF:
 """{context}"""
 
 Answer the user's questions based on this context. If the question cannot be answered from the context alone, say so.`;
+
+function buildSelectionPrompt(
+  query: string,
+  messages: ChatMessage[],
+  contextText: string,
+  enableWebSearch: boolean,
+  provider: ChatProvider
+): string {
+  const conversationHistory = messages
+    .map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content}`)
+    .join('\n');
+
+  const webSearchHint = enableWebSearch
+    ? provider === 'gemini'
+      ? '\n\nYou have access to web search. If the user asks about topics not covered in the context, feel free to search for additional information and cite your sources.'
+      : '\n\nIf the answer is not in the provided context, clearly say so.'
+    : '';
+
+  return SYSTEM_PROMPT.replace('{context}', contextText) + webSearchHint +
+    (conversationHistory ? `\n\nPrevious conversation:\n${conversationHistory}\n\n` : '\n\n') +
+    `User: ${query}`;
+}
+
+function requireSelectionAnchor(pageNumber?: number, bounds?: AnnotationBounds): {
+  pageNumber: number;
+  bounds: AnnotationBounds;
+} {
+  if (typeof pageNumber !== 'number' || !bounds) {
+    throw new Error('Selection chat requires pageNumber and bounds.');
+  }
+  return { pageNumber, bounds };
+}
 
 export function MiniChatView({
   contextText,
@@ -56,34 +114,54 @@ export function MiniChatView({
   initialQuery,
   initialMessages,
   enableWebSearch = false,
-  onChatActivityChange
+  onChatActivityChange,
+  chatScope = 'selection',
+  variant = 'floating',
+  title,
+  subtitle,
+  emptyStateMessage = 'Ask a question about this paragraph...',
+  inputPlaceholder = 'Ask a question...',
+  inputDisabled = false,
+  buildPrompt
 }: MiniChatViewProps): JSX.Element {
+  const isFloating = variant === 'floating';
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [hasPersistedHistory, setHasPersistedHistory] = useState(false);
+  const [storedContextText, setStoredContextText] = useState(contextText);
   const [dragPosition, setDragPosition] = useState<{ top: number; left: number } | null>(null);
   const [panelSize, setPanelSize] = useState<{ width: number; height: number } | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const hasLoadedRef = useRef(false);
   const hasAutoSentRef = useRef(false);
   const isDraggingRef = useRef(false);
   const isResizingRef = useRef(false);
   const dragStartRef = useRef<{ mouseX: number; mouseY: number; elemX: number; elemY: number } | null>(null);
   const resizeStartRef = useRef<{ mouseX: number; mouseY: number; width: number; height: number } | null>(null);
 
-  // Reset drag position when click position changes (always open next to clicked button)
   useEffect(() => {
+    setStoredContextText(contextText);
+  }, [contextText]);
+
+  useEffect(() => {
+    if (!isFloating) {
+      setDragPosition(null);
+      setPanelSize(null);
+      return;
+    }
     setDragPosition(null);
     setPanelSize(null);
-  }, [position?.top, position?.left]);
-
+  }, [isFloating, position?.top, position?.left]);
 
   const handlePointerStart = useCallback((event: ReactMouseEvent) => {
+    if (!isFloating) {
+      return;
+    }
+
     const target = event.target as HTMLElement;
     const container = containerRef.current;
     if (!container) {
@@ -116,9 +194,13 @@ export function MiniChatView({
       elemX: Number.parseFloat(style.left) || 0,
       elemY: Number.parseFloat(style.top) || 0
     };
-  }, []);
+  }, [isFloating]);
 
   useEffect(() => {
+    if (!isFloating) {
+      return undefined;
+    }
+
     const handleMouseMove = (event: MouseEvent) => {
       if (!isDraggingRef.current || !dragStartRef.current) {
         if (!isResizingRef.current || !resizeStartRef.current) {
@@ -158,55 +240,89 @@ export function MiniChatView({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, []);
+  }, [isFloating]);
 
-  // Load existing chat history on mount
   useEffect(() => {
-    if (hasLoadedRef.current) return;
-    hasLoadedRef.current = true;
+    hasAutoSentRef.current = false;
+    setMessages([]);
+    setHasPersistedHistory(false);
+    setError(null);
+    setIsLoadingHistory(true);
 
+    let cancelled = false;
     async function loadExistingChat() {
       try {
-        const existing = await getChatAnnotation(documentId, pageNumber, bounds);
+        const existing = chatScope === 'document'
+          ? await getDocumentChatAnnotation(documentId)
+          : await getChatAnnotation(
+              documentId,
+              requireSelectionAnchor(pageNumber, bounds).pageNumber,
+              requireSelectionAnchor(pageNumber, bounds).bounds
+            );
+
+        if (cancelled) {
+          return;
+        }
+
         if (existing) {
           const chatContent = existing.content as ChatAnnotationContent;
           setMessages(chatContent.messages);
+          setStoredContextText(chatContent.contextText || contextText);
           setHasPersistedHistory(chatContent.messages.length > 0);
-        } else if (initialMessages && initialMessages.length > 0) {
+          return;
+        }
+
+        setStoredContextText(contextText);
+        if (initialMessages && initialMessages.length > 0) {
           setMessages(initialMessages);
-          setHasPersistedHistory(false);
         }
       } catch (err) {
         console.error('Failed to load chat history:', err);
       } finally {
-        setIsLoadingHistory(false);
+        if (!cancelled) {
+          setIsLoadingHistory(false);
+        }
       }
     }
 
     void loadExistingChat();
-  }, [documentId, pageNumber, bounds, initialMessages]);
+    return () => {
+      cancelled = true;
+    };
+  }, [chatScope, contextText, documentId, pageNumber, bounds, initialMessages]);
 
   useEffect(() => {
-    // Focus input without scrolling the page (after history loads)
     if (!isLoadingHistory) {
       inputRef.current?.focus({ preventScroll: true });
     }
   }, [isLoadingHistory]);
 
   useEffect(() => {
-    // Scroll only within the messages container, not the whole page
     if (messagesContainerRef.current) {
       messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
     }
   }, [messages]);
 
-  // Save chat to storage when messages change
   useEffect(() => {
-    if (messages.length === 0 || isLoadingHistory) return;
+    if (messages.length === 0 || isLoadingHistory) {
+      return;
+    }
 
     async function saveChat() {
       try {
-        await saveOrUpdateChatAnnotation(documentId, pageNumber, bounds, contextText, messages);
+        if (chatScope === 'document') {
+          await saveOrUpdateDocumentChatAnnotation(documentId, storedContextText, messages);
+        } else {
+          const selectionAnchor = requireSelectionAnchor(pageNumber, bounds);
+          await saveOrUpdateChatAnnotation(
+            documentId,
+            selectionAnchor.pageNumber,
+            selectionAnchor.bounds,
+            storedContextText,
+            messages,
+            'selection'
+          );
+        }
         onAnnotationChange?.();
       } catch (err) {
         console.error('Failed to save chat:', err);
@@ -214,11 +330,11 @@ export function MiniChatView({
     }
 
     void saveChat();
-  }, [messages, documentId, pageNumber, bounds, contextText, isLoadingHistory, onAnnotationChange]);
+  }, [messages, chatScope, documentId, pageNumber, bounds, storedContextText, isLoadingHistory, onAnnotationChange]);
 
   const handleSubmit = useCallback(async (queryOverride?: string) => {
     const trimmed = (queryOverride ?? input).trim();
-    if (!trimmed || isLoading) {
+    if (!trimmed || isLoading || inputDisabled) {
       return;
     }
 
@@ -234,19 +350,20 @@ export function MiniChatView({
     try {
       onChatActivityChange?.(1);
       tracksChatActivity = true;
-      const conversationHistory = messages
-        .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-        .join('\n');
 
-      const webSearchHint = enableWebSearch
-        ? provider === 'gemini'
-          ? '\n\nYou have access to web search. If the user asks about topics not covered in the context, feel free to search for additional information and cite your sources.'
-          : '\n\nIf the answer is not in the provided context, clearly say so.'
-        : '';
-
-      const fullPrompt = SYSTEM_PROMPT.replace('{context}', contextText) + webSearchHint +
-        (conversationHistory ? `\n\nPrevious conversation:\n${conversationHistory}\n\n` : '\n\n') +
-        `User: ${trimmed}`;
+      const promptResult = buildPrompt
+        ? await buildPrompt({
+            query: trimmed,
+            messages,
+            contextText: storedContextText,
+            enableWebSearch,
+            provider
+          })
+        : buildSelectionPrompt(trimmed, messages, storedContextText, enableWebSearch, provider);
+      const fullPrompt = typeof promptResult === 'string' ? promptResult : promptResult.prompt;
+      const nextContextText = typeof promptResult === 'string'
+        ? storedContextText
+        : promptResult.contextText ?? storedContextText;
 
       const result = await askQuestionTask({
         ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
@@ -256,6 +373,7 @@ export function MiniChatView({
         enableWebSearch
       });
       const assistantMessage: ChatMessage = { role: 'assistant', content: result.text, timestamp: Date.now() };
+      setStoredContextText(nextContextText);
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to get response';
@@ -266,9 +384,8 @@ export function MiniChatView({
       }
       setIsLoading(false);
     }
-  }, [input, isLoading, model, messages, contextText, enableWebSearch, provider, taskDocumentId, onChatActivityChange]);
+  }, [input, isLoading, inputDisabled, model, messages, storedContextText, enableWebSearch, provider, taskDocumentId, onChatActivityChange, buildPrompt]);
 
-  // Auto-send initial query if provided
   useEffect(() => {
     if (
       initialQuery &&
@@ -300,24 +417,35 @@ export function MiniChatView({
     }
 
     try {
-      const annotation = await findAnnotationAtBounds(documentId, pageNumber, bounds, 'chat');
-      if (annotation) {
-        await deleteAnnotation(annotation.id);
-        onAnnotationChange?.();
+      if (chatScope === 'document') {
+        await deleteDocumentChatAnnotation(documentId);
+      } else {
+        const selectionAnchor = requireSelectionAnchor(pageNumber, bounds);
+        const annotation = await findAnnotationAtBounds(
+          documentId,
+          selectionAnchor.pageNumber,
+          selectionAnchor.bounds,
+          'chat'
+        );
+        if (annotation) {
+          await deleteAnnotation(annotation.id);
+        }
       }
+      onAnnotationChange?.();
       setMessages([]);
+      setHasPersistedHistory(false);
+      setStoredContextText(contextText);
       onClose();
     } catch (err) {
       console.error('Failed to delete chat:', err);
     }
-  }, [messages.length, documentId, pageNumber, bounds, onAnnotationChange, onClose]);
+  }, [messages.length, chatScope, contextText, documentId, pageNumber, bounds, onAnnotationChange, onClose]);
 
   const handleContainerClick = useCallback((event: ReactMouseEvent) => {
     event.stopPropagation();
   }, []);
 
-  // Use drag position if set, otherwise fall back to prop position
-  const currentPosition = dragPosition ?? position;
+  const currentPosition = isFloating ? dragPosition ?? position : null;
   const positionStyle = currentPosition
     ? {
         top: `${currentPosition.top}px`,
@@ -326,17 +454,37 @@ export function MiniChatView({
       }
     : {};
 
+  const className = [
+    'mini-chat-view',
+    isFloating ? 'mini-chat-view--floating' : 'mini-chat-view--docked',
+    title || subtitle ? 'mini-chat-view--headed' : ''
+  ].filter(Boolean).join(' ');
+  const messagesClassName = [
+    'mini-chat-messages',
+    isFloating ? 'mini-chat-messages--floating' : 'mini-chat-messages--docked'
+  ].join(' ');
+
   return (
     <div
       ref={containerRef}
-      className="mini-chat-view"
+      className={className}
       style={{ ...positionStyle, cursor: isDraggingRef.current ? 'grabbing' : 'default' }}
       onClick={handleContainerClick}
       onMouseDown={handlePointerStart}
     >
-      <div className="mini-chat-drag-handle">
-        <DragIcon />
-      </div>
+      {isFloating && (
+        <div className="mini-chat-drag-handle">
+          <DragIcon />
+        </div>
+      )}
+      {(title || subtitle) && (
+        <div className="mini-chat-header-bar">
+          <div className="mini-chat-header-copy">
+            {title ? <div className="mini-chat-title">{title}</div> : null}
+            {subtitle ? <div className="mini-chat-subtitle">{subtitle}</div> : null}
+          </div>
+        </div>
+      )}
       {messages.length > 0 && (
         <button
           type="button"
@@ -357,7 +505,7 @@ export function MiniChatView({
         <CloseIcon />
       </button>
 
-      <div className="mini-chat-messages" ref={messagesContainerRef}>
+      <div className={messagesClassName} ref={messagesContainerRef}>
         {isLoadingHistory && (
           <div className="mini-chat-empty">
             Loading conversation...
@@ -365,7 +513,7 @@ export function MiniChatView({
         )}
         {!isLoadingHistory && messages.length === 0 && !isLoading && (
           <div className="mini-chat-empty">
-            Ask a question about this paragraph...
+            {emptyStateMessage}
           </div>
         )}
         {!isLoadingHistory && messages.length > 0 && hasPersistedHistory && (
@@ -401,25 +549,27 @@ export function MiniChatView({
           ref={inputRef}
           type="text"
           className="mini-chat-input"
-          placeholder="Ask a question..."
+          placeholder={inputPlaceholder}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(event) => setInput(event.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={isLoading}
+          disabled={isLoading || inputDisabled}
         />
         <button
           type="button"
           className="mini-chat-send"
           onClick={() => void handleSubmit()}
-          disabled={!input.trim() || isLoading}
+          disabled={!input.trim() || isLoading || inputDisabled}
           aria-label="Send"
         >
           <SendIcon />
         </button>
       </div>
-      <div className="mini-chat-resize-handle" aria-hidden="true">
-        <ResizeIcon />
-      </div>
+      {isFloating && (
+        <div className="mini-chat-resize-handle" aria-hidden="true">
+          <ResizeIcon />
+        </div>
+      )}
     </div>
   );
 }

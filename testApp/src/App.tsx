@@ -33,10 +33,11 @@ import { filterLayoutForPdfFocus } from './utils/layout';
 import { cleanupFocusPdfDecorations } from './utils/pdfDecoration';
 import { ViewerColumn } from './components/ViewerColumn';
 import { ControlsSidebar } from './components/ControlsSidebar';
+import { DocumentChatPanel } from './components/DocumentChatPanel';
 import { EmptyView } from './components/EmptyView';
 import { GlobalErrorDialog } from './components/GlobalErrorDialog';
 import { findChapterBounds, getHeadingLevel, collectChapterText, collectChapterBlocks } from './utils/structured';
-import { useKeywordSearch, useSemanticSearch } from './search';
+import { useKeywordSearch, useSemanticSearch, semanticSearch } from './search';
 import { SemanticSearchBar } from './components/SemanticSearchBar';
 import {
   useZoom,
@@ -55,6 +56,7 @@ import { ProxyLoginGate } from './components/ProxyLoginGate';
 import { isOpenAiCompatibleAppProvider } from './utils/providerMetadata';
 import { analyzeRelevanceTask } from './api/proxyTaskApi';
 import type { TopTaskStatusView } from './utils/topTaskStatus';
+import { buildDocumentChatFullContext } from './utils/documentChatContext';
 import {
   describeAiDetectionMode,
   parseAiDetectionMode,
@@ -146,6 +148,7 @@ export default function App(): JSX.Element {
     | { status: 'error'; message: string }
   >({ status: 'idle' });
   const [lassoMode, setLassoMode] = useState(false);
+  const [isDocumentChatOpen, setIsDocumentChatOpen] = useState(false);
 
   // Document loader hook with callback for canvas/zoom/focus reset
   const handleDocumentLoad = useCallback(() => {
@@ -154,6 +157,7 @@ export default function App(): JSX.Element {
     setFocusState({ status: 'idle' });
     setFocusQuery('');
     setLassoMode(false);
+    setIsDocumentChatOpen(false);
   }, [renderer, setViewMode, setZoom]);
 
   const {
@@ -393,6 +397,14 @@ export default function App(): JSX.Element {
     }
     return convertLayoutToHtml(pdfLayout);
   }, [pdfLayout]);
+  const fullDocumentChatContext = useMemo(
+    () => buildDocumentChatFullContext({
+      documentText,
+      htmlLayout,
+      geminiExtraction: geminiExtractionState.extraction
+    }),
+    [documentText, htmlLayout, geminiExtractionState.extraction]
+  );
   const logicalStructure = useLogicalStructure({
     fileHash: loadedFileHash,
     taskDocumentId,
@@ -433,6 +445,8 @@ export default function App(): JSX.Element {
     isIndexed,
     isIndexing,
     indexingProgress,
+    embeddings,
+    startIndexing,
     search: semanticSearchFn,
     searchResults: semanticSearchResults,
     isSearching,
@@ -542,7 +556,7 @@ export default function App(): JSX.Element {
       return {
         tone: 'running',
         title: 'Running AI Extraction',
-        message: 'Processing pages incrementally so early pages can appear before the full document finishes.',
+        message: 'Extracting document structure.',
         progress,
         detail: detailParts.length > 0 ? detailParts.join(' · ') : 'AI extraction is running.'
       };
@@ -933,6 +947,17 @@ export default function App(): JSX.Element {
     setLassoMode((current) => !current);
   }, []);
 
+  const handleToggleDocumentChat = useCallback(() => {
+    setIsDocumentChatOpen((current) => !current);
+  }, []);
+
+  const retrieveDocumentChatChunks = useCallback(async (query: string) => {
+    if (!embeddings) {
+      return [];
+    }
+    return semanticSearch(query, embeddings, { topK: 6 });
+  }, [embeddings]);
+
   useEffect(() => {
     if (viewMode !== 'canvas' && viewMode !== 'focus-pdf') {
       setLassoMode(false);
@@ -1181,6 +1206,8 @@ export default function App(): JSX.Element {
           onZoomReset={handleZoomReset}
           isLassoMode={lassoMode}
           onToggleLasso={handleToggleLassoMode}
+          isDocumentChatOpen={isDocumentChatOpen}
+          onToggleDocumentChat={handleToggleDocumentChat}
           onSearch={semanticSearchFn}
           onClearSearch={clearSemanticResults}
           searchResults={sortedSemanticResults}
@@ -1201,6 +1228,23 @@ export default function App(): JSX.Element {
           aiDetectionModeDescription={aiDetectionModeDescription}
           onRunAiDetection={handleRunAiDetection}
           topTaskStatus={topTaskStatus}
+          documentChatPanel={
+            isDocumentChatOpen && readyDocument ? (
+              <DocumentChatPanel
+                key={loadedFileHash || loadedFileName || 'document'}
+                documentId={loadedFileHash || loadedFileName || 'document'}
+                taskDocumentId={taskDocumentId}
+                fullDocumentContext={fullDocumentChatContext}
+                isIndexed={isIndexed}
+                isIndexing={isIndexing}
+                onStartIndexing={startIndexing}
+                retrieveRelevantChunks={retrieveDocumentChatChunks}
+                enableWebSearch={enableWebSearch}
+                onClose={() => setIsDocumentChatOpen(false)}
+                onChatActivityChange={handleChatActivityChange}
+              />
+            ) : null
+          }
         />
       )}
       {state.status === 'idle' ? (

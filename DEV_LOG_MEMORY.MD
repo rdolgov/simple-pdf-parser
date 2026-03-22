@@ -48,6 +48,53 @@ Use it as follows:
 - When a user points to a specific word, symbol, or figure, compare that exact crop against the PDF-native reference.
 - Reason: targeted region comparison caught the IRS header clipping issue and validated the Claire invitation center text fix more reliably than page-wide comparison.
 
+### 2026-03-22: Whole-document chat should be retrieval-backed, not full-text prompt stuffing
+
+- The current `ask-question` proxy path accepts `documentId` for authorization/logging, but it does not automatically inject the stored document into the LLM prompt.
+- Document-wide chat therefore needs explicit retrieval over the existing semantic index instead of assuming the backend already has document context.
+- Reason: this keeps prompts bounded for large PDFs and uses the same chunking/indexing model already used by semantic search.
+
+### 2026-03-22: Whole-document chat should send complete document grounding plus retrieval hints
+
+- Retrieval excerpts alone are not sufficient for whole-document chat; they can bias the model toward sparse headings or table headers.
+- The prompt should include a complete structured document context for the whole PDF, while semantic-search excerpts remain secondary hints that point the model toward likely relevant sections faster.
+- Reason: this avoids false "insufficient context" answers caused by partial retrieval while preserving the benefits of semantic search.
+
+### 2026-03-22: Document chat history lives in annotation storage with an explicit document scope
+
+- Reuse the existing IndexedDB annotation store for chat history, but distinguish whole-document chat with dedicated helpers instead of ad hoc dummy bounds in component code.
+- The UI can still share the same chat message model as paragraph-bound chats while keeping document-level persistence stable across reopen/close cycles.
+- Reason: this avoids inventing a second chat persistence format and keeps chat history behavior consistent.
+
+### 2026-03-22: Toolbar-docked panels should render from the toolbar container
+
+- If a panel is supposed to open "under the toolbar on the left", render it as a child of the fixed toolbar container rather than trying to approximate its position from elsewhere in the app.
+- Give the toolbar row its own dock slot above the panel so the controls remain clickable while the panel is open.
+- Reason: this keeps positioning stable across responsive layouts and avoids syncing magic offsets with toolbar height changes.
+
+### 2026-03-22: Icon-only toolbar actions still need tooltip and aria label
+
+- When compressing a toolbar action to icon-only, keep the semantic text in `title` and `aria-label` instead of leaving the control unlabeled.
+- Apply the same compact square button treatment so icon-only actions do not leave label-sized padding behind.
+- Reason: this preserves discoverability and accessibility while reducing horizontal clutter.
+
+### 2026-03-22: Toolbar labels should stay stable across active state changes
+
+- Avoid swapping button labels like `Lasso` to `Draw` when the underlying action is still the same tool mode.
+- Put state-specific guidance in the tooltip instead of changing the visible control text.
+- Reason: stable labels reduce visual jitter and make the toolbar easier to scan.
+
+### 2026-03-22: Docked panel headers should be concise
+
+- Keep docked toolbar panel titles and subtitles to a few words when the surrounding control already establishes the context.
+- Prefer a single-line header when the message can be compressed without losing meaning.
+- Reason: long copy in a compact utility panel adds clutter and competes with the toolbar.
+
+### 2026-03-22: Status copy should be direct
+
+- For transient task banners and dialogs, prefer short action-oriented copy over explanatory sentences when the title and progress detail already provide context.
+- Reason: verbose status text slows scanning and repeats information already visible elsewhere in the UI.
+
 ## Recent Examples
 
 - `pdfs/IRA contribution IRS.pdf`
