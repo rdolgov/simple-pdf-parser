@@ -60,11 +60,26 @@ function loadPrivateCashFlowDocument(): PDFDocument {
   return PDFDocument.from(readFileSync(fixtureUrl));
 }
 
+function loadIraContributionDocument(): PDFDocument {
+  const fixtureUrl = new URL('../pdfs/IRA contribution IRS.pdf', import.meta.url);
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
+function loadClairesBirthdayDocument(): PDFDocument {
+  const fixtureUrl = new URL('../pdfs/Claires7thBday.pdf', import.meta.url);
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
 function baselineDelta(item: PDFTextItem): { dx: number; dy: number } {
   return {
     dx: (item.baselineEnd?.x ?? 0) - (item.baselineStart?.x ?? 0),
     dy: (item.baselineEnd?.y ?? 0) - (item.baselineStart?.y ?? 0)
   };
+}
+
+function canvasFontSize(font: string): number {
+  const match = font.match(/(\d+(?:\.\d+)?)px/);
+  return match ? Number.parseFloat(match[1]) : 0;
 }
 
 describe('PDF layout integration', () => {
@@ -843,6 +858,34 @@ describe('PDF layout integration', () => {
         (draw) => (draw.text === 'Jan 2025' || draw.text === '2,395.00') && draw.scaleX > 1.02
       )
     ).toBe(false);
+  });
+
+  it('does not paint the invisible IRS heading text layer on top of the outline heading', () => {
+    const document = loadIraContributionDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    const headingDraws = context.textDraws.filter((draw) => /Retirement topics|-I RA/.test(draw.text));
+
+    expect(headingDraws).toHaveLength(0);
+  });
+
+  it('renders the Claire invitation center text at readable transformed sizes', () => {
+    const document = loadClairesBirthdayDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    const centerDraws = context.textDraws.filter((draw) => ['COOK', 'ING FUN F', 'EVERY', 'ONE'].includes(draw.text));
+
+    expect(centerDraws).toHaveLength(4);
+    expect(centerDraws.every((draw) => canvasFontSize(draw.font) > 3)).toBe(true);
+    expect(centerDraws.some((draw) => /^1\.00px /.test(draw.font))).toBe(false);
   });
 
   it('replaces MacKay brace-construction fragments instead of rendering raw CMEX fallback text', () => {

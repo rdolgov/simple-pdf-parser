@@ -1,4 +1,5 @@
 import type { PDFGlyphSpan, PDFTextItem } from '../types.js';
+import { resolveTextItemRenderFontSize } from '../common/textItemFontSize.js';
 
 export interface RenderableGlyphSpanRun {
   spans: PDFGlyphSpan[];
@@ -10,7 +11,7 @@ export function resolveRenderableGlyphSpanRun(
   options: { force?: boolean } = {}
 ): RenderableGlyphSpanRun | undefined {
   const isComputerModernText = /^(cm|lasy|line10)/i.test(item.font ?? '');
-  const isCompactNumericRun = (item.fontSize ?? 0) <= 7 && /^[0-9 ]+$/.test(item.text);
+  const isCompactNumericRun = resolveTextItemRenderFontSize(item) <= 7 && /^[0-9 ]+$/.test(item.text);
   const preservesMeaningfulPdfSpacing = hasMeaningfulPdfSpacingMismatch(item);
   if (!options.force && !isComputerModernText && !isCompactNumericRun && !preservesMeaningfulPdfSpacing) {
     return undefined;

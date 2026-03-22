@@ -139,7 +139,7 @@ import {
 
 type PersistentTextState = Pick<
   TextState,
-  'font' | 'fontSize' | 'leading' | 'charSpacing' | 'wordSpacing' | 'horizontalScale' | 'textRise'
+  'font' | 'fontSize' | 'leading' | 'charSpacing' | 'wordSpacing' | 'horizontalScale' | 'textRenderMode' | 'textRise'
 >;
 
 export class PDFParser {
@@ -933,7 +933,8 @@ export class PDFParser {
             miterLimit: currentMiterLimit,
             clipPaths: snapshotClipPaths()
           },
-          currentMatrix
+          currentMatrix,
+          { transformClipPaths: false }
         )
       );
 
@@ -1928,6 +1929,7 @@ export class PDFParser {
       charSpacing: overrides?.charSpacing ?? 0,
       wordSpacing: overrides?.wordSpacing ?? 0,
       horizontalScale: overrides?.horizontalScale ?? 1,
+      textRenderMode: overrides?.textRenderMode ?? 0,
       textRise: overrides?.textRise ?? 0
     };
   }
@@ -1940,6 +1942,7 @@ export class PDFParser {
       charSpacing: state.charSpacing,
       wordSpacing: state.wordSpacing,
       horizontalScale: state.horizontalScale,
+      textRenderMode: state.textRenderMode,
       textRise: state.textRise
     };
   }
@@ -1961,6 +1964,7 @@ export class PDFParser {
       charSpacing: state.charSpacing,
       wordSpacing: state.wordSpacing,
       horizontalScale: state.horizontalScale,
+      textRenderMode: state.textRenderMode,
       textRise: state.textRise
     };
   }
@@ -2054,6 +2058,15 @@ export class PDFParser {
         break;
       }
 
+      case 'Tr': {
+        const value = this.popNumber(stack);
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          state.textRenderMode = Math.max(0, Math.min(7, Math.trunc(value)));
+        }
+        stack.length = 0;
+        break;
+      }
+
       case 'TL': {
         const value = this.popNumber(stack);
         if (typeof value === 'number' && Number.isFinite(value)) {
@@ -2078,6 +2091,7 @@ export class PDFParser {
         state.charSpacing = 0;
         state.wordSpacing = 0;
         state.horizontalScale = 1;
+        state.textRenderMode = 0;
         state.textRise = 0;
         stack.length = 0;
         break;
@@ -2271,6 +2285,8 @@ export class PDFParser {
       font: fontFamily,
       fontResourceKey: state.font,
       fontSize: state.fontSize,
+      renderFontSize: this.resolveRenderFontSize(state.fontSize, startMatrix),
+      textRenderMode: state.textRenderMode,
       fontWeight: this.extractFontWeight(baseFontName),
       fontStyle: this.extractFontStyle(baseFontName),
       textHorizontalScale: state.horizontalScale,
@@ -2529,6 +2545,21 @@ export class PDFParser {
       safe(e, 0),
       safe(f, 0)
     ];
+  }
+
+  private resolveRenderFontSize(fontSize: number | undefined, textMatrix: Matrix): number {
+    const normalizedFontSize = Number.isFinite(fontSize) ? Math.abs(fontSize as number) : DEFAULT_FONT_SIZE;
+    const verticalScale = Math.hypot(textMatrix[2] ?? 0, textMatrix[3] ?? 0);
+    if (Number.isFinite(verticalScale) && verticalScale > 0) {
+      return normalizedFontSize * verticalScale;
+    }
+
+    const horizontalScale = Math.hypot(textMatrix[0] ?? 0, textMatrix[1] ?? 0);
+    if (Number.isFinite(horizontalScale) && horizontalScale > 0) {
+      return normalizedFontSize * horizontalScale;
+    }
+
+    return normalizedFontSize;
   }
 
   private applyTextAdjustment(adjustment: number, state: TextState): void {

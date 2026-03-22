@@ -93,6 +93,10 @@ export interface PDFTextItem {
   font?: string;
   fontResourceKey?: string;
   fontSize?: number;
+  /** Effective user-space font size after the PDF text matrix is applied. */
+  renderFontSize?: number;
+  /** Raw PDF text rendering mode (`Tr`), used to suppress invisible text layers during rendering. */
+  textRenderMode?: number;
   fontWeight?: 'normal' | 'bold';
   fontStyle?: 'normal' | 'italic';
   /** Original PDF content-stream order, used for faithful paint-order rendering. */

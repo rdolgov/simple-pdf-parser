@@ -35,6 +35,7 @@ import {
   resolveVectorStretchyDelimiterPlan,
   traceVectorStretchyDelimiter
 } from './stretchyDelimiterRenderer.js';
+import { resolveTextItemRenderFontSize } from '../common/textItemFontSize.js';
 
 export interface RenderOptions {
   backgroundColor?: string;
@@ -287,7 +288,7 @@ export class CanvasRenderer {
     }
 
     const sizes = page.textItems
-      .map((item) => item.fontSize ?? 12)
+      .map((item) => resolveTextItemRenderFontSize(item))
       .filter((value) => Number.isFinite(value) && value > 0);
 
     if (sizes.length === 0) {
@@ -919,6 +920,9 @@ export class CanvasRenderer {
       .map(({ item }) => item);
 
     for (const item of paintItems) {
+      if (item.textRenderMode === 3 || item.textRenderMode === 7) {
+        continue;
+      }
       if (hiddenCompositeItems.has(item)) {
         continue;
       }
@@ -935,7 +939,7 @@ export class CanvasRenderer {
       }
 
       this.renderWithClipPaths(context, item.clipPaths, metrics, () => {
-        const fontSize = item.fontSize ?? 12;
+        const fontSize = resolveTextItemRenderFontSize(item);
         const embeddedFont = resolveRegisteredEmbeddedFont(documentModel, item);
 
         const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
@@ -1224,10 +1228,10 @@ export class CanvasRenderer {
     // into page-sized silhouettes.
     const glyphScaleX =
       matrixX > 0
-        ? (item.fontSize ?? boundsHeight) * options.scale * matrixX * Math.abs(item.textHorizontalScale ?? 1)
+        ? resolveTextItemRenderFontSize(item) * options.scale * matrixX * Math.abs(item.textHorizontalScale ?? 1)
         : boundsHeight * options.scale;
     const glyphScaleY =
-      matrixY > 0 ? (item.fontSize ?? boundsHeight) * options.scale * matrixY : boundsHeight * options.scale;
+      matrixY > 0 ? resolveTextItemRenderFontSize(item) * options.scale * matrixY : boundsHeight * options.scale;
     const slotAdvances = this.resolveType3SlotAdvances(
       item,
       glyphs,
@@ -1362,7 +1366,7 @@ export class CanvasRenderer {
   ): boolean {
     const type1Font = embeddedFont.type1Font;
     const spans = item.glyphSpans;
-    const fontSize = item.fontSize ?? 0;
+    const fontSize = resolveTextItemRenderFontSize(item);
     if (!type1Font || !spans || spans.length === 0 || !(fontSize > 0) || !(textPlacement.projectedWidth > 0)) {
       return false;
     }
@@ -1424,7 +1428,7 @@ export class CanvasRenderer {
     const segments: ScriptAnchorSegment[] = [];
 
     for (const item of items) {
-      const fontSize = item.fontSize ?? 0;
+      const fontSize = resolveTextItemRenderFontSize(item);
       const baselineStart = item.baselineStart;
       const baselineEnd = item.baselineEnd;
       if (!(fontSize > 0) || !baselineStart || !baselineEnd) {
@@ -1477,7 +1481,7 @@ export class CanvasRenderer {
     metrics: PageMetrics,
     scale: number
   ): number {
-    const fontSize = item.fontSize ?? 0;
+    const fontSize = resolveTextItemRenderFontSize(item);
     const baselineY = item.baselineStart?.y;
     if (!(fontSize > 0) || !baselineY || fontSize > 7.5) {
       return 0;

@@ -1,4 +1,5 @@
 import type { PDFTextItem } from '../types.js';
+import { resolveTextItemRenderFontSize } from '../common/textItemFontSize.js';
 
 export type CmexCompositeKind = 'overbrace' | 'underbrace';
 
@@ -39,7 +40,7 @@ export function detectCmexComposites(items: PDFTextItem[]): CmexCompositeDetecti
       }
 
       const stem = items[stemIndex];
-      const fontSize = item.fontSize ?? stem.fontSize ?? 12;
+      const fontSize = resolveTextItemRenderFontSize(item);
       const rawHeight = Math.max(
         item.bounds.maxY,
         stem.bounds.maxY
@@ -70,7 +71,7 @@ export function detectCmexComposites(items: PDFTextItem[]): CmexCompositeDetecti
       const { leftIndex, rightIndex } = underbrace;
       const left = items[leftIndex];
       const right = items[rightIndex];
-      const fontSize = item.fontSize ?? left.fontSize ?? right.fontSize ?? 12;
+      const fontSize = resolveTextItemRenderFontSize(item);
       const minY = Math.min(item.bounds.minY, left.bounds.minY, right.bounds.minY);
       const maxY = Math.max(item.bounds.maxY, left.bounds.maxY, right.bounds.maxY);
       const rawHeight = maxY - minY;
@@ -102,7 +103,7 @@ function findOverbraceStemIndex(
   items: PDFTextItem[],
   hiddenIndices: Set<number>
 ): number | undefined {
-  const fontSize = head.fontSize ?? 12;
+  const fontSize = resolveTextItemRenderFontSize(head);
   let bestIndex: number | undefined;
   let bestScore = Number.POSITIVE_INFINITY;
 
@@ -139,7 +140,7 @@ function findUnderbraceSides(
   items: PDFTextItem[],
   hiddenIndices: Set<number>
 ): { leftIndex: number; rightIndex: number } | undefined {
-  const fontSize = head.fontSize ?? 12;
+  const fontSize = resolveTextItemRenderFontSize(head);
   let leftIndex: number | undefined;
   let leftScore = Number.POSITIVE_INFINITY;
   let rightIndex: number | undefined;
@@ -201,8 +202,8 @@ function isCmexText(item: PDFTextItem, expectedText: string): boolean {
 }
 
 function hasCompatibleFontSize(left: PDFTextItem, right: PDFTextItem): boolean {
-  const leftFontSize = left.fontSize ?? 12;
-  const rightFontSize = right.fontSize ?? 12;
+  const leftFontSize = resolveTextItemRenderFontSize(left);
+  const rightFontSize = resolveTextItemRenderFontSize(right);
   return Math.abs(leftFontSize - rightFontSize) <= 0.5;
 }
 

@@ -131,6 +131,7 @@ export interface TextState {
   charSpacing: number;
   wordSpacing: number;
   horizontalScale: number;
+  textRenderMode: number;
   textRise: number;
 }
 

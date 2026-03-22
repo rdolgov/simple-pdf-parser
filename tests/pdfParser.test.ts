@@ -770,6 +770,35 @@ ET
     expect(page!.textItems.some((item) => item.text.includes('Jul 2025Aug 2025'))).toBe(false);
   });
 
+  it('captures transformed user-space font sizes for scaled text runs', () => {
+    const iraFixtureUrl = new URL('../pdfs/IRA contribution IRS.pdf', import.meta.url);
+    const iraDocument = PDFDocument.from(readFileSync(iraFixtureUrl));
+    const iraHeading = iraDocument.getPage(1)!.textItems.find((item) => item.text === 'Retirement topics ');
+    const iraHeadingOutline = iraDocument.getPage(1)!.pathItems?.find(
+      (item) =>
+        item.clipPaths?.length &&
+        item.commands[0]?.op === 'M' &&
+        Math.abs(item.commands[0].x - 28.2) < 0.01 &&
+        Math.abs(item.commands[0].y - 612) < 0.01
+    );
+
+    expect(iraHeading).toBeDefined();
+    expect(iraHeading!.fontSize).toBe(1);
+    expect(iraHeading!.renderFontSize).toBeGreaterThan(25);
+    expect(iraHeading!.textRenderMode).toBe(3);
+    expect(iraHeadingOutline).toBeDefined();
+    expect(iraHeadingOutline!.clipPaths![0]?.commands[0]).toMatchObject({ op: 'M', x: 14.25, y: 749.25 });
+
+    const claireFixtureUrl = new URL('../pdfs/Claires7thBday.pdf', import.meta.url);
+    const claireDocument = PDFDocument.from(readFileSync(claireFixtureUrl));
+    const claireCenterText = claireDocument.getPage(1)!.textItems.find((item) => item.text === 'COOK');
+
+    expect(claireCenterText).toBeDefined();
+    expect(claireCenterText!.fontSize).toBe(1);
+    expect(claireCenterText!.renderFontSize).toBeGreaterThan(3);
+    expect(claireCenterText!.textRenderMode).toBe(0);
+  });
+
   it('repairs merged author-note prose on the NIPS title page', () => {
     const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);

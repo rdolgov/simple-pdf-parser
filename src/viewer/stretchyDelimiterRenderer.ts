@@ -1,4 +1,5 @@
 import type { PDFTextItem } from '../types.js';
+import { resolveTextItemRenderFontSize } from '../common/textItemFontSize.js';
 
 export interface VectorStretchyDelimiterPlan {
   text: string;
@@ -35,7 +36,7 @@ export function resolveVectorStretchyDelimiterPlan(
     right,
     top,
     bottom,
-    strokeWidth: Math.max((item.fontSize ?? 12) * scale * 0.04, 0.45)
+    strokeWidth: Math.max(resolveTextItemRenderFontSize(item) * scale * 0.04, 0.45)
   };
 }
 

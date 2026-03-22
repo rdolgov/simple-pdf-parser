@@ -1,5 +1,6 @@
 import type { PDFTextItem } from '../types.js';
 import { looksLikeTableCellToken } from '../common/tabularTokenHeuristics.js';
+import { resolveTextItemRenderFontSize } from '../common/textItemFontSize.js';
 import { CMEX_DISPLAY_OPERATOR_CODES } from '../parser/parserConstants.js';
 import type { RegisteredEmbeddedFont } from './embeddedFontRegistry.js';
 
@@ -34,7 +35,7 @@ export function resolveVerticalScaleBounds(
   const exactEmbeddedGlyphs = embeddedFont?.renderMode === 'glyph-span';
   const stretchyDelimiter = isStretchyMathDelimiter(item);
   const displayOperator = isDisplayCmexOperator(item);
-  const fontSize = item.fontSize ?? 0;
+  const fontSize = resolveTextItemRenderFontSize(item);
 
   if (stretchyDelimiter || displayOperator) {
     return exactEmbeddedGlyphs
@@ -69,7 +70,7 @@ export function shouldUseParsedVerticalFit(
     return true;
   }
 
-  const fontSize = item.fontSize ?? 0;
+  const fontSize = resolveTextItemRenderFontSize(item);
   if (fontSize > 0 && fontSize <= 8.5) {
     return true;
   }
@@ -100,7 +101,7 @@ export function resolveParsedHeightScale(
   item: PDFTextItem,
   embeddedFont: RegisteredEmbeddedFont | undefined
 ): number {
-  const fontSize = item.fontSize ?? 0;
+  const fontSize = resolveTextItemRenderFontSize(item);
   if (!(fontSize > 0) || fontSize > 7.5) {
     return 1;
   }

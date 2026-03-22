@@ -1,4 +1,5 @@
 import { mergeTextRuns } from '../parser/textSmoother.js';
+import { resolveTextItemRenderFontSize } from '../common/textItemFontSize.js';
 import type {
   PDFImageBounds,
   PDFImageItem,
@@ -563,7 +564,7 @@ function estimateSpanFontSize(span: HtmlTextSpan): number {
 function normalizedFontSize(item: PDFTextItem): number {
   const MIN_FONT_SIZE = 6;
   const estimated = estimateFontSize(item);
-  const raw = item.fontSize ?? estimated;
+  const raw = resolveTextItemRenderFontSize(item);
 
   if (item.fontSize !== undefined && item.fontSize > 0 && item.fontSize < MIN_FONT_SIZE) {
     if (estimated >= MIN_FONT_SIZE) {

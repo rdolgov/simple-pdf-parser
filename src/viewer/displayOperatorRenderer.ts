@@ -1,4 +1,5 @@
 import type { PDFTextItem } from '../types.js';
+import { resolveTextItemRenderFontSize } from '../common/textItemFontSize.js';
 import { isDisplayCmexOperator } from './embeddedFontRenderPolicy.js';
 
 export interface VectorDisplayOperatorPlan {
@@ -41,7 +42,7 @@ export function resolveVectorDisplayOperatorPlan(
     right,
     top,
     bottom,
-    strokeWidth: Math.max((item.fontSize ?? 12) * scale * 0.036, 0.34)
+    strokeWidth: Math.max(resolveTextItemRenderFontSize(item) * scale * 0.036, 0.34)
   };
 }
 
