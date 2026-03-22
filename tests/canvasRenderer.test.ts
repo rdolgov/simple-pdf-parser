@@ -80,6 +80,10 @@ class MockContext {
     this.operations.push(`fill:${fillRule ?? 'nonzero'}`);
   }
 
+  clip(fillRule?: CanvasFillRule) {
+    this.operations.push(`clip:${fillRule ?? 'nonzero'}`);
+  }
+
   rect(x: number, y: number, width: number, height: number) {
     this.operations.push(`rect:${x},${y},${width},${height}`);
   }

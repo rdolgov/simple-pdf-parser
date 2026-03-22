@@ -30,6 +30,15 @@ export type RecordedPathPaint = {
   translateY: number;
 };
 
+export type RecordedClip = {
+  fillRule?: CanvasFillRule;
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
+  translateX: number;
+  translateY: number;
+};
+
 const DEFAULT_STATE: TransformState = {
   translateX: 0,
   translateY: 0,
@@ -51,6 +60,7 @@ export class RecordingContext {
   textRendering?: string;
   readonly textDraws: RecordedTextDraw[] = [];
   readonly pathPaints: RecordedPathPaint[] = [];
+  readonly clipOperations: RecordedClip[] = [];
   readonly operations: string[] = [];
 
   private state: TransformState = { ...DEFAULT_STATE };
@@ -124,6 +134,18 @@ export class RecordingContext {
     this.operations.push(`fill:${fillRule ?? 'nonzero'}`);
     this.pathPaints.push({
       kind: 'fill',
+      fillRule,
+      rotation: this.state.rotation,
+      scaleX: this.state.scaleX,
+      scaleY: this.state.scaleY,
+      translateX: this.state.translateX,
+      translateY: this.state.translateY
+    });
+  }
+
+  clip(fillRule?: CanvasFillRule): void {
+    this.operations.push(`clip:${fillRule ?? 'nonzero'}`);
+    this.clipOperations.push({
       fillRule,
       rotation: this.state.rotation,
       scaleX: this.state.scaleX,

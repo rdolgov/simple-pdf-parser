@@ -7,10 +7,12 @@ import {
 } from '../testApp/src/utils/aiDetectionActivation';
 
 describe('aiDetectionActivation', () => {
-  it('defaults to manual mode when the query parameter is missing or disabled', () => {
-    expect(parseAiDetectionMode('')).toBe('manual');
+  it('defaults to auto mode and supports explicit renderer-only disable flags', () => {
+    expect(parseAiDetectionMode('')).toBe('all');
     expect(parseAiDetectionMode('?aiDetection=manual')).toBe('manual');
+    expect(parseAiDetectionMode('?aiDetection=off')).toBe('manual');
     expect(parseAiDetectionMode('?aiDetection=0')).toBe('manual');
+    expect(parseAiDetectionMode('?aiDetection=render-only')).toBe('manual');
   });
 
   it('supports structured-only and full auto-run modes', () => {
@@ -26,7 +28,7 @@ describe('aiDetectionActivation', () => {
   });
 
   it('describes the current mode for the UI banner', () => {
-    expect(describeAiDetectionMode('manual')).toContain('combined AI extract');
-    expect(describeAiDetectionMode('all')).toContain('combined AI extract');
+    expect(describeAiDetectionMode('manual')).toContain('?aiDetection=off');
+    expect(describeAiDetectionMode('all')).toContain('?aiDetection=off');
   });
 });

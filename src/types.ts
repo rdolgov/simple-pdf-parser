@@ -109,6 +109,7 @@ export interface PDFTextItem {
   type3Glyphs?: Type3Glyph[];
   /** For Type3 fonts: the font matrix [a b c d e f] */
   fontMatrix?: [number, number, number, number, number, number];
+  clipPaths?: PDFClipPath[];
 }
 
 export interface PDFPageSize {
@@ -133,6 +134,7 @@ export interface PDFImageItem {
   mimeType?: string;
   dataUri?: string;
   fillColor?: [number, number, number, number];
+  clipPaths?: PDFClipPath[];
   mask?: {
     width: number;
     height: number;
@@ -177,6 +179,11 @@ export type PDFPathFillRule = 'nonzero' | 'evenodd';
 export type PDFLineCapStyle = 'butt' | 'round' | 'square';
 export type PDFLineJoinStyle = 'miter' | 'round' | 'bevel';
 
+export interface PDFClipPath {
+  commands: PDFPathCommand[];
+  fillRule: PDFPathFillRule;
+}
+
 /** A general vector path extracted from PDF graphics */
 export interface PDFPathItem {
   commands: PDFPathCommand[];
@@ -187,6 +194,7 @@ export interface PDFPathItem {
   lineCap: PDFLineCapStyle;
   lineJoin: PDFLineJoinStyle;
   miterLimit: number;
+  clipPaths?: PDFClipPath[];
 }
 
 export interface PDFPage {

@@ -324,27 +324,52 @@ export class CanvasRenderer {
       if (path.commands.length === 0) {
         continue;
       }
+      this.renderWithClipPaths(context, path.clipPaths, metrics, () => {
+        context.beginPath();
+        this.tracePagePath(context, path.commands, metrics);
 
-      context.beginPath();
-      this.tracePagePath(context, path.commands, metrics);
+        if (path.fillColor) {
+          const [r, g, b, a] = path.fillColor;
+          context.fillStyle = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
+          context.fill(path.fillRule);
+        }
 
-      if (path.fillColor) {
-        const [r, g, b, a] = path.fillColor;
-        context.fillStyle = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
-        context.fill(path.fillRule);
-      }
-
-      if (path.strokeColor && path.lineWidth >= 0) {
-        const [r, g, b, a] = path.strokeColor;
-        context.strokeStyle = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
-        context.lineWidth = this.resolveStrokeWidth(path.lineWidth, deviceScale);
-        context.lineCap = path.lineCap;
-        context.lineJoin = path.lineJoin;
-        context.miterLimit = path.miterLimit;
-        context.stroke();
-      }
+        if (path.strokeColor && path.lineWidth >= 0) {
+          const [r, g, b, a] = path.strokeColor;
+          context.strokeStyle = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
+          context.lineWidth = this.resolveStrokeWidth(path.lineWidth, deviceScale);
+          context.lineCap = path.lineCap;
+          context.lineJoin = path.lineJoin;
+          context.miterLimit = path.miterLimit;
+          context.stroke();
+        }
+      });
     }
 
+    context.restore();
+  }
+
+  private renderWithClipPaths(
+    context: CanvasRenderingContext2D,
+    clipPaths: PDFPathItem['clipPaths'] | PDFTextItem['clipPaths'] | PDFImageItem['clipPaths'],
+    metrics: ReturnType<CanvasRenderer['computePageMetrics']>,
+    draw: () => void
+  ): void {
+    if (!clipPaths || clipPaths.length === 0) {
+      draw();
+      return;
+    }
+
+    context.save();
+    for (const clipPath of clipPaths) {
+      if (!clipPath.commands || clipPath.commands.length === 0) {
+        continue;
+      }
+      context.beginPath();
+      this.tracePagePath(context, clipPath.commands, metrics);
+      context.clip(clipPath.fillRule);
+    }
+    draw();
     context.restore();
   }
 
@@ -447,8 +472,10 @@ export class CanvasRenderer {
         const solidMaskPaint = this.readSolidMaskPaint(mask);
 
         if (solidMaskPaint === true) {
-          context.fillStyle = `rgba(${r}, ${g}, ${b}, ${(fill[3] ?? 1)})`;
-          context.fillRect(x, y, width, height);
+          this.renderWithClipPaths(context, image.clipPaths, metrics, () => {
+            context.fillStyle = `rgba(${r}, ${g}, ${b}, ${(fill[3] ?? 1)})`;
+            context.fillRect(x, y, width, height);
+          });
           continue;
         }
 
@@ -481,7 +508,9 @@ export class CanvasRenderer {
         }
 
         maskContext.putImageData(imageData, 0, 0);
-        context.drawImage(maskCanvas, x, y, width, height);
+        this.renderWithClipPaths(context, image.clipPaths, metrics, () => {
+          context.drawImage(maskCanvas, x, y, width, height);
+        });
       }
     };
 
@@ -521,7 +550,9 @@ export class CanvasRenderer {
           context.save();
           context.setTransform(1, 0, 0, 1, 0, 0);
           context.scale(asyncScale, asyncScale);
-          context.drawImage(imageElement, x, y, width, height);
+          this.renderWithClipPaths(context, image.clipPaths, metrics, () => {
+            context.drawImage(imageElement, x, y, width, height);
+          });
           context.restore();
           redrawOverlays();
         };
@@ -542,7 +573,9 @@ export class CanvasRenderer {
         const imageData = bufferContext.createImageData(image.pixels.width, image.pixels.height);
         imageData.data.set(image.pixels.data);
         bufferContext.putImageData(imageData, 0, 0);
-        context.drawImage(bufferCanvas, x, y, width, height);
+        this.renderWithClipPaths(context, image.clipPaths, metrics, () => {
+          context.drawImage(bufferCanvas, x, y, width, height);
+        });
         continue;
       }
 
@@ -706,140 +739,139 @@ export class CanvasRenderer {
         continue;
       }
 
-      // Use the PDF's specified font size
-      const fontSize = item.fontSize ?? 12;
-      const embeddedFont = resolveRegisteredEmbeddedFont(documentModel, item);
+      this.renderWithClipPaths(context, item.clipPaths, metrics, () => {
+        const fontSize = item.fontSize ?? 12;
+        const embeddedFont = resolveRegisteredEmbeddedFont(documentModel, item);
 
-      const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
-      const scriptAttachmentShift =
-        embeddedFont?.renderMode === 'type1-glyph'
-          ? 0
-          : this.resolveScriptAttachmentShift(item, scriptAnchorSegments, metrics, options.scale);
-      const adjustedTextPlacement =
-        scriptAttachmentShift !== 0 ? this.offsetTextPlacement(textPlacement, scriptAttachmentShift) : textPlacement;
+        const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
+        const scriptAttachmentShift =
+          embeddedFont?.renderMode === 'type1-glyph'
+            ? 0
+            : this.resolveScriptAttachmentShift(item, scriptAnchorSegments, metrics, options.scale);
+        const adjustedTextPlacement =
+          scriptAttachmentShift !== 0 ? this.offsetTextPlacement(textPlacement, scriptAttachmentShift) : textPlacement;
 
-      const overlapsImage = this.intersectsAnyImage(item.bounds, page.imageItems);
-      if (overlapsImage) {
-        const padding = 0.5;
-        const paddedCorners = [
-          projectPoint(item.bounds.minX - padding, item.bounds.minY - padding),
-          projectPoint(item.bounds.maxX + padding, item.bounds.minY - padding),
-          projectPoint(item.bounds.maxX + padding, item.bounds.maxY + padding),
-          projectPoint(item.bounds.minX - padding, item.bounds.maxY + padding)
-        ];
-        context.save();
-        context.beginPath();
-        context.moveTo(paddedCorners[0].x, paddedCorners[0].y);
-        for (let index = 1; index < paddedCorners.length; index += 1) {
-          context.lineTo(paddedCorners[index].x, paddedCorners[index].y);
+        const overlapsImage = this.intersectsAnyImage(item.bounds, page.imageItems);
+        if (overlapsImage) {
+          const padding = 0.5;
+          const paddedCorners = [
+            projectPoint(item.bounds.minX - padding, item.bounds.minY - padding),
+            projectPoint(item.bounds.maxX + padding, item.bounds.minY - padding),
+            projectPoint(item.bounds.maxX + padding, item.bounds.maxY + padding),
+            projectPoint(item.bounds.minX - padding, item.bounds.maxY + padding)
+          ];
+          context.save();
+          context.beginPath();
+          context.moveTo(paddedCorners[0].x, paddedCorners[0].y);
+          for (let index = 1; index < paddedCorners.length; index += 1) {
+            context.lineTo(paddedCorners[index].x, paddedCorners[index].y);
+          }
+          context.closePath();
+          const previousFill: string | CanvasGradient | CanvasPattern = context.fillStyle;
+          context.fillStyle = options.backgroundColor;
+          context.fill();
+          context.fillStyle = previousFill;
+          context.restore();
         }
-        context.closePath();
-        const previousFill: string | CanvasGradient | CanvasPattern = context.fillStyle;
-        context.fillStyle = options.backgroundColor;
-        context.fill();
-        context.fillStyle = previousFill;
-        context.restore();
-      }
 
-      // Use Type3 glyph path rendering if available
-      if (item.type3Glyphs && item.type3Glyphs.length > 0) {
-        this.drawType3TextItem(context, item, projectPoint, options, metrics);
-        continue;
-      }
-
-      const vectorDisplayOperatorPlan = resolveVectorDisplayOperatorPlan(item, projectPoint, options.scale);
-      if (vectorDisplayOperatorPlan) {
-        context.save();
-        context.beginPath();
-        traceVectorDisplayOperator(context, vectorDisplayOperatorPlan);
-        context.lineWidth = vectorDisplayOperatorPlan.strokeWidth;
-        context.lineCap = 'butt';
-        context.lineJoin = 'miter';
-        context.stroke();
-        context.restore();
-        continue;
-      }
-
-      const vectorDelimiterPlan = resolveVectorStretchyDelimiterPlan(item, projectPoint, options.scale);
-      if (vectorDelimiterPlan) {
-        context.save();
-        context.beginPath();
-        traceVectorStretchyDelimiter(context, vectorDelimiterPlan);
-        context.lineWidth = vectorDelimiterPlan.strokeWidth;
-        context.lineCap = 'round';
-        context.lineJoin = 'round';
-        context.stroke();
-        context.restore();
-        continue;
-      }
-
-      if (embeddedFont?.renderMode === 'type1-glyph' && embeddedFont.type1Font) {
-        if (this.drawType1TextItem(context, item, adjustedTextPlacement, options.scale, embeddedFont)) {
-          continue;
+        if (item.type3Glyphs && item.type3Glyphs.length > 0) {
+          this.drawType3TextItem(context, item, projectPoint, options, metrics);
+          return;
         }
-      }
 
-      context.font = this.composeFont(
-        embeddedFont?.family ?? item.font,
-        fontSize,
-        options.fontFallback,
-        item.fontWeight,
-        item.fontStyle
-      );
+        const vectorDisplayOperatorPlan = resolveVectorDisplayOperatorPlan(item, projectPoint, options.scale);
+        if (vectorDisplayOperatorPlan) {
+          context.save();
+          context.beginPath();
+          traceVectorDisplayOperator(context, vectorDisplayOperatorPlan);
+          context.lineWidth = vectorDisplayOperatorPlan.strokeWidth;
+          context.lineCap = 'butt';
+          context.lineJoin = 'miter';
+          context.stroke();
+          context.restore();
+          return;
+        }
 
-      const projectedWidth = textPlacement.projectedWidth;
-      const glyphSpanRun = resolveRenderableGlyphSpanRun(item, {
-        force: embeddedFont?.renderMode === 'glyph-span'
-      });
-      const measureTextInput = this.resolveMeasurementText(item, glyphSpanRun, embeddedFont);
-      const textMetrics = context.measureText(measureTextInput);
-      const measuredWidth = textMetrics.width;
-      const verticalFit = this.resolveVerticalTextFit(
-        item,
-        textMetrics,
-        textPlacement.rotation,
-        options.scale,
-        embeddedFont
-      );
+        const vectorDelimiterPlan = resolveVectorStretchyDelimiterPlan(item, projectPoint, options.scale);
+        if (vectorDelimiterPlan) {
+          context.save();
+          context.beginPath();
+          traceVectorStretchyDelimiter(context, vectorDelimiterPlan);
+          context.lineWidth = vectorDelimiterPlan.strokeWidth;
+          context.lineCap = 'round';
+          context.lineJoin = 'round';
+          context.stroke();
+          context.restore();
+          return;
+        }
 
-      let scaleX = 1;
-      if (measuredWidth > 0 && projectedWidth > 0) {
-        scaleX = projectedWidth / measuredWidth;
-      }
-      const compactScriptScale = resolveParsedHeightScale(item, embeddedFont);
-      if (compactScriptScale < 1) {
-        scaleX *= compactScriptScale;
-      }
-      const scaleY = verticalFit.scaleY;
+        if (embeddedFont?.renderMode === 'type1-glyph' && embeddedFont.type1Font) {
+          if (this.drawType1TextItem(context, item, adjustedTextPlacement, options.scale, embeddedFont)) {
+            return;
+          }
+        }
 
-      if (glyphSpanRun) {
-        this.drawGlyphSpanTextItem(
-          context,
+        context.font = this.composeFont(
+          embeddedFont?.family ?? item.font,
+          fontSize,
+          options.fontFallback,
+          item.fontWeight,
+          item.fontStyle
+        );
+
+        const projectedWidth = textPlacement.projectedWidth;
+        const glyphSpanRun = resolveRenderableGlyphSpanRun(item, {
+          force: embeddedFont?.renderMode === 'glyph-span'
+        });
+        const measureTextInput = this.resolveMeasurementText(item, glyphSpanRun, embeddedFont);
+        const textMetrics = context.measureText(measureTextInput);
+        const measuredWidth = textMetrics.width;
+        const verticalFit = this.resolveVerticalTextFit(
           item,
-          adjustedTextPlacement,
-          glyphSpanRun,
-          verticalFit,
-          compactScriptScale,
+          textMetrics,
+          textPlacement.rotation,
+          options.scale,
           embeddedFont
         );
-        continue;
-      }
 
-      const needsRotation = Math.abs(textPlacement.rotation) > 0.001;
-      const effectiveRotation = Math.abs(adjustedTextPlacement.rotation) > 0.001;
-      const needsVerticalFit = Math.abs(scaleY - 1) > 0.02 || Math.abs(verticalFit.localYOffset) > 0.01;
-      if (Math.abs(scaleX - 1) > 0.02 || effectiveRotation || needsVerticalFit || scriptAttachmentShift !== 0) {
-        context.save();
-        context.translate(adjustedTextPlacement.baseline.x, adjustedTextPlacement.baseline.y);
-        if (effectiveRotation) {
-          context.rotate(adjustedTextPlacement.rotation);
+        let scaleX = 1;
+        if (measuredWidth > 0 && projectedWidth > 0) {
+          scaleX = projectedWidth / measuredWidth;
         }
-        context.scale(scaleX, scaleY);
-        context.fillText(item.text, 0, verticalFit.localYOffset);
-        context.restore();
-      } else {
-        context.fillText(item.text, adjustedTextPlacement.baseline.x, adjustedTextPlacement.baseline.y);
-      }
+        const compactScriptScale = resolveParsedHeightScale(item, embeddedFont);
+        if (compactScriptScale < 1) {
+          scaleX *= compactScriptScale;
+        }
+        const scaleY = verticalFit.scaleY;
+
+        if (glyphSpanRun) {
+          this.drawGlyphSpanTextItem(
+            context,
+            item,
+            adjustedTextPlacement,
+            glyphSpanRun,
+            verticalFit,
+            compactScriptScale,
+            embeddedFont
+          );
+          return;
+        }
+
+        const effectiveRotation = Math.abs(adjustedTextPlacement.rotation) > 0.001;
+        const needsVerticalFit = Math.abs(scaleY - 1) > 0.02 || Math.abs(verticalFit.localYOffset) > 0.01;
+        if (Math.abs(scaleX - 1) > 0.02 || effectiveRotation || needsVerticalFit || scriptAttachmentShift !== 0) {
+          context.save();
+          context.translate(adjustedTextPlacement.baseline.x, adjustedTextPlacement.baseline.y);
+          if (effectiveRotation) {
+            context.rotate(adjustedTextPlacement.rotation);
+          }
+          context.scale(scaleX, scaleY);
+          context.fillText(item.text, 0, verticalFit.localYOffset);
+          context.restore();
+        } else {
+          context.fillText(item.text, adjustedTextPlacement.baseline.x, adjustedTextPlacement.baseline.y);
+        }
+      });
     }
 
     context.restore();
@@ -990,13 +1022,21 @@ export class CanvasRenderer {
     }
 
     const textPlacement = this.resolveTextPlacement(item, projectPoint, options.scale);
-    // Type3 glyph coordinates are already in glyph space. The rendered height reflects
-    // the page-space scale factor, so use that to convert glyph-space units to canvas units.
-    const glyphScale = boundsHeight * options.scale;
+    const matrixX = Math.abs(item.fontMatrix?.[0] || item.fontMatrix?.[3] || 0);
+    const matrixY = Math.abs(item.fontMatrix?.[3] || item.fontMatrix?.[0] || 0);
+    // Type3 charprocs are defined in glyph space and must be converted through the font
+    // matrix; using the parsed text bounds directly here makes small figure labels explode
+    // into page-sized silhouettes.
+    const glyphScaleX =
+      matrixX > 0
+        ? (item.fontSize ?? boundsHeight) * options.scale * matrixX * Math.abs(item.textHorizontalScale ?? 1)
+        : boundsHeight * options.scale;
+    const glyphScaleY =
+      matrixY > 0 ? (item.fontSize ?? boundsHeight) * options.scale * matrixY : boundsHeight * options.scale;
     const slotAdvances = this.resolveType3SlotAdvances(
       item,
       glyphs,
-      glyphScale,
+      glyphScaleX,
       textPlacement.projectedWidth,
       boundsWidth * options.scale
     );
@@ -1024,7 +1064,7 @@ export class CanvasRenderer {
 
       context.save();
       context.translate(cursorX, 0);
-      context.scale(glyphScale * horizontalFit, -glyphScale);
+      context.scale(glyphScaleX * horizontalFit, -glyphScaleY);
 
       this.drawGlyphImageLayers(context, glyph.imageLayers);
       this.drawGlyphPaths(context, glyph);
@@ -1047,17 +1087,21 @@ export class CanvasRenderer {
       return [];
     }
 
+    // Type3 glyph spans can be preserved in a normalized text-space unit system that does
+    // not line up with canvas-space placement. Prefer the actual charproc widths, which are
+    // converted through the font matrix by glyphScale, and only fall back to spans when
+    // the glyph widths are missing.
+    const glyphWidthAdvances = glyphs.map((glyph) => Math.max(glyph.width * glyphScale, 0));
+    if (glyphWidthAdvances.some((value) => value > 0.01)) {
+      return glyphWidthAdvances;
+    }
+
     const spanAdvances =
       item.glyphSpans && item.glyphSpans.length === glyphs.length
         ? item.glyphSpans.map((span) => Math.max(span.advance * glyphScale, 0))
         : undefined;
     if (spanAdvances && spanAdvances.some((value) => value > 0.01)) {
       return spanAdvances;
-    }
-
-    const glyphWidthAdvances = glyphs.map((glyph) => Math.max(glyph.width * glyphScale, 0));
-    if (glyphWidthAdvances.some((value) => value > 0.01)) {
-      return glyphWidthAdvances;
     }
 
     const fallbackAdvance = projectedWidth > 0 ? projectedWidth / glyphs.length : fallbackWidth / glyphs.length;

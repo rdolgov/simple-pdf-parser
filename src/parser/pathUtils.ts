@@ -7,6 +7,7 @@ import type {
 } from '../types.js';
 import type { Matrix } from './mathUtils.js';
 import { transformPoint } from './mathUtils.js';
+import { transformClipPaths } from './clipPathUtils.js';
 
 export const buildRectanglePathCommands = (x: number, y: number, w: number, h: number): PDFPathCommand[] => [
   { op: 'M', x, y },
@@ -88,7 +89,8 @@ export const transformPathItem = (item: PDFPathItem, matrix: Matrix): PDFPathIte
         return command;
     }
   }),
-  lineWidth: transformStrokeWidth(item.lineWidth, matrix)
+  lineWidth: transformStrokeWidth(item.lineWidth, matrix),
+  clipPaths: transformClipPaths(item.clipPaths, matrix)
 });
 
 export const transformStrokeWidth = (lineWidth: number, matrix: Matrix): number => {

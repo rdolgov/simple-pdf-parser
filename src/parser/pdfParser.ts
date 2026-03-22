@@ -1,4 +1,5 @@
 import type {
+  PDFClipPath,
   ParseOptions,
   ParseProgressUpdate,
   ParseSource,
@@ -35,6 +36,7 @@ import {
   mapPdfLineJoin,
   transformPathItem
 } from './pathUtils.js';
+import { cloneClipPaths, transformClipPaths } from './clipPathUtils.js';
 import { decodeCcitt } from './ccittDecoder.js';
 import type { CcittMask } from './ccittDecoder.js';
 import { decodeFlate } from './streamDecoder.js';
@@ -767,6 +769,7 @@ export class PDFParser {
       lineCap: PDFPathItem['lineCap'];
       lineJoin: PDFPathItem['lineJoin'];
       miterLimit: number;
+      clipPaths: PDFClipPath[];
     }
     const gStateStack: GraphicsState[] = [{
       matrix: identityMatrix(),
@@ -775,7 +778,8 @@ export class PDFParser {
       lineWidth: 1,
       lineCap: mapPdfLineCap(0),
       lineJoin: mapPdfLineJoin(0),
-      miterLimit: 10
+      miterLimit: 10,
+      clipPaths: []
     }];
 
     // Path construction state
@@ -783,10 +787,29 @@ export class PDFParser {
     let currentPath: PDFPathCommand[] = [];
     let currentPoint: PathPoint | null = null;
     let pathStartPoint: PathPoint | null = null;
+    let currentClipPaths: PDFClipPath[] = [];
+    let pendingClipRule: PDFPathItem['fillRule'] | null = null;
     const resetCurrentPath = (): void => {
       currentPath = [];
       currentPoint = null;
       pathStartPoint = null;
+      pendingClipRule = null;
+    };
+    const snapshotClipPaths = (): PDFClipPath[] | undefined =>
+      currentClipPaths.length > 0 ? cloneClipPaths(currentClipPaths) : undefined;
+    const applyPendingClipPath = (
+      commands: PDFPathCommand[],
+      currentMatrix: Matrix
+    ): void => {
+      if (!pendingClipRule || commands.length === 0) {
+        pendingClipRule = null;
+        return;
+      }
+      const transformed = transformClipPaths([{ commands: clonePathCommands(commands), fillRule: pendingClipRule }], currentMatrix);
+      if (transformed && transformed.length > 0) {
+        currentClipPaths = [...currentClipPaths, transformed[0]];
+      }
+      pendingClipRule = null;
     };
     const emitCurrentPath = ({
       closePath = false,
@@ -824,11 +847,14 @@ export class PDFParser {
             fillRule,
             lineCap: currentLineCap,
             lineJoin: currentLineJoin,
-            miterLimit: currentMiterLimit
+            miterLimit: currentMiterLimit,
+            clipPaths: snapshotClipPaths()
           },
           currentMatrix
         )
       );
+
+      applyPendingClipPath(commands, currentMatrix);
 
       currentPoint = endPoint;
       resetCurrentPath();
@@ -872,7 +898,12 @@ export class PDFParser {
         const blockContent = streamContent.slice(index + 2, blockEnd);
         const items = this.parseTextBlock(blockContent, context.fonts);
         const currentMatrix = graphicsStack[graphicsStack.length - 1];
-        textItems.push(...this.transformTextItems(items, currentMatrix));
+        textItems.push(
+          ...this.transformTextItems(items, currentMatrix).map((item) => ({
+            ...item,
+            clipPaths: snapshotClipPaths()
+          }))
+        );
         index = blockEnd + 2;
         stack.length = 0;
         continue;
@@ -893,7 +924,8 @@ export class PDFParser {
           height: bounds.maxY - bounds.minY,
           sourceWidth: inlineInfo.resource?.width,
           sourceHeight: inlineInfo.resource?.height,
-          fillColor: [...currentFillColor]
+          fillColor: [...currentFillColor],
+          clipPaths: snapshotClipPaths()
         };
         if (rendered?.mimeType) {
           imageItem.mimeType = rendered.mimeType;
@@ -932,7 +964,8 @@ export class PDFParser {
           lineWidth: currentLineWidth,
           lineCap: currentLineCap,
           lineJoin: currentLineJoin,
-          miterLimit: currentMiterLimit
+          miterLimit: currentMiterLimit,
+          clipPaths: cloneClipPaths(currentClipPaths) ?? []
         });
         index += 1;
         stack.length = 0;
@@ -953,6 +986,7 @@ export class PDFParser {
           currentLineCap = restored.lineCap;
           currentLineJoin = restored.lineJoin;
           currentMiterLimit = restored.miterLimit;
+          currentClipPaths = cloneClipPaths(restored.clipPaths) ?? [];
         }
         // When stack underflows (extra Q without matching q), ignore the Q
         // rather than resetting to identity - preserves transformation state
@@ -1131,7 +1165,8 @@ export class PDFParser {
                   sourceHeight: rendered.height ?? imageResource.height,
                   mimeType: rendered.mimeType,
                   dataUri: rendered.dataUri,
-                  fillColor: [...currentFillColor]
+                  fillColor: [...currentFillColor],
+                  clipPaths: snapshotClipPaths()
                 };
                 if (rendered.mask) {
                   Object.defineProperty(imageItem, 'mask', {
@@ -1356,8 +1391,19 @@ export class PDFParser {
 
       // Path painting: end path without painting (n)
       if (this.isOperatorAt(streamContent, index, 'n')) {
+        if (pendingClipRule) {
+          const currentMatrix = graphicsStack[graphicsStack.length - 1];
+          applyPendingClipPath(currentPath, currentMatrix);
+        }
         resetCurrentPath();
         index += 1;
+        stack.length = 0;
+        continue;
+      }
+
+      if (this.isOperatorAt(streamContent, index, 'W*') || this.isOperatorAt(streamContent, index, 'W')) {
+        pendingClipRule = this.isOperatorAt(streamContent, index, 'W*') ? 'evenodd' : 'nonzero';
+        index += pendingClipRule === 'evenodd' ? 2 : 1;
         stack.length = 0;
         continue;
       }
@@ -4008,7 +4054,8 @@ export class PDFParser {
         bounds: { ...item.bounds },
         baselineStart: item.baselineStart ? { ...item.baselineStart } : undefined,
         baselineEnd: item.baselineEnd ? { ...item.baselineEnd } : undefined,
-        glyphSpans: item.glyphSpans?.map((span) => ({ ...span }))
+        glyphSpans: item.glyphSpans?.map((span) => ({ ...span })),
+        clipPaths: cloneClipPaths(item.clipPaths)
       }));
     }
 
@@ -4037,7 +4084,8 @@ export class PDFParser {
           ? transformPoint(matrix, item.baselineEnd.x, item.baselineEnd.y)
           : undefined,
         fontSize: Number.isFinite(height) && height > 0 ? height : item.fontSize,
-        glyphSpans: item.glyphSpans?.map((span) => ({ ...span }))
+        glyphSpans: item.glyphSpans?.map((span) => ({ ...span })),
+        clipPaths: transformClipPaths(item.clipPaths, matrix)
       };
     });
   }

@@ -1,4 +1,5 @@
 import type { PDFImageBounds, PDFImageItem, PDFTextItem, Vector2D } from '../types.js';
+import { transformClipPaths } from './clipPathUtils.js';
 
 export type Matrix = [number, number, number, number, number, number];
 
@@ -44,7 +45,8 @@ export const transformImageItem = (item: PDFImageItem, matrix: Matrix): PDFImage
   const transformedBounds = transformBounds(item.bounds, matrix);
   return {
     ...item,
-    bounds: transformedBounds
+    bounds: transformedBounds,
+    clipPaths: transformClipPaths(item.clipPaths, matrix)
   };
 };
 

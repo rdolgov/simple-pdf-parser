@@ -40,6 +40,11 @@ function loadMacKayDocument(): PDFDocument {
   return PDFDocument.from(readFileSync(fixtureUrl));
 }
 
+function loadLayerRedundancyDocument(): PDFDocument {
+  const fixtureUrl = new URL('../pdfs/2403.03853v3.pdf', import.meta.url);
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
 function baselineDelta(item: PDFTextItem): { dx: number; dy: number } {
   return {
     dx: (item.baselineEnd?.x ?? 0) - (item.baselineStart?.x ?? 0),
@@ -830,5 +835,45 @@ describe('PDF layout integration', () => {
     expect(stampDraw).toBeDefined();
     expect(titleDraw!.rotation).toBeCloseTo(0, 3);
     expect(stampDraw!.rotation).toBeCloseTo(-Math.PI / 2, 3);
+  });
+
+  it('preserves page-2 figure clip paths for the layer redundancy paper', () => {
+    const document = loadLayerRedundancyDocument();
+    const page = document.getPage(2);
+
+    expect(page).toBeDefined();
+    expect(page!.pathItems?.some((item) => (item.clipPaths?.length ?? 0) > 0)).toBe(true);
+
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 2);
+
+    expect(context.clipOperations.length).toBeGreaterThan(0);
+  });
+
+  it('renders page-2 Type3 figure labels without page-scale glyph fills in the layer redundancy paper', () => {
+    const document = loadLayerRedundancyDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    renderer.render(canvas, document, 2);
+
+    const maxFillScaleY = Math.max(
+      ...context.pathPaints
+        .filter((paint) => paint.kind === 'fill')
+        .map((paint) => Math.abs(paint.scaleY)),
+      0
+    );
+    const type3Fills = context.pathPaints.filter(
+      (paint) => paint.kind === 'fill' && Math.abs(paint.scaleY) < 0.02
+    );
+    const maxType3ScaleX = Math.max(...type3Fills.map((paint) => Math.abs(paint.scaleX)), 0);
+
+    expect(maxFillScaleY).toBeLessThan(1.5);
+    expect(type3Fills.length).toBeGreaterThan(0);
+    expect(maxType3ScaleX).toBeLessThan(0.02);
   });
 });

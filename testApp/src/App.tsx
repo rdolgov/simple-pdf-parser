@@ -55,6 +55,11 @@ import { ProxyLoginGate } from './components/ProxyLoginGate';
 import { isOpenAiCompatibleAppProvider } from './utils/providerMetadata';
 import { analyzeRelevanceTask } from './api/proxyTaskApi';
 import type { TopTaskStatusView } from './utils/topTaskStatus';
+import {
+  describeAiDetectionMode,
+  parseAiDetectionMode,
+  shouldAutoRunStructuredExtract
+} from './utils/aiDetectionActivation';
 
 function useCompletionNotice(
   count: number,
@@ -74,13 +79,20 @@ function useCompletionNotice(
 
 export default function App(): JSX.Element {
   const isManagedProxyRoute = useMemo(() => isProxyAppRoute(), []);
+  const aiDetectionMode = useMemo(
+    () => (typeof window === 'undefined' ? 'all' : parseAiDetectionMode(window.location.search)),
+    []
+  );
   const {
     state: proxyAuthState,
     login: loginProxySession,
     logout: logoutProxySession,
     refresh: refreshProxySession
   } = useProxyAuthSession(isManagedProxyRoute);
-  const aiDetectionModeDescription = 'AI extraction starts automatically when you open a PDF. Use Re-run AI to refresh the structured extract.';
+  const aiDetectionModeDescription = useMemo(
+    () => describeAiDetectionMode(aiDetectionMode),
+    [aiDetectionMode]
+  );
   const devicePixelRatio = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
   const { viewMode, setViewMode, showFocusView } = useViewMode('canvas');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
@@ -165,7 +177,7 @@ export default function App(): JSX.Element {
     handleDeleteCachedFile
   } = useDocumentLoader({
     onDocumentLoad: handleDocumentLoad,
-    autoExtract: true
+    autoExtract: shouldAutoRunStructuredExtract(aiDetectionMode)
   });
 
   const { lastError, dismissLastError } = useGlobalFetchActivity();
