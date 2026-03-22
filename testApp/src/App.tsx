@@ -416,12 +416,11 @@ export default function App(): JSX.Element {
     isIndexed,
     isIndexing,
     indexingProgress,
-    startIndexing,
     search: semanticSearchFn,
     searchResults: semanticSearchResults,
     isSearching,
     clearResults: clearSemanticResults
-  } = useSemanticSearch(semanticDocumentData);
+  } = useSemanticSearch(semanticDocumentData, { autoIndex: true });
 
   // Sort semantic results by relevance score (best match first)
   const sortedSemanticResults = useMemo(() => {
@@ -1165,7 +1164,6 @@ export default function App(): JSX.Element {
           onZoomReset={handleZoomReset}
           isLassoMode={lassoMode}
           onToggleLasso={handleToggleLassoMode}
-          onStartIndexing={startIndexing}
           onSearch={semanticSearchFn}
           onClearSearch={clearSemanticResults}
           searchResults={sortedSemanticResults}

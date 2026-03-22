@@ -24,7 +24,6 @@ interface SemanticSearchBarProps {
   onZoomReset: () => void;
   isLassoMode: boolean;
   onToggleLasso: () => void;
-  onStartIndexing: () => void;
   onSearch: (query: string) => Promise<SemanticSearchResult[]>;
   onClearSearch: () => void;
   searchResults: SemanticSearchResult[];
@@ -58,7 +57,6 @@ export function SemanticSearchBar({
   onZoomReset,
   isLassoMode,
   onToggleLasso,
-  onStartIndexing,
   onSearch,
   onClearSearch,
   searchResults,
@@ -351,11 +349,12 @@ export function SemanticSearchBar({
   };
 
   return (
-    <div
-      ref={containerRef}
-      className={`semantic-search-bar ${isExpanded ? 'semantic-search-bar--expanded' : ''}`}
-    >
-      <div className="semantic-search-bar-inner">
+    <>
+      <div
+        ref={containerRef}
+        className={`semantic-search-bar ${isExpanded ? 'semantic-search-bar--expanded' : ''}`}
+      >
+        <div className="semantic-search-bar-inner">
         {/* Search Icon / Toggle */}
         <button
           type="button"
@@ -395,7 +394,7 @@ export function SemanticSearchBar({
             className="semantic-search-input"
             placeholder={
               isSemanticMode
-                ? (isIndexed ? 'Search document semantically...' : 'Index document first...')
+                ? (isIndexed ? 'Search document semantically...' : isIndexing ? 'Indexing document semantically...' : 'Preparing semantic search...')
                 : 'Find exact words on the page...'
             }
             value={query}
@@ -478,19 +477,6 @@ export function SemanticSearchBar({
           )}
         </div>
 
-        {isSemanticMode && !isIndexed && !isIndexing && (
-          <button
-            type="button"
-            className="semantic-search-index-btn"
-            onClick={onStartIndexing}
-            disabled={disabled}
-            title="Index document for semantic search"
-          >
-            <IndexIcon />
-            <span>Index</span>
-          </button>
-        )}
-
         {isSemanticMode && isIndexing && (
           <div className="semantic-search-progress">
             <div className="semantic-search-progress-bar">
@@ -511,46 +497,6 @@ export function SemanticSearchBar({
           </div>
         )}
 
-        {isSemanticMode && isIndexed && !isIndexing && searchResults.length === 0 && !semanticQuery && (
-          <div className="semantic-search-indexed-badge" title={`${indexingProgress.totalChunks} chunks indexed`}>
-            <CheckIcon />
-            <span>Indexed</span>
-          </div>
-        )}
-
-        <div className="semantic-search-zoom" role="group" aria-label="Zoom controls">
-          <button
-            type="button"
-            className="semantic-search-zoom-btn"
-            onClick={onZoomOut}
-            disabled={!canUseZoom}
-            aria-label="Zoom out"
-            title="Zoom out"
-          >
-            -
-          </button>
-          <button
-            type="button"
-            className="semantic-search-zoom-indicator"
-            onClick={onZoomReset}
-            disabled={!canUseZoom}
-            aria-label={`Reset zoom to default, current zoom ${zoomIndicator}`}
-            title="Reset zoom"
-          >
-            {zoomIndicator}
-          </button>
-          <button
-            type="button"
-            className="semantic-search-zoom-btn"
-            onClick={onZoomIn}
-            disabled={!canUseZoom}
-            aria-label="Zoom in"
-            title="Zoom in"
-          >
-            +
-          </button>
-        </div>
-
         <button
           type="button"
           className={`semantic-search-lasso-btn${isLassoMode ? ' semantic-search-lasso-btn--active' : ''}`}
@@ -562,30 +508,67 @@ export function SemanticSearchBar({
           <LassoIcon />
           <span>{isLassoMode ? 'Draw' : 'Lasso'}</span>
         </button>
-
-        <div
-          className={`semantic-search-ai-status semantic-search-ai-status--${aiExtractionStatus.tone}`}
-          title={aiExtractionStatus.title}
-          aria-label={aiExtractionStatus.title}
-        >
-          <span>{aiExtractionStatus.label}</span>
         </div>
-
-        <button
-          type="button"
-          className={`semantic-search-ai-btn${aiDetectionSupport.supported ? '' : ' semantic-search-ai-btn--unsupported'}`}
-          onClick={() => {
-            void onRunAiDetection();
-          }}
-          disabled={disabled || isAiDetectionRunning || !aiDetectionSupport.supported}
-          title={aiDetectionButtonTitle}
-        >
-          <SparkIcon />
-          <span>{aiDetectionButtonLabel}</span>
-        </button>
       </div>
-      {topTaskStatus ? <TopTaskStatusStrip status={topTaskStatus} /> : null}
-    </div>
+      <div className="semantic-search-utility-dock">
+        {topTaskStatus ? <TopTaskStatusStrip status={topTaskStatus} /> : null}
+        <div className="semantic-search-utility-controls">
+          <div className="semantic-search-zoom" role="group" aria-label="Zoom controls">
+            <button
+              type="button"
+              className="semantic-search-zoom-btn"
+              onClick={onZoomOut}
+              disabled={!canUseZoom}
+              aria-label="Zoom out"
+              title="Zoom out"
+            >
+              -
+            </button>
+            <button
+              type="button"
+              className="semantic-search-zoom-indicator"
+              onClick={onZoomReset}
+              disabled={!canUseZoom}
+              aria-label={`Reset zoom to default, current zoom ${zoomIndicator}`}
+              title="Reset zoom"
+            >
+              {zoomIndicator}
+            </button>
+            <button
+              type="button"
+              className="semantic-search-zoom-btn"
+              onClick={onZoomIn}
+              disabled={!canUseZoom}
+              aria-label="Zoom in"
+              title="Zoom in"
+            >
+              +
+            </button>
+          </div>
+
+          <div
+            className={`semantic-search-ai-status semantic-search-ai-status--${aiExtractionStatus.tone}`}
+            title={aiExtractionStatus.title}
+            aria-label={aiExtractionStatus.title}
+          >
+            <span>{aiExtractionStatus.label}</span>
+          </div>
+
+          <button
+            type="button"
+            className={`semantic-search-ai-btn${aiDetectionSupport.supported ? '' : ' semantic-search-ai-btn--unsupported'}`}
+            onClick={() => {
+              void onRunAiDetection();
+            }}
+            disabled={disabled || isAiDetectionRunning || !aiDetectionSupport.supported}
+            title={aiDetectionButtonTitle}
+          >
+            <SparkIcon />
+            <span>{aiDetectionButtonLabel}</span>
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -636,36 +619,12 @@ function LoadingIcon(): JSX.Element {
   );
 }
 
-function IndexIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true">
-      <rect x="2" y="2" width="14" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M5 6h8M5 9h8M5 12h5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function SparkIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 18 18" width="14" height="14" aria-hidden="true">
       <path
         d="M9 2.5l1.4 3.1 3.1 1.4-3.1 1.4L9 11.5 7.6 8.4 4.5 7l3.1-1.4L9 2.5zM13.5 10.5l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8.8-1.7z"
         fill="currentColor"
-      />
-    </svg>
-  );
-}
-
-function CheckIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-      <path
-        d="M3 8l3.5 3.5L13 5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
       />
     </svg>
   );
