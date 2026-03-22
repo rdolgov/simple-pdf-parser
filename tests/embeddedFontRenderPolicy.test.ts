@@ -63,6 +63,19 @@ describe('embeddedFontRenderPolicy', () => {
     expect(heightScale).toBeLessThan(1);
   });
 
+  it('does not shrink ordinary short sans-serif figure labels just because they were split into two letters', () => {
+    const heightScale = resolveParsedHeightScale(
+      createItem({
+        text: 'ON ',
+        font: 'Arial',
+        fontSize: 7.22568
+      }),
+      undefined
+    );
+
+    expect(heightScale).toBe(1);
+  });
+
   it('leaves non-glyph text runs on their raw width scale', () => {
     expect(
       resolveGlyphScaleX(

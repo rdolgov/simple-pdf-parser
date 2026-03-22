@@ -11,7 +11,8 @@ export function resolveRenderableGlyphSpanRun(
 ): RenderableGlyphSpanRun | undefined {
   const isComputerModernText = /^(cm|lasy|line10)/i.test(item.font ?? '');
   const isCompactNumericRun = (item.fontSize ?? 0) <= 7 && /^[0-9 ]+$/.test(item.text);
-  if (!options.force && !isComputerModernText && !isCompactNumericRun) {
+  const preservesMeaningfulPdfSpacing = hasMeaningfulPdfSpacingMismatch(item);
+  if (!options.force && !isComputerModernText && !isCompactNumericRun && !preservesMeaningfulPdfSpacing) {
     return undefined;
   }
 
@@ -33,4 +34,25 @@ export function resolveRenderableGlyphSpanRun(
     spans,
     totalAdvance
   };
+}
+
+function hasMeaningfulPdfSpacingMismatch(item: PDFTextItem): boolean {
+  if (!item.glyphSpans || item.glyphSpans.length <= 1) {
+    return false;
+  }
+
+  const glyphText = item.glyphSpans.map((span) => span.text).join('');
+  if (!glyphText || glyphText === item.text) {
+    return false;
+  }
+
+  if (!/\s{2,}/.test(glyphText)) {
+    return false;
+  }
+
+  return collapseWhitespace(glyphText) === collapseWhitespace(item.text);
+}
+
+function collapseWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }

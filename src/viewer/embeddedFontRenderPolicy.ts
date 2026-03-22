@@ -118,5 +118,25 @@ export function resolveParsedHeightScale(
     return 0.8;
   }
 
+  if (!isLikelyCompactScriptToken(item, compactText)) {
+    return 1;
+  }
+
   return 0.82;
+}
+
+function isLikelyCompactScriptToken(item: PDFTextItem, compactText: string): boolean {
+  const normalizedFont = (item.font ?? '').toLowerCase();
+  const isMathLikeFont =
+    /^(cm|lasy|line10)/.test(normalizedFont) ||
+    /math|symbol|stix|cambria math|euclid|mtmi|cmsy|cmex|cmmi|cmbsy/.test(normalizedFont);
+  if (isMathLikeFont) {
+    return true;
+  }
+
+  if (/^\d+$/.test(compactText)) {
+    return true;
+  }
+
+  return compactText.length === 1 && /^[A-Za-z]$/.test(compactText);
 }
