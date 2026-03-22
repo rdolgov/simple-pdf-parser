@@ -1,13 +1,15 @@
 import type { PDFEmbeddedFontResource, PDFTextItem } from '../types.js';
 import { PDFDocument } from '../pdfDocument.js';
 import { canRegisterEmbeddedFontsInCurrentScope, getGlobalFontSet } from './canvasEnvironment.js';
+import { shouldPreferType1COutlineRendering } from './diagramFontPolicy.js';
 import { buildSyntheticOpenTypeFromType1C } from './type1COpenTypeBuilder.js';
+import { parseType1CFont } from './type1CFontProgram.js';
 import { parseType1Font, type ParsedType1Font } from './type1FontProgram.js';
 
 export interface RegisteredEmbeddedFont {
   family: string;
   renderMode: 'text' | 'glyph-span' | 'type1-glyph';
-  sourceKind?: 'truetype' | 'type1c' | 'type1-raw';
+  sourceKind?: 'truetype' | 'type1c' | 'type1-raw' | 'type1c-outline';
   glyphCodeToText?: Map<number, string>;
   type1Font?: ParsedType1Font;
 }
@@ -177,6 +179,17 @@ async function registerEmbeddedFont(
   }
 
   if (resource.fontFileSubtype === 'Type1C' || resource.fontFileSubtype === 'CIDFontType0C') {
+    if (shouldPreferType1COutlineRendering(resource)) {
+      const parsed = parseType1CFont(resource);
+      if (parsed) {
+        return {
+          family: createEmbeddedFamilyName(resource.baseFontName ?? 'Type1C', fontKey),
+          renderMode: 'type1-glyph',
+          sourceKind: 'type1c-outline',
+          type1Font: parsed
+        };
+      }
+    }
     if (!canRegisterEmbeddedFonts()) {
       return undefined;
     }

@@ -55,6 +55,11 @@ function loadPaperReducedDocument(): PDFDocument {
   return PDFDocument.from(readFileSync(fixtureUrl));
 }
 
+function loadPrivateCashFlowDocument(): PDFDocument {
+  const fixtureUrl = new URL('../private-pdfs/Nov 14, 2025 to Dec 11, 2025.pdf', import.meta.url);
+  return PDFDocument.from(readFileSync(fixtureUrl));
+}
+
 function baselineDelta(item: PDFTextItem): { dx: number; dy: number } {
   return {
     dx: (item.baselineEnd?.x ?? 0) - (item.baselineStart?.x ?? 0),
@@ -739,7 +744,7 @@ describe('PDF layout integration', () => {
     expect(drawTexts.some((text) => text.includes('¹'))).toBe(false);
   });
 
-  it('renders the MacKay page-15 LINE10 diagram as arrows and diagonals instead of raw fallback glyphs', () => {
+  it('renders the MacKay page-15 LINE10 diagram as arrows and diagonals instead of raw fallback glyphs', async () => {
     const document = loadMacKayDocument();
     const page = document.getPage(15);
     const context = new RecordingContext();
@@ -748,12 +753,15 @@ describe('PDF layout integration', () => {
 
     expect(page).toBeDefined();
 
+    await renderer.prepareDocumentFonts(document);
     renderer.render(canvas, document, 15);
     const joinedText = page!.textItems.map((item) => item.text).join(' ');
     const relevantDraws = context.textDraws.filter(
       (draw) => draw.font.includes("'LINE10'") && draw.translateX >= 430 && draw.translateX <= 510 && draw.translateY >= 400 && draw.translateY <= 570
     );
-    const drawTexts = relevantDraws.map((draw) => draw.text);
+    const relevantPathPaints = context.pathPaints.filter(
+      (paint) => paint.kind === 'fill' && paint.translateX >= 430 && paint.translateX <= 510 && paint.translateY >= 400 && paint.translateY <= 570
+    );
 
     expect(joinedText).toContain('Introduction to Information Theory');
     expect(joinedText).toContain('fundamental problem');
@@ -761,13 +769,8 @@ describe('PDF layout integration', () => {
     expect(joinedText).not.toContain('Intro duction');
     expect(joinedText).not.toContain('ffl');
     expect(joinedText).toContain('•');
-    expect(drawTexts.some((text) => text.includes('→'))).toBe(true);
-    expect(drawTexts.some((text) => text.includes('↗'))).toBe(true);
-    expect(drawTexts.some((text) => text.includes('↘'))).toBe(true);
-    expect(drawTexts.some((text) => text.includes('╱'))).toBe(true);
-    expect(drawTexts.some((text) => text.includes('╲'))).toBe(true);
-    expect(drawTexts.some((text) => text.includes('R @'))).toBe(false);
-    expect(drawTexts.some((text) => text.includes('@'))).toBe(false);
+    expect(relevantDraws).toHaveLength(0);
+    expect(relevantPathPaints.length).toBeGreaterThanOrEqual(4);
   });
 
   it('keeps MacKay CCITT illustration XObjects available to the renderer on pages 16 and 19', () => {
@@ -800,22 +803,46 @@ describe('PDF layout integration', () => {
     expect(masks.some((item) => item.bounds.maxY - item.bounds.minY > 25 && item.bounds.maxX - item.bounds.minX < 2)).toBe(true);
   });
 
-  it('renders the MacKay page-17 LINE10 figure with vertical arrows instead of fallback digits', () => {
+  it('renders the MacKay page-17 LINE10 figure with vertical arrows instead of fallback digits', async () => {
     const document = loadMacKayDocument();
     const context = new RecordingContext();
     const canvas = new RecordingCanvas(context);
     const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
 
+    await renderer.prepareDocumentFonts(document);
     renderer.render(canvas, document, 17);
     const relevantDraws = context.textDraws.filter(
       (draw) => draw.font.includes("'LINE10'") && draw.translateX >= 140 && draw.translateX <= 310 && draw.translateY >= 90 && draw.translateY <= 245
     );
-    const drawTexts = relevantDraws.map((draw) => draw.text);
+    const relevantPathPaints = context.pathPaints.filter(
+      (paint) => paint.kind === 'fill' && paint.translateX >= 140 && paint.translateX <= 310 && paint.translateY >= 90 && paint.translateY <= 245
+    );
 
-    expect(drawTexts.some((text) => text.includes('↑'))).toBe(true);
-    expect(drawTexts.some((text) => text.includes('↓'))).toBe(true);
-    expect(drawTexts.some((text) => text.includes('6'))).toBe(false);
-    expect(drawTexts.some((text) => text.includes('?'))).toBe(false);
+    expect(relevantDraws).toHaveLength(0);
+    expect(relevantPathPaints.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('renders the private cash-flow table as separate month cells instead of collapsed row strings', async () => {
+    const document = loadPrivateCashFlowDocument();
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    await renderer.prepareDocumentFonts(document);
+    renderer.render(canvas, document, 2);
+
+    expect(context.textDraws.some((draw) => draw.text.includes('2,395.0028,740.00'))).toBe(false);
+    expect(context.textDraws.some((draw) => draw.text.includes('Jul 2025Aug 2025'))).toBe(false);
+    expect(
+      context.textDraws.some(
+        (draw) => (draw.text === 'Jan 2025' || draw.text === '2,395.00') && !draw.font.includes("'Arial'")
+      )
+    ).toBe(false);
+    expect(
+      context.textDraws.some(
+        (draw) => (draw.text === 'Jan 2025' || draw.text === '2,395.00') && draw.scaleX > 1.02
+      )
+    ).toBe(false);
   });
 
   it('replaces MacKay brace-construction fragments instead of rendering raw CMEX fallback text', () => {

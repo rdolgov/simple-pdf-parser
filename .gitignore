@@ -18,3 +18,5 @@ coverage/
 .idea/
 .cache/
 .artifacts/
+private-pdfs/
+tmp/

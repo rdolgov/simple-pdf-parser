@@ -1,4 +1,5 @@
 import type { PDFTextItem } from '../types.js';
+import { looksLikeTableCellToken } from '../common/tabularTokenHeuristics.js';
 import { CMEX_DISPLAY_OPERATOR_CODES } from '../parser/parserConstants.js';
 import type { RegisteredEmbeddedFont } from './embeddedFontRegistry.js';
 
@@ -123,6 +124,14 @@ export function resolveParsedHeightScale(
   }
 
   return 0.82;
+}
+
+export function resolvePlainTextScaleX(rawScaleX: number, item: PDFTextItem): number {
+  if (looksLikeTableCellToken(item.text)) {
+    return 1;
+  }
+
+  return rawScaleX;
 }
 
 function isLikelyCompactScriptToken(item: PDFTextItem, compactText: string): boolean {

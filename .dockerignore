@@ -12,3 +12,5 @@ testApp/node_modules
 .env
 .env.local
 *.log
+private-pdfs/
+tmp/

@@ -746,6 +746,30 @@ ET
     expect(conclusionPage!.textItems.some((item) => item.text.includes('Conclus i on'))).toBe(false);
   });
 
+  it('does not merge adjacent accounting cells on the private cash-flow page', () => {
+    const fixtureUrl = new URL('../private-pdfs/Nov 14, 2025 to Dec 11, 2025.pdf', import.meta.url);
+    const buffer = readFileSync(fixtureUrl);
+    const document = PDFDocument.from(buffer);
+    const page = document.getPage(2);
+
+    expect(page).toBeDefined();
+
+    const monthlyIncomeCells = page!.textItems.filter(
+      (item) => item.text === '2,395.00' && item.bounds.minY > 369 && item.bounds.maxY < 382
+    );
+    const monthHeaders = page!.textItems.filter((item) =>
+      /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) 2025$/.test(item.text)
+    );
+
+    expect(monthlyIncomeCells).toHaveLength(12);
+    expect(monthHeaders).toHaveLength(12);
+    expect(page!.textItems.every((item) => item.fontResourceKey)).toBe(true);
+    expect(monthHeaders.every((item) => item.fontResourceKey && item.font === 'Arial')).toBe(true);
+    expect(monthlyIncomeCells.every((item) => item.fontResourceKey && item.font === 'Arial')).toBe(true);
+    expect(page!.textItems.some((item) => item.text.includes('2,395.0028,740.00'))).toBe(false);
+    expect(page!.textItems.some((item) => item.text.includes('Jul 2025Aug 2025'))).toBe(false);
+  });
+
   it('repairs merged author-note prose on the NIPS title page', () => {
     const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);

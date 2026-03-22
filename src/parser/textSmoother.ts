@@ -1,4 +1,5 @@
 import type { PDFTextItem } from '../types.js';
+import { looksLikeTableCellToken as isTableCellToken } from '../common/tabularTokenHeuristics.js';
 
 export interface TextSmootherOptions {
   lineTolerance?: number;
@@ -202,6 +203,11 @@ function mergeDecision(
     prevChars > 0 ? prevWidth / prevChars : 0,
     nextChars > 0 ? nextWidth / nextChars : 0
   );
+
+  if (shouldKeepSeparateTableCells(prev, next, gap, avgCharWidth)) {
+    return { merge: false, insertSpace: false };
+  }
+
   const columnReference = Math.max(referenceSize, avgCharWidth || referenceSize);
 
   if (gap >= columnReference * options.columnGapMultiplier) {
@@ -461,6 +467,24 @@ function canLeaveAsSeparateFragments(prevText: string, nextText: string): boolea
   const prevWord = normalizeWordFragment(getTrailingWordFragment(prevText));
   const nextWord = normalizeWordFragment(getLeadingWordFragment(nextText));
   return prevWord.length > 0 && nextWord.length > 0 && !isLikelyShortWordFragment(prevWord, nextWord);
+}
+
+function shouldKeepSeparateTableCells(
+  prev: PDFTextItem,
+  next: PDFTextItem,
+  gap: number,
+  avgCharWidth: number
+): boolean {
+  if (!looksLikeTableCellToken(prev.text) || !looksLikeTableCellToken(next.text)) {
+    return false;
+  }
+
+  const overlapTolerance = Math.max(avgCharWidth * 0.12, 0.75);
+  return gap >= -overlapTolerance;
+}
+
+function looksLikeTableCellToken(text: string): boolean {
+  return isTableCellToken(text);
 }
 
 function hasLikelyWordBoundary(prevText: string, nextText: string, gap: number, avgCharWidth: number): boolean {

@@ -137,6 +137,11 @@ import {
   countSpaces
 } from './textDecoder.js';
 
+type PersistentTextState = Pick<
+  TextState,
+  'font' | 'fontSize' | 'leading' | 'charSpacing' | 'wordSpacing' | 'horizontalScale' | 'textRise'
+>;
+
 export class PDFParser {
   constructor(private readonly options: ParseOptions = {}) {}
 
@@ -727,7 +732,8 @@ export class PDFParser {
     context: ParseContext,
     objects: Map<string, PDFRawObject>,
     rawContent: string,
-    visitedForms: Set<string> = new Set()
+    visitedForms: Set<string> = new Set(),
+    inheritedTextState?: PersistentTextState
   ): {
     textItems: PDFTextItem[];
     imageItems: PDFImageItem[];
@@ -742,6 +748,7 @@ export class PDFParser {
     const pathItems: PDFPathItem[] = [];
     const stack: PDFOperatorValue[] = [];
     const graphicsStack: Matrix[] = [identityMatrix()];
+    let currentTextState = this.createPersistentTextState(inheritedTextState);
     const length = streamContent.length;
     let index = 0;
     const clampColor = (value: number | undefined): number => {
@@ -836,6 +843,7 @@ export class PDFParser {
       lineJoin: PDFPathItem['lineJoin'];
       miterLimit: number;
       clipPaths: PDFClipPath[];
+      textState: PersistentTextState;
     }
     const gStateStack: GraphicsState[] = [{
       matrix: identityMatrix(),
@@ -853,7 +861,8 @@ export class PDFParser {
       lineCap: mapPdfLineCap(0),
       lineJoin: mapPdfLineJoin(0),
       miterLimit: 10,
-      clipPaths: []
+      clipPaths: [],
+      textState: this.clonePersistentTextState(currentTextState)
     }];
 
     // Path construction state
@@ -970,7 +979,9 @@ export class PDFParser {
           break;
         }
         const blockContent = streamContent.slice(index + 2, blockEnd);
-        const items = this.parseTextBlock(blockContent, context.fonts);
+        const parsedBlock = this.parseTextBlock(blockContent, context.fonts, currentTextState);
+        currentTextState = this.clonePersistentTextState(parsedBlock.textState);
+        const items = parsedBlock.items;
         const currentMatrix = graphicsStack[graphicsStack.length - 1];
         textItems.push(
           ...this.transformTextItems(items, currentMatrix).map((item) => ({
@@ -1048,7 +1059,8 @@ export class PDFParser {
           lineCap: currentLineCap,
           lineJoin: currentLineJoin,
           miterLimit: currentMiterLimit,
-          clipPaths: cloneClipPaths(currentClipPaths) ?? []
+          clipPaths: cloneClipPaths(currentClipPaths) ?? [],
+          textState: this.clonePersistentTextState(currentTextState)
         });
         index += 1;
         stack.length = 0;
@@ -1072,6 +1084,7 @@ export class PDFParser {
           currentLineJoin = restored.lineJoin;
           currentMiterLimit = restored.miterLimit;
           currentClipPaths = cloneClipPaths(restored.clipPaths) ?? [];
+          currentTextState = this.clonePersistentTextState(restored.textState);
         }
         // When stack underflows (extra Q without matching q), ignore the Q
         // rather than resetting to identity - preserves transformation state
@@ -1253,7 +1266,14 @@ export class PDFParser {
                     colorSpaces: mergedColorSpaces
                   };
                   const currentMatrix = graphicsStack[graphicsStack.length - 1];
-                  const nested = this.parseTextStream(formStream, combinedContext, objects, rawContent, visitedForms);
+                  const nested = this.parseTextStream(
+                    formStream,
+                    combinedContext,
+                    objects,
+                    rawContent,
+                    visitedForms,
+                    currentTextState
+                  );
                   const transformedText = this.transformTextItems(nested.textItems, currentMatrix);
                   textItems.push(...transformedText);
                   if (nested.imageItems.length > 0) {
@@ -1853,20 +1873,14 @@ export class PDFParser {
     return stream.slice(0, end);
   }
 
-  private parseTextBlock(content: string, fonts: FontMap): PDFTextItem[] {
+  private parseTextBlock(
+    content: string,
+    fonts: FontMap,
+    inheritedTextState?: PersistentTextState
+  ): { items: PDFTextItem[]; textState: PersistentTextState } {
     const tokens = tokenize(content);
     const items: PDFTextItem[] = [];
-    const state: TextState = {
-      textMatrix: identityMatrix(),
-      textLineMatrix: identityMatrix(),
-      font: undefined,
-      fontSize: DEFAULT_FONT_SIZE,
-      leading: DEFAULT_FONT_SIZE,
-      charSpacing: 0,
-      wordSpacing: 0,
-      horizontalScale: 1,
-      textRise: 0
-    };
+    const state = this.createTextBlockState(inheritedTextState);
 
     const stack: PDFOperatorValue[] = [];
 
@@ -1900,7 +1914,55 @@ export class PDFParser {
       }
     }
 
-    return items;
+    return {
+      items,
+      textState: this.snapshotPersistentTextState(state)
+    };
+  }
+
+  private createPersistentTextState(overrides?: PersistentTextState): PersistentTextState {
+    return {
+      font: overrides?.font,
+      fontSize: overrides?.fontSize ?? DEFAULT_FONT_SIZE,
+      leading: overrides?.leading ?? DEFAULT_FONT_SIZE,
+      charSpacing: overrides?.charSpacing ?? 0,
+      wordSpacing: overrides?.wordSpacing ?? 0,
+      horizontalScale: overrides?.horizontalScale ?? 1,
+      textRise: overrides?.textRise ?? 0
+    };
+  }
+
+  private clonePersistentTextState(state: PersistentTextState): PersistentTextState {
+    return {
+      font: state.font,
+      fontSize: state.fontSize,
+      leading: state.leading,
+      charSpacing: state.charSpacing,
+      wordSpacing: state.wordSpacing,
+      horizontalScale: state.horizontalScale,
+      textRise: state.textRise
+    };
+  }
+
+  private createTextBlockState(inheritedTextState?: PersistentTextState): TextState {
+    const persistentState = this.createPersistentTextState(inheritedTextState);
+    return {
+      textMatrix: identityMatrix(),
+      textLineMatrix: identityMatrix(),
+      ...persistentState
+    };
+  }
+
+  private snapshotPersistentTextState(state: TextState): PersistentTextState {
+    return {
+      font: state.font,
+      fontSize: state.fontSize,
+      leading: state.leading,
+      charSpacing: state.charSpacing,
+      wordSpacing: state.wordSpacing,
+      horizontalScale: state.horizontalScale,
+      textRise: state.textRise
+    };
   }
 
   private parseArray(tokens: OperatorToken[], startIndex: number): { value: PDFOperatorValue[]; nextIndex: number } {

@@ -17,6 +17,7 @@ import {
 } from './displayOperatorRenderer.js';
 import {
   resolveGlyphScaleX,
+  resolvePlainTextScaleX,
   resolveParsedHeightScale,
   shouldUseParsedVerticalFit,
   resolveVerticalScaleBounds
@@ -1030,7 +1031,7 @@ export class CanvasRenderer {
 
         let scaleX = 1;
         if (measuredWidth > 0 && projectedWidth > 0) {
-          scaleX = projectedWidth / measuredWidth;
+          scaleX = resolvePlainTextScaleX(projectedWidth / measuredWidth, item);
         }
         const compactScriptScale = resolveParsedHeightScale(item, embeddedFont);
         if (compactScriptScale < 1) {
