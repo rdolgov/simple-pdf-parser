@@ -83,6 +83,7 @@ export default function App(): JSX.Element {
     () => (typeof window === 'undefined' ? 'all' : parseAiDetectionMode(window.location.search)),
     []
   );
+  const enableAiDrivenTextHover = aiDetectionMode !== 'manual';
   const {
     state: proxyAuthState,
     login: loginProxySession,
@@ -392,7 +393,8 @@ export default function App(): JSX.Element {
   const logicalStructure = useLogicalStructure({
     fileHash: loadedFileHash,
     taskDocumentId,
-    htmlLayout
+    htmlLayout,
+    enabled: enableAiDrivenTextHover
   });
 
   // Semantic search document data - prefer htmlLayout for block-level chunking
@@ -1219,6 +1221,7 @@ export default function App(): JSX.Element {
           htmlFriendlyJson={htmlFriendlyJson}
           htmlPageLayouts={htmlPageLayouts}
           logicalStructure={logicalStructure}
+          enableTextHoverOverlay={enableAiDrivenTextHover}
           canvasHighlight={canvasHighlight}
           onCanvasHighlight={handleCanvasHighlight}
           focusState={focusState}

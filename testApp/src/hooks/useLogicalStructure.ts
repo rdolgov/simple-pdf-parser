@@ -22,19 +22,21 @@ interface UseLogicalStructureOptions {
   fileHash: string;
   taskDocumentId?: string | null;
   htmlLayout: HtmlDocumentLayout | null;
+  enabled?: boolean;
 }
 
 export function useLogicalStructure({
   fileHash,
   taskDocumentId,
-  htmlLayout
+  htmlLayout,
+  enabled = true
 }: UseLogicalStructureOptions): HtmlDocumentLogicalStructure | null {
   const heuristicStructure = useMemo(() => {
-    if (!htmlLayout) {
+    if (!enabled || !htmlLayout) {
       return null;
     }
     return buildHtmlLogicalStructure(htmlLayout);
-  }, [htmlLayout]);
+  }, [enabled, htmlLayout]);
   const [settingsRevision, setSettingsRevision] = useState(0);
   const [resolvedStructure, setResolvedStructure] = useState<HtmlDocumentLogicalStructure | null>(null);
 
@@ -59,13 +61,18 @@ export function useLogicalStructure({
 
   const runtimeSettings = useMemo(() => loadLogicalStructureRuntimeSettings(), [settingsRevision]);
   const cacheKey = useMemo(() => {
-    if (!fileHash) {
+    if (!enabled || !fileHash) {
       return '';
     }
     return createLogicalStructureCacheKey(fileHash, createLogicalStructureCacheFingerprint(runtimeSettings));
-  }, [fileHash, runtimeSettings]);
+  }, [enabled, fileHash, runtimeSettings]);
 
   useEffect(() => {
+    if (!enabled) {
+      setResolvedStructure(null);
+      return;
+    }
+
     setResolvedStructure(heuristicStructure);
     if (!fileHash || !htmlLayout || !heuristicStructure || !cacheKey) {
       return;
@@ -110,7 +117,7 @@ export function useLogicalStructure({
     return () => {
       cancelled = true;
     };
-  }, [cacheKey, fileHash, heuristicStructure, htmlLayout, runtimeSettings, taskDocumentId]);
+  }, [cacheKey, enabled, fileHash, heuristicStructure, htmlLayout, runtimeSettings, taskDocumentId]);
 
   return resolvedStructure ?? heuristicStructure;
 }

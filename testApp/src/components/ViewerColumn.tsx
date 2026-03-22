@@ -36,6 +36,7 @@ interface ViewerColumnProps {
   htmlFriendlyJson: string;
   htmlPageLayouts: Map<number, HtmlPageLayout>;
   logicalStructure: HtmlDocumentLogicalStructure | null;
+  enableTextHoverOverlay?: boolean;
   canvasHighlight: CanvasHighlightSelection | null;
   onCanvasHighlight: (selection: CanvasHighlightSelection | null) => void;
   focusState: FocusRenderState;
@@ -89,6 +90,7 @@ export function ViewerColumn({
   htmlFriendlyJson,
   htmlPageLayouts,
   logicalStructure,
+  enableTextHoverOverlay = true,
   canvasHighlight,
   onCanvasHighlight,
   focusState,
@@ -159,6 +161,7 @@ export function ViewerColumn({
                       zoom={zoom}
                       htmlPage={htmlPageLayouts.get(page.number) ?? null}
                       logicalStructure={logicalStructure}
+                      enableTextHoverOverlay={enableTextHoverOverlay}
                       canvasHighlight={canvasHighlight}
                       onCanvasHighlight={onCanvasHighlight}
                       focusMode={viewMode === 'focus-pdf' && focusState.status === 'ready'}

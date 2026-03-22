@@ -177,6 +177,7 @@ interface CanvasPageWithOverlayProps {
   zoom: number;
   htmlPage: HtmlPageLayout | null;
   logicalStructure: HtmlDocumentLogicalStructure | null;
+  enableTextHoverOverlay?: boolean;
   canvasHighlight: CanvasHighlightSelection | null;
   onCanvasHighlight: (selection: CanvasHighlightSelection | null) => void;
   focusMode: boolean;
@@ -216,6 +217,7 @@ export function CanvasPageWithOverlay({
   zoom,
   htmlPage,
   logicalStructure,
+  enableTextHoverOverlay = true,
   canvasHighlight,
   onCanvasHighlight,
   focusMode,
@@ -1687,6 +1689,10 @@ export function CanvasPageWithOverlay({
 
   const updateHoverTextSelection = useCallback(
     (pdfX: number, pdfY: number) => {
+      if (!enableTextHoverOverlay) {
+        clearTextHoverSelection();
+        return;
+      }
       if (!htmlPage) {
         clearTextHoverSelection();
         return;
@@ -1732,8 +1738,14 @@ export function CanvasPageWithOverlay({
 
       onCanvasHighlight(nextSelection);
     },
-    [canvasHighlight, clearTextHoverSelection, htmlPage, logicalStructure, onCanvasHighlight, page.number]
+    [canvasHighlight, clearTextHoverSelection, enableTextHoverOverlay, htmlPage, logicalStructure, onCanvasHighlight, page.number]
   );
+
+  useEffect(() => {
+    if (!enableTextHoverOverlay && canvasHighlight?.kind === 'text') {
+      onCanvasHighlight(null);
+    }
+  }, [canvasHighlight, enableTextHoverOverlay, onCanvasHighlight]);
 
   // Handle mouse move to detect hoverable elements
   const handleCanvasMouseMove = useCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -1771,7 +1783,7 @@ export function CanvasPageWithOverlay({
     const relativeY = event.clientY - rect.top;
     const withinActiveTextHoverShell = isPointWithinActiveTextHoverShell(event.clientX, event.clientY);
 
-    if (withinActiveTextHoverShell) {
+    if (enableTextHoverOverlay && withinActiveTextHoverShell) {
       if (hoveredElement) {
         setHoveredElement(null);
       }
@@ -1910,10 +1922,15 @@ export function CanvasPageWithOverlay({
     if (hoveredElement) {
       setHoveredElement(null);
     }
-    updateHoverTextSelection(pdfX, pdfY);
+    if (enableTextHoverOverlay) {
+      updateHoverTextSelection(pdfX, pdfY);
+    } else {
+      clearTextHoverSelection();
+    }
   }, [
     alignedElements,
     clearTextHoverSelection,
+    enableTextHoverOverlay,
     enableTableHighlight,
     extractedTables,
     focusMode,
@@ -2226,7 +2243,7 @@ export function CanvasPageWithOverlay({
     }
   }
 
-  if (!focusMode && canvasHighlight?.kind === 'text') {
+  if (!focusMode && enableTextHoverOverlay && canvasHighlight?.kind === 'text') {
     const logicalUnit = findHtmlLogicalUnitById(logicalStructure, canvasHighlight.logicalUnitId);
     const pageSegment = getHtmlLogicalUnitPageSegment(logicalUnit, page.number);
 
@@ -2288,7 +2305,7 @@ export function CanvasPageWithOverlay({
   const activeLassoBounds = lassoSelection?.bounds ?? null;
   const canvasOffsetLeft = canvasRef.current?.offsetLeft ?? 0;
   const canvasOffsetTop = canvasRef.current?.offsetTop ?? 0;
-  const isLogicalTextHoverOverlay = !focusMode && canvasHighlight?.kind === 'text';
+  const isLogicalTextHoverOverlay = !focusMode && enableTextHoverOverlay && canvasHighlight?.kind === 'text';
   const showOverlayDim = focusMode;
   const overlayClassName = hasOverlayContent ? 'canvas-overlay canvas-overlay--interactive' : 'canvas-overlay';
   const overlayLayerClassName = hasOverlayContent
