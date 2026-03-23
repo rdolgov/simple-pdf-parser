@@ -13,6 +13,7 @@ export * from './html/htmlRenderer.js';
 export * from './query/relevanceTypes.js';
 export * from './query/openaiRelevanceService.js';
 export * from './query/mockRelevanceService.js';
+export * from './query/documentCitationTypes.js';
 export * from './query/geminiApi.js';
 export * from './query/geminiModelSelection.js';
 export * from './query/openAiApi.js';

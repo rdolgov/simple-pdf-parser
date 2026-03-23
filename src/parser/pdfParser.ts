@@ -54,6 +54,7 @@ import {
   isOctalDigit
 } from './textTokenizer.js';
 import { bufferToLatin1, latin1ToUint8, uint8ToBase64 } from '../utils/buffer.js';
+import { scaleTransformedTextItemRenderFontSize } from '../common/textItemFontSize.js';
 
 // Import types from parserTypes module
 import type {
@@ -4504,30 +4505,38 @@ export class PDFParser {
     }
 
     return items.map((item) => {
-      const corners = [
+      const transformedBoundsCorners = [
         transformPoint(matrix, item.bounds.minX, item.bounds.minY),
         transformPoint(matrix, item.bounds.minX, item.bounds.maxY),
         transformPoint(matrix, item.bounds.maxX, item.bounds.minY),
         transformPoint(matrix, item.bounds.maxX, item.bounds.maxY)
       ];
-      const xs = corners.map((point) => point.x);
-      const ys = corners.map((point) => point.y);
-      const height = Math.abs(Math.max(...ys) - Math.min(...ys));
+      const transformedBaselineStart = item.baselineStart
+        ? transformPoint(matrix, item.baselineStart.x, item.baselineStart.y)
+        : undefined;
+      const transformedBaselineEnd = item.baselineEnd
+        ? transformPoint(matrix, item.baselineEnd.x, item.baselineEnd.y)
+        : undefined;
+      const transformedBounds = {
+        minX: Math.min(...transformedBoundsCorners.map((point) => point.x)),
+        minY: Math.min(...transformedBoundsCorners.map((point) => point.y)),
+        maxX: Math.max(...transformedBoundsCorners.map((point) => point.x)),
+        maxY: Math.max(...transformedBoundsCorners.map((point) => point.y))
+      };
+      const transformedRenderFontSize = scaleTransformedTextItemRenderFontSize(
+        item,
+        transformedBounds,
+        transformedBaselineStart,
+        transformedBaselineEnd
+      );
+      const height = Math.abs(transformedBounds.maxY - transformedBounds.minY);
       return {
         ...item,
-        bounds: {
-          minX: Math.min(...xs),
-          minY: Math.min(...ys),
-          maxX: Math.max(...xs),
-          maxY: Math.max(...ys)
-        },
-        baselineStart: item.baselineStart
-          ? transformPoint(matrix, item.baselineStart.x, item.baselineStart.y)
-          : undefined,
-        baselineEnd: item.baselineEnd
-          ? transformPoint(matrix, item.baselineEnd.x, item.baselineEnd.y)
-          : undefined,
+        bounds: transformedBounds,
+        baselineStart: transformedBaselineStart,
+        baselineEnd: transformedBaselineEnd,
         fontSize: Number.isFinite(height) && height > 0 ? height : item.fontSize,
+        renderFontSize: transformedRenderFontSize ?? item.renderFontSize,
         glyphSpans: item.glyphSpans?.map((span) => ({ ...span })),
         clipPaths: transformClipPaths(item.clipPaths, matrix)
       };

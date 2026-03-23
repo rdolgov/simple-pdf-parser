@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
-import type { HtmlDocumentLayout } from '../../src/index.js';
+import type { DocumentQuestionScope, HtmlDocumentLayout } from '../../src/index.js';
 import { isBackofficeAllowedUser, listBackofficeAllowedUsers } from './backofficeUsers.js';
 import { executeCodexResponses, type CodexExecConfig, type CodexProxyResponse } from './codexExecProxy.js';
+import { answerDocumentQuestion } from './documentQaCitations.js';
 import { renderGeminiBackofficeHtml } from './geminiBackoffice.js';
 import { GeminiAnalyticsStore } from './geminiAnalyticsStore.js';
 import { resolveGeminiProxyUpstreamPath } from './geminiProxyModel.js';
@@ -114,6 +115,10 @@ const PROXY_TASK_DOCUMENTS_PREFIX = `${PROXY_TASKS_PREFIX}/documents`;
 const TASK_JOBS_PREFIX = `${TASKS_PREFIX}/jobs/`;
 const PROXY_TASK_JOBS_PREFIX = `${PROXY_TASKS_PREFIX}/jobs/`;
 const TASK_ASK_QUESTION_PATHS = new Set([`${TASKS_PREFIX}/ask-question`, `${PROXY_TASKS_PREFIX}/ask-question`]);
+const TASK_ANSWER_DOCUMENT_QUESTION_PATHS = new Set([
+  `${TASKS_PREFIX}/answer-document-question`,
+  `${PROXY_TASKS_PREFIX}/answer-document-question`
+]);
 const TASK_ANALYZE_IMAGE_PATHS = new Set([`${TASKS_PREFIX}/analyze-image`, `${PROXY_TASKS_PREFIX}/analyze-image`]);
 const TASK_GENERATE_IMAGE_PATHS = new Set([`${TASKS_PREFIX}/generate-image`, `${PROXY_TASKS_PREFIX}/generate-image`]);
 const TASK_GENERATE_WIDGET_PATHS = new Set([`${TASKS_PREFIX}/generate-widget`, `${PROXY_TASKS_PREFIX}/generate-widget`]);
@@ -341,6 +346,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     }
     if (TASK_ASK_QUESTION_PATHS.has(requestUrl.pathname)) {
       await handleTextTaskRequest(request, response, requestUrl, config, 'ask-question');
+      return;
+    }
+    if (TASK_ANSWER_DOCUMENT_QUESTION_PATHS.has(requestUrl.pathname)) {
+      await handleDocumentQuestionTaskRequest(request, response, requestUrl, config);
       return;
     }
     if (TASK_GENERATE_WIDGET_PATHS.has(requestUrl.pathname)) {
@@ -892,6 +901,148 @@ async function handleTextTaskRequest(
             ...(model ? { model } : {}),
             status: 'failed',
             inputSummary: summarizePromptInput(prompt, body),
+            outputSummary: { error: message }
+          });
+          return createJsonErrorResponse(500, message);
+        }
+      }
+    })
+  ) {
+    return;
+  }
+
+  sendJson(response, 400, { error: 'Task requests must use async polling.' });
+}
+
+async function handleDocumentQuestionTaskRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  currentConfig: ServerConfig
+): Promise<void> {
+  if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
+    sendJson(response, 401, { error: 'Proxy authorization failed.' });
+    return;
+  }
+
+  const actor = resolveRequestActor(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth);
+  const body = await readJsonBody(request);
+  const question = normalizeNonEmptyString(body.question);
+  const documentId = normalizeNonEmptyString(body.documentId);
+  if (!question || !documentId) {
+    sendJson(response, 400, { error: 'Document question requests require documentId and question.' });
+    return;
+  }
+
+  const provider = normalizeTextTaskProvider(body.provider) ?? 'gemini';
+  const model = normalizeNonEmptyString(body.model);
+  const scope = normalizeDocumentQuestionScope(body.scope);
+  let document: StoredDocumentRecord | null = null;
+  try {
+    document = await resolveAuthorizedTaskDocument(actor, documentId);
+  } catch (error) {
+    sendJson(response, 404, { error: error instanceof Error ? error.message : 'Unknown task document.' });
+    return;
+  }
+  if (!document) {
+    sendJson(response, 404, { error: 'Unknown task document.' });
+    return;
+  }
+
+  const rawBody = Buffer.from(JSON.stringify(body), 'utf8');
+  if (
+    maybeHandleAsyncTaskJob(request, response, requestUrl, {
+      requestKind: 'answer-document-question',
+      sequence: ++proxyRequestSequence,
+      startedAt: Date.now(),
+      cacheKey: buildTaskCacheKey('answer-document-question', actor, rawBody, {
+        documentId: document.id,
+        provider,
+        ...(model ? { model } : {})
+      }),
+      bodyHash: responseCache.buildBodyHash(rawBody),
+      runner: async (_jobId, logProgress) => {
+        logProgress(
+          `task-start provider=${provider} task=answer-document-question model=${model ?? 'default'} document=${document?.id ?? 'none'} question="${summarizeTextForLog(question)}"`
+        );
+        const taskStartedAt = Date.now();
+        try {
+          const result = await answerDocumentQuestion(
+            {
+              document,
+              question,
+              provider,
+              ...(model ? { model } : {}),
+              ...(scope ? { scope } : {})
+            },
+            currentConfig,
+            taskStore
+          );
+          logProgress(
+            `task-done provider=${provider} task=answer-document-question model=${result.model} ${formatDurationFields(Date.now() - taskStartedAt)} citations=${result.citations.length} segments=${result.segments.length}`
+          );
+          const archivedPath = await archiveTaskLlmExchange({
+            actor,
+            document,
+            taskType: 'answer-document-question',
+            provider,
+            model: result.model,
+            status: 'succeeded',
+            request: {
+              question,
+              ...(scope ? { scope } : {})
+            },
+            response: result as unknown as Record<string, unknown>
+          });
+          if (archivedPath) {
+            logProgress(`task-exchange saved task=answer-document-question path=${archivedPath}`);
+          }
+          await taskStore.recordInteraction({
+            actor,
+            documentId: document.id,
+            taskType: 'answer-document-question',
+            provider,
+            model: result.model,
+            status: 'succeeded',
+            inputSummary: {
+              questionChars: question.length,
+              scope: scope?.kind ?? 'document'
+            },
+            outputSummary: {
+              citations: result.citations.length,
+              segments: result.segments.length
+            }
+          });
+          return createJsonResponse(200, result as unknown as Record<string, unknown>);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Failed to answer document question.';
+          const archivedPath = await archiveTaskLlmExchange({
+            actor,
+            document,
+            taskType: 'answer-document-question',
+            provider,
+            ...(model ? { model } : {}),
+            status: 'failed',
+            request: {
+              question,
+              ...(scope ? { scope } : {})
+            },
+            error: { message }
+          });
+          if (archivedPath) {
+            logProgress(`task-exchange-error saved task=answer-document-question path=${archivedPath}`);
+          }
+          await taskStore.recordInteraction({
+            actor,
+            documentId: document.id,
+            taskType: 'answer-document-question',
+            provider,
+            ...(model ? { model } : {}),
+            status: 'failed',
+            inputSummary: {
+              questionChars: question.length,
+              scope: scope?.kind ?? 'document'
+            },
             outputSummary: { error: message }
           });
           return createJsonErrorResponse(500, message);
@@ -2613,6 +2764,39 @@ function normalizeTextTaskProvider(value: unknown): TaskTextProvider | null {
   return null;
 }
 
+function normalizeDocumentQuestionScope(value: unknown): DocumentQuestionScope | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const source = value as Record<string, unknown>;
+  const kind = normalizeNonEmptyString(source.kind)?.toLowerCase();
+  const contextText = normalizeNonEmptyString(source.contextText);
+
+  if (kind === 'selection') {
+    const pageNumber = normalizeOptionalFiniteNumber(source.pageNumber);
+    const bounds = normalizePdfBounds(source.bounds);
+    if (typeof pageNumber !== 'number' || !bounds) {
+      return undefined;
+    }
+    return {
+      kind: 'selection',
+      pageNumber,
+      bounds,
+      ...(contextText ? { contextText } : {})
+    };
+  }
+
+  if (kind === 'document') {
+    return {
+      kind: 'document',
+      ...(contextText ? { contextText } : {})
+    };
+  }
+
+  return undefined;
+}
+
 function normalizeOpenAiCompatibleTaskProvider(value: unknown): 'openai' | 'codex' | null {
   if (typeof value !== 'string') {
     return null;
@@ -2664,6 +2848,26 @@ function normalizeTaskImagePayload(body: Record<string, unknown>): { mimeType: s
     return { mimeType, base64Data };
   }
   return null;
+}
+
+function normalizePdfBounds(value: unknown): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const bounds = value as Record<string, unknown>;
+  const minX = normalizeOptionalFiniteNumber(bounds.minX);
+  const minY = normalizeOptionalFiniteNumber(bounds.minY);
+  const maxX = normalizeOptionalFiniteNumber(bounds.maxX);
+  const maxY = normalizeOptionalFiniteNumber(bounds.maxY);
+  if (
+    typeof minX !== 'number' ||
+    typeof minY !== 'number' ||
+    typeof maxX !== 'number' ||
+    typeof maxY !== 'number'
+  ) {
+    return null;
+  }
+  return { minX, minY, maxX, maxY };
 }
 
 function summarizePromptInput(prompt: string, body: Record<string, unknown>): Record<string, unknown> {

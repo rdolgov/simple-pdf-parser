@@ -1,6 +1,7 @@
 import { useRef, useCallback, useEffect, useState } from 'react';
 import type { MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import {
+  type DocumentAnswerCitation,
   findHtmlLogicalUnitById,
   getHtmlLogicalUnitPageSegment,
   resolveHtmlLogicalUnitForSelection,
@@ -197,6 +198,11 @@ interface CanvasPageWithOverlayProps {
   enableTableHighlight?: boolean;
   enableImageHighlight?: boolean;
   enableWebSearch?: boolean;
+  activeCitationHighlight?: {
+    citation: DocumentAnswerCitation;
+    activationKey: number;
+  } | null;
+  onCitationClick?: (citation: DocumentAnswerCitation) => void;
   onChatActivityChange?: (delta: number) => void;
   onImageExplanationActivityChange?: (delta: number) => void;
   onFormulaExplanationActivityChange?: (delta: number) => void;
@@ -237,6 +243,8 @@ export function CanvasPageWithOverlay({
   enableTableHighlight = true,
   enableImageHighlight = true,
   enableWebSearch = false,
+  activeCitationHighlight = null,
+  onCitationClick,
   onChatActivityChange,
   onImageExplanationActivityChange,
   onFormulaExplanationActivityChange,
@@ -2399,6 +2407,32 @@ export function CanvasPageWithOverlay({
           })}
         </div>
       )}
+      {canvasRef.current && activeCitationHighlight && (
+        <div className="canvas-overlay-layer" aria-hidden="true">
+          {(() => {
+            const bounds = activeCitationHighlight.citation.anchor.bounds;
+            const canvasPadding = 16 * zoom;
+            const highlightPadding = 6;
+            const left = bounds.minX * scaleX + canvasPadding - highlightPadding;
+            const top = (page.size.height - bounds.maxY) * scaleY + canvasPadding - highlightPadding;
+            const width = (bounds.maxX - bounds.minX) * scaleX + highlightPadding * 2;
+            const height = (bounds.maxY - bounds.minY) * scaleY + highlightPadding * 2;
+            return (
+              <div
+                key={`citation-${activeCitationHighlight.activationKey}`}
+                className="document-citation-highlight"
+                style={{
+                  left: `${left}px`,
+                  top: `${top}px`,
+                  width: `${width}px`,
+                  height: `${height}px`
+                }}
+                title={`${activeCitationHighlight.citation.label} ${activeCitationHighlight.citation.quote}`}
+              />
+            );
+          })()}
+        </div>
+      )}
       {canvasRef.current && (lassoMode || hasLassoOverlay) && (
         <div className="canvas-overlay-layer" aria-hidden="true">
           {lassoMode && !hasLassoOverlay && renderState === 'ready' && (
@@ -2617,6 +2651,7 @@ export function CanvasPageWithOverlay({
           initialMessages={chatState.initialMessages}
           enableWebSearch={enableWebSearch}
           onChatActivityChange={onChatActivityChange}
+          onCitationClick={onCitationClick}
         />
       ))}
 
@@ -2769,6 +2804,7 @@ export function CanvasPageWithOverlay({
           initialQuery={connectionChatState.initialQuery}
           enableWebSearch={enableWebSearch}
           onChatActivityChange={onChatActivityChange}
+          onCitationClick={onCitationClick}
         />
       )}
 

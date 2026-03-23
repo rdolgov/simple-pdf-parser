@@ -2,6 +2,7 @@
  * Generic annotation storage using IndexedDB
  * Stores annotations tied to specific positions in PDF documents
  */
+import type { DocumentCitedAnswerResponse } from 'pdf-layout-parser';
 
 // ============================================================================
 // Types
@@ -20,6 +21,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  citedAnswer?: DocumentCitedAnswerResponse;
 }
 
 export type ChatScope = 'selection' | 'document';

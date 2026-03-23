@@ -294,6 +294,13 @@ function refineSegment(
     return segment;
   }
 
+  if (originalWords.length === 1) {
+    const singleWord = originalWords[0] ?? '';
+    if (isProtectedTitleCaseWordToken(singleWord) && !resolveLeadingArticleWords(singleWord, fontKey, lexicon)) {
+      return segment;
+    }
+  }
+
   const collapsed = collapseSegment(core, suspiciousSpaceIndices);
   if (collapsed.joined.length < 4) {
     return segment;
@@ -394,6 +401,11 @@ function detectSuspiciousSpaceIndices(item: PDFTextItem): Set<number> {
     return suspicious;
   }
 
+  const suspiciousAdvanceThreshold = resolveSuspiciousSpaceAdvanceThreshold(item);
+  if (!(suspiciousAdvanceThreshold > 0)) {
+    return suspicious;
+  }
+
   let offset = 0;
   for (let index = 0; index < item.glyphSpans.length; index += 1) {
     const span = item.glyphSpans[index];
@@ -407,7 +419,7 @@ function detectSuspiciousSpaceIndices(item: PDFTextItem): Set<number> {
       next &&
       /[A-Za-z]$/.test(previous.text) &&
       /^[A-Za-z]/.test(next.text) &&
-      isSuspiciousSpaceAdvance(span.advance, item.fontSize)
+      isSuspiciousSpaceAdvance(span.advance, suspiciousAdvanceThreshold)
     ) {
       suspicious.add(offset);
     }
@@ -418,12 +430,42 @@ function detectSuspiciousSpaceIndices(item: PDFTextItem): Set<number> {
   return suspicious;
 }
 
-function isSuspiciousSpaceAdvance(advance: number, fontSize: number | undefined): boolean {
+function resolveSuspiciousSpaceAdvanceThreshold(item: PDFTextItem): number {
+  if (!item.glyphSpans || item.glyphSpans.length === 0) {
+    return 0;
+  }
+
+  const explicitSpaceAdvances = item.glyphSpans
+    .filter((span) => /^\s+$/.test(span.text) && span.advance > 0)
+    .map((span) => span.advance)
+    .sort((left, right) => left - right);
+  const letterAdvances = item.glyphSpans
+    .filter((span) => /^[A-Za-z]$/.test(span.text) && span.advance > 0)
+    .map((span) => span.advance)
+    .sort((left, right) => left - right);
+  const medianExplicitSpace =
+    explicitSpaceAdvances.length > 0
+      ? explicitSpaceAdvances[Math.floor(explicitSpaceAdvances.length / 2)] ?? 0
+      : 0;
+  const medianLetterAdvance =
+    letterAdvances.length > 0
+      ? letterAdvances[Math.floor(letterAdvances.length / 2)] ?? 0
+      : 0;
+
+  const candidates = [
+    0.15,
+    medianExplicitSpace > 0 ? medianExplicitSpace * 0.55 : Number.POSITIVE_INFINITY,
+    medianLetterAdvance > 0 ? medianLetterAdvance * 0.32 : Number.POSITIVE_INFINITY
+  ].filter((value) => Number.isFinite(value) && value > 0);
+
+  return candidates.length > 0 ? Math.min(...candidates) : 0;
+}
+
+function isSuspiciousSpaceAdvance(advance: number, threshold: number): boolean {
   if (!Number.isFinite(advance)) {
     return false;
   }
 
-  const threshold = Math.max(0.75, (fontSize ?? 0) * 0.08);
   return advance <= threshold;
 }
 
@@ -1014,16 +1056,9 @@ function splitAttachedWordToken(
     return `${trailingInitialMatch[1]} ${trailingInitialMatch[2]}`;
   }
 
-  const leadingArticleMatch = word.match(/^A([a-z]{5,})$/);
-  if (leadingArticleMatch) {
-    const remainder = leadingArticleMatch[1] ?? '';
-    const remainderPlan = findBestSegmentation(remainder, new Set(), fontKey, lexicon);
-    if (
-      isBackedLexiconWord(remainder, fontKey, lexicon) ||
-      (remainderPlan && remainderPlan.words.length > 0 && remainderPlan.score >= scoreWord(remainder, fontKey, lexicon) + 1)
-    ) {
-      return `A ${remainderPlan ? remainderPlan.words.join(' ') : remainder}`;
-    }
+  const leadingArticleWords = resolveLeadingArticleWords(word, fontKey, lexicon);
+  if (leadingArticleWords) {
+    return leadingArticleWords.join(' ');
   }
 
   return word;
@@ -1042,6 +1077,7 @@ function repairMergedWordPhrases(
     if (
       token?.kind !== 'word' ||
       token.value.length < 8 ||
+      isProtectedTitleCaseWordToken(token.value) ||
       isTrustedLexiconWord(token.value.toLowerCase())
     ) {
       continue;
@@ -1864,6 +1900,11 @@ function isLikelyProtectedTitleCasePhrase(words: string[]): boolean {
       continue;
     }
 
+    if (/^[A-Z]$/.test(normalized)) {
+      titleLikeCount += 1;
+      continue;
+    }
+
     if (/^[A-Z]{2,4}$/.test(normalized)) {
       titleLikeCount += 1;
       continue;
@@ -1873,4 +1914,43 @@ function isLikelyProtectedTitleCasePhrase(words: string[]): boolean {
   }
 
   return titleLikeCount >= 2;
+}
+
+function isProtectedTitleCaseWordToken(word: string): boolean {
+  return /^[A-Z][a-z]{4,}(?:['’][A-Z]?[a-z]+)?$/.test(word);
+}
+
+function resolveLeadingArticleWords(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string[] | undefined {
+  const leadingArticleMatch = word.match(/^A([a-z]{5,})$/);
+  if (!leadingArticleMatch) {
+    return undefined;
+  }
+
+  const remainder = leadingArticleMatch[1] ?? '';
+  if (isBackedLexiconWord(remainder, fontKey, lexicon)) {
+    return ['A', remainder];
+  }
+
+  const remainderPlan = findBestSegmentation(remainder, new Set(), fontKey, lexicon);
+  if (!remainderPlan || remainderPlan.words.length === 0) {
+    return undefined;
+  }
+
+  if (
+    remainderPlan.words.some(
+      (candidate) => !isBackedLexiconWord(candidate, fontKey, lexicon) && !isTrustedShortBoundaryWord(candidate)
+    )
+  ) {
+    return undefined;
+  }
+
+  if (remainderPlan.score < scoreWord(remainder, fontKey, lexicon) + 1) {
+    return undefined;
+  }
+
+  return ['A', ...remainderPlan.words];
 }

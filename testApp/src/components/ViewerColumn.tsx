@@ -1,4 +1,9 @@
-import type { HtmlDocumentLogicalStructure, HtmlPageLayout, PDFDocument } from 'pdf-layout-parser';
+import type {
+  DocumentAnswerCitation,
+  HtmlDocumentLogicalStructure,
+  HtmlPageLayout,
+  PDFDocument
+} from 'pdf-layout-parser';
 import type {
   BackgroundRenderProgress,
   CanvasPageRenderState,
@@ -68,6 +73,11 @@ interface ViewerColumnProps {
   enableFormulaHighlight: boolean;
   enableTableHighlight: boolean;
   enableWebSearch: boolean;
+  activeCitationHighlight: {
+    citation: DocumentAnswerCitation;
+    activationKey: number;
+  } | null;
+  onCitationClick: (citation: DocumentAnswerCitation) => void;
   onChatActivityChange: (delta: number) => void;
   onImageExplanationActivityChange: (delta: number) => void;
   onFormulaExplanationActivityChange: (delta: number) => void;
@@ -122,6 +132,8 @@ export function ViewerColumn({
   enableFormulaHighlight,
   enableTableHighlight,
   enableWebSearch,
+  activeCitationHighlight,
+  onCitationClick,
   onChatActivityChange,
   onImageExplanationActivityChange,
   onFormulaExplanationActivityChange,
@@ -180,6 +192,12 @@ export function ViewerColumn({
                       enableFormulaHighlight={enableFormulaHighlight}
                       enableTableHighlight={enableTableHighlight}
                       enableWebSearch={enableWebSearch}
+                      activeCitationHighlight={
+                        activeCitationHighlight?.citation.anchor.pageNumber === page.number
+                          ? activeCitationHighlight
+                          : null
+                      }
+                      onCitationClick={onCitationClick}
                       onChatActivityChange={onChatActivityChange}
                       onImageExplanationActivityChange={onImageExplanationActivityChange}
                       onFormulaExplanationActivityChange={onFormulaExplanationActivityChange}

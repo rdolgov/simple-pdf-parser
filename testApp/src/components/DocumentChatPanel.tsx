@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import type { DocumentAnswerCitation } from 'pdf-layout-parser';
 import type { SemanticSearchResult } from '../search';
 import type { ChatMessage } from '../storage/annotationStorage';
 import { MiniChatView } from './MiniChatView';
@@ -19,6 +20,7 @@ interface DocumentChatPanelProps {
   enableWebSearch: boolean;
   onClose: () => void;
   onChatActivityChange?: (delta: number) => void;
+  onCitationClick?: (citation: DocumentAnswerCitation) => void;
 }
 
 export function DocumentChatPanel({
@@ -31,7 +33,8 @@ export function DocumentChatPanel({
   retrieveRelevantChunks,
   enableWebSearch,
   onClose,
-  onChatActivityChange
+  onChatActivityChange,
+  onCitationClick
 }: DocumentChatPanelProps): JSX.Element {
   const hasRequestedIndexRef = useRef(false);
 
@@ -87,6 +90,7 @@ export function DocumentChatPanel({
       }
       inputPlaceholder={isIndexed ? 'Ask about the whole document...' : 'Ask while indexing continues...'}
       buildPrompt={buildPrompt}
+      onCitationClick={onCitationClick}
     />
   );
 }

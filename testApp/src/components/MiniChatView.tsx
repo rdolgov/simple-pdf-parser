@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import 'katex/dist/katex.min.css';
+import type { DocumentAnswerCitation, DocumentQuestionScope } from 'pdf-layout-parser';
 import {
   type ChatMessage,
   type ChatAnnotationContent,
@@ -14,7 +15,8 @@ import {
   deleteDocumentChatAnnotation,
   findAnnotationAtBounds
 } from '../storage/annotationStorage';
-import { askQuestionTask } from '../api/proxyTaskApi';
+import { answerDocumentQuestionTask, askQuestionTask } from '../api/proxyTaskApi';
+import { CitedAnswerMessage } from './CitedAnswerMessage';
 import { renderMarkdownToHtml } from '../utils/markdownRenderer';
 
 type ChatVariant = 'floating' | 'docked';
@@ -58,6 +60,7 @@ interface MiniChatViewProps {
   inputPlaceholder?: string;
   inputDisabled?: boolean;
   buildPrompt?: (input: ChatPromptBuildInput) => Promise<ChatPromptBuildResult> | ChatPromptBuildResult;
+  onCitationClick?: (citation: DocumentAnswerCitation) => void;
 }
 
 const SYSTEM_PROMPT = `You are a helpful assistant analyzing a specific paragraph from a PDF document.
@@ -122,7 +125,8 @@ export function MiniChatView({
   emptyStateMessage = 'Ask a question about this paragraph...',
   inputPlaceholder = 'Ask a question...',
   inputDisabled = false,
-  buildPrompt
+  buildPrompt,
+  onCitationClick
 }: MiniChatViewProps): JSX.Element {
   const isFloating = variant === 'floating';
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -351,29 +355,47 @@ export function MiniChatView({
       onChatActivityChange?.(1);
       tracksChatActivity = true;
 
-      const promptResult = buildPrompt
-        ? await buildPrompt({
-            query: trimmed,
-            messages,
-            contextText: storedContextText,
-            enableWebSearch,
-            provider
-          })
-        : buildSelectionPrompt(trimmed, messages, storedContextText, enableWebSearch, provider);
-      const fullPrompt = typeof promptResult === 'string' ? promptResult : promptResult.prompt;
-      const nextContextText = typeof promptResult === 'string'
-        ? storedContextText
-        : promptResult.contextText ?? storedContextText;
-
-      const result = await askQuestionTask({
-        ...(taskDocumentId ? { documentId: taskDocumentId } : {}),
-        prompt: fullPrompt,
-        provider,
-        ...(model && model.trim().length > 0 ? { model: model.trim() } : {}),
-        enableWebSearch
-      });
-      const assistantMessage: ChatMessage = { role: 'assistant', content: result.text, timestamp: Date.now() };
-      setStoredContextText(nextContextText);
+      let assistantMessage: ChatMessage;
+      if (taskDocumentId) {
+        const nextContextText = storedContextText;
+        const groundedScope = buildGroundedQuestionScope(chatScope, pageNumber, bounds, nextContextText);
+        const result = await answerDocumentQuestionTask({
+          documentId: taskDocumentId,
+          question: trimmed,
+          provider,
+          ...(model && model.trim().length > 0 ? { model: model.trim() } : {}),
+          scope: groundedScope
+        });
+        assistantMessage = {
+          role: 'assistant',
+          content: result.answerText,
+          timestamp: Date.now(),
+          citedAnswer: result
+        };
+        setStoredContextText(nextContextText);
+      } else {
+        const promptResult = buildPrompt
+          ? await buildPrompt({
+              query: trimmed,
+              messages,
+              contextText: storedContextText,
+              enableWebSearch,
+              provider
+            })
+          : buildSelectionPrompt(trimmed, messages, storedContextText, enableWebSearch, provider);
+        const fullPrompt = typeof promptResult === 'string' ? promptResult : promptResult.prompt;
+        const nextContextText = typeof promptResult === 'string'
+          ? storedContextText
+          : promptResult.contextText ?? storedContextText;
+        const result = await askQuestionTask({
+          prompt: fullPrompt,
+          provider,
+          ...(model && model.trim().length > 0 ? { model: model.trim() } : {}),
+          enableWebSearch
+        });
+        assistantMessage = { role: 'assistant', content: result.text, timestamp: Date.now() };
+        setStoredContextText(nextContextText);
+      }
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to get response';
@@ -384,7 +406,22 @@ export function MiniChatView({
       }
       setIsLoading(false);
     }
-  }, [input, isLoading, inputDisabled, model, messages, storedContextText, enableWebSearch, provider, taskDocumentId, onChatActivityChange, buildPrompt]);
+  }, [
+    input,
+    isLoading,
+    inputDisabled,
+    model,
+    messages,
+    storedContextText,
+    enableWebSearch,
+    provider,
+    taskDocumentId,
+    onChatActivityChange,
+    buildPrompt,
+    chatScope,
+    pageNumber,
+    bounds
+  ]);
 
   useEffect(() => {
     if (
@@ -526,10 +563,14 @@ export function MiniChatView({
             key={index}
             className={`mini-chat-message mini-chat-message--${message.role}`}
           >
-            <div
-              className="mini-chat-message-content mini-chat-markdown"
-              dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(message.content) }}
-            />
+            {message.role === 'assistant' && message.citedAnswer ? (
+              <CitedAnswerMessage answer={message.citedAnswer} onCitationClick={onCitationClick} />
+            ) : (
+              <div
+                className="mini-chat-message-content mini-chat-markdown"
+                dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(message.content) }}
+              />
+            )}
           </div>
         ))}
         {isLoading && (
@@ -572,6 +613,28 @@ export function MiniChatView({
       )}
     </div>
   );
+}
+
+function buildGroundedQuestionScope(
+  chatScope: ChatScope,
+  pageNumber: number | undefined,
+  bounds: AnnotationBounds | undefined,
+  contextText: string
+): DocumentQuestionScope {
+  if (chatScope === 'document') {
+    return {
+      kind: 'document',
+      ...(contextText.trim() ? { contextText } : {})
+    };
+  }
+
+  const selectionAnchor = requireSelectionAnchor(pageNumber, bounds);
+  return {
+    kind: 'selection',
+    pageNumber: selectionAnchor.pageNumber,
+    bounds: selectionAnchor.bounds,
+    ...(contextText.trim() ? { contextText } : {})
+  };
 }
 
 function DragIcon(): JSX.Element {

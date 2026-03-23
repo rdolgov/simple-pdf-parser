@@ -6,6 +6,7 @@ import {
   buildLinkifiedTextFromLines,
   parseLinkifiedTextSegments
 } from '../src/html/linkifiedTextSegments.js';
+import { resolveTextItemRenderFontSize } from '../src/common/textItemFontSize.js';
 import { PDFDocument } from '../src/pdfDocument.js';
 import { CanvasRenderer } from '../src/viewer/canvasRenderer.js';
 import type { PDFTextItem } from '../src/types.js';
@@ -208,6 +209,26 @@ describe('PDF layout integration', () => {
 
     expect(bannerPath).toBeDefined();
     expect(bannerPath!.fillColor).toEqual([1, 1, 1, 1]);
+  });
+
+  it('renders the 2401.05375v1 page-1 author block at its transformed size', () => {
+    const document = loadAnthropicRoadmapDocument();
+    const page = document.getPage(1);
+    const context = new RecordingContext();
+    const canvas = new RecordingCanvas(context);
+    const renderer = new CanvasRenderer({ pagePadding: 16, scale: 1 });
+
+    expect(page).toBeDefined();
+
+    renderer.render(canvas, document, 1);
+
+    const authorsItem = page!.textItems.find((item) => item.text === 'Authors: ');
+    const maxRenderFontSize = Math.max(...page!.textItems.map((item) => resolveTextItemRenderFontSize(item)));
+
+    expect(authorsItem).toBeDefined();
+    expect(resolveTextItemRenderFontSize(authorsItem!)).toBeCloseTo(12, 6);
+    expect(maxRenderFontSize).toBeLessThan(20);
+    expect(context.pathPaints.length + context.textDraws.length).toBeGreaterThan(0);
   });
 
   it('preserves JPEG soft masks for page-6 figure images in the reduced paper fixture', () => {

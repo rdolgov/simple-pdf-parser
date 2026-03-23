@@ -37,6 +37,14 @@ describe('text boundary model', () => {
     const items: PDFTextItem[] = [
       buildItem('Kai Chen', [...wordGlyphs('Kai'), { text: ' ', advance: 2.5, synthetic: true }, ...wordGlyphs('Chen')], 600),
       buildItem('Tomas Mikolov', [...wordGlyphs('Tomas'), { text: ' ', advance: 2.5, synthetic: true }, ...wordGlyphs('Mikolov')], 580),
+      buildItem(
+        'T. , Goldstein, A., ',
+        Array.from('T. , Goldstein, A., ').map((char) => ({
+          text: char,
+          advance: char === ' ' ? 0.25 : 5
+        })),
+        570
+      ),
       buildItem('kaichen@google.com', wordGlyphs('kaichen@google.com'), 560),
       buildItem('tmikolov@google.com', wordGlyphs('tmikolov@google.com'), 540)
     ];
@@ -45,6 +53,7 @@ describe('text boundary model', () => {
 
     expect(refined[0]?.text).toBe('Kai Chen');
     expect(refined[1]?.text).toBe('Tomas Mikolov');
+    expect(refined[2]?.text).toBe('T. , Goldstein, A., ');
   });
 
   it('preserves normal geometry-backed spaces from the text smoother', () => {
@@ -132,6 +141,36 @@ describe('text boundary model', () => {
     expect(refined[0]?.text).toBe('avaswani@google.com');
     expect(refined[1]?.text).toBe('aidan@cs.toronto.edu');
     expect(refined[2]?.text).toBe('lukaszkaiser@google.com');
+  });
+
+  it('does not collapse ordinary geometry-backed spaces in front-matter fragments', () => {
+    const items: PDFTextItem[] = [
+      buildItem(
+        'ly Inspired Engineeri',
+        [
+          ...wordGlyphs('ly'),
+          { text: ' ', advance: 0.25 },
+          ...wordGlyphs('Inspired'),
+          { text: ' ', advance: 0.25 },
+          ...wordGlyphs('Engineeri')
+        ],
+        360
+      ),
+      buildItem(
+        'onding author: ',
+        [
+          ...wordGlyphs('onding'),
+          { text: ' ', advance: 0.25 },
+          ...wordGlyphs('author: ')
+        ],
+        340
+      )
+    ];
+
+    const refined = refineLexicalTextBoundaries(items);
+
+    expect(refined[0]?.text).toBe('ly Inspired Engineeri');
+    expect(refined[1]?.text).toBe('onding author: ');
   });
 
   it('does not let repeated merged tokens self-validate through frequency counts', () => {

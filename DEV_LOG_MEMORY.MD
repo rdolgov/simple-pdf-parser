@@ -29,6 +29,12 @@ Use it as follows:
 - We now preserve `renderFontSize` on `PDFTextItem` and use shared logic from `src/common/textItemFontSize.ts`.
 - Reason: this keeps canvas rendering, layout logic, and future consumers aligned with the PDF text transform instead of ad hoc heuristics.
 
+### 2026-03-22: Outer text transforms must rescale explicit `renderFontSize`
+
+- When a text item is emitted inside a scaled Form XObject or other outer transform, updating only `bounds` and `fontSize` is not enough.
+- The parser must also rescale any explicit `renderFontSize` using the transformed text geometry, otherwise the renderer will paint with the pre-transform size and massively overlap the page.
+- Reason: `pdfs/2401.05375v1.pdf` page 1 carried 50pt inner-form text that should have rendered as roughly 12pt after the outer placement transform.
+
 ### 2026-03-22: Invisible text layers must remain extractable but not paint
 
 - Some PDFs contain searchable text overlays with `Tr 3` or `Tr 7` while the visible page content is drawn separately as vector outlines.
@@ -95,9 +101,44 @@ Use it as follows:
 - For transient task banners and dialogs, prefer short action-oriented copy over explanatory sentences when the title and progress detail already provide context.
 - Reason: verbose status text slows scanning and repeats information already visible elsewhere in the UI.
 
+### 2026-03-22: Citation answers should be grounded by evidence ids plus local quote anchoring
+
+- For document chat citations, do not ask the model for PDF coordinates or trust free-form source references.
+- The backend should retrieve semantic evidence blocks, require the model to cite stable `evidenceId`s plus verbatim support quotes, then resolve those quotes back to PDF geometry locally.
+- Reason: this keeps citations auditable, lets both selection chat and whole-document chat share one grounding pipeline, and preserves exact anchors from PDF-native text geometry instead of browser heuristics.
+
+### 2026-03-22: Chat history stores cited answers as structured assistant metadata
+
+- Keep `ChatMessage.content` as plain text for backward compatibility and prompt history, but attach the structured cited-answer payload separately on assistant turns.
+- Reason: old saved chats still render, prompt construction stays simple, and the UI can progressively enhance cited messages without a breaking storage migration.
+
+### 2026-03-22: Evidence indexing should reuse HTML blocks but preserve merged PDF text runs
+
+- Build citation retrieval units from paragraph/heading/table-row layout blocks, then map those spans back to merged `PDFTextItem` runs for quote anchoring.
+- Reason: retrieval works better at block granularity, while exact substring bounds still need the underlying PDF text geometry.
+
+### 2026-03-22: Suspicious PDF spaces must be measured against glyph advances, not raw font size
+
+- PDF glyph advances inside `glyphSpans` are often normalized font-space units like `0.25`, so comparing them directly to the page-space `fontSize` badly overflags normal word spaces as suspicious.
+- Use the item’s observed space/letter advance distribution to detect only truly tiny synthetic spaces.
+- Reason: the old threshold deleted legitimate spaces in front matter like `Biologically Inspired Engineering` and `Corresponding author`.
+
+### 2026-03-22: Do not lexically split protected TitleCase single words
+
+- Proper nouns and front-matter TitleCase words such as `Goldstein` or `Astonishing` should not go through aggressive single-token word-splitting unless there is strong article-style evidence.
+- Keep TitleCase tokens intact by default, and only allow the `A...` article split when the remainder is lexically backed.
+- Reason: whole-page lexicon noise was turning correct front-matter words into `Goldste in` and `As to nishi`.
+
+### 2026-03-22: Text smoothing must preserve compact punctuation tokens across run boundaries
+
+- When adjacent runs form an email local-part, domain, or similar compact punctuation token, treat that boundary like an in-word continuation and do not insert a space.
+- Reason: the smoother was inventing spaces in `michael.levin@tufts.edu`, which then survived lexical repair because email-like text is intentionally protected.
+
 ## Recent Examples
 
 - `pdfs/IRA contribution IRS.pdf`
   - Required three linked fixes: user-space `renderFontSize`, invisible text suppression, and no double-transform of top-level path clip paths.
 - `pdfs/Claires7thBday.pdf`
   - The missing center text was another `fontSize = 1` / transformed-text issue; fixing the shared render-size model restored visibility without a PDF-specific special case.
+- `pdfs/2401.05375v1.pdf`
+  - Required two layers of shared fixes: outer-transform rescaling of `renderFontSize`, then conservative text-boundary/smoothing heuristics so author/front-matter wording stayed intact.

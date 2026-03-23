@@ -8,6 +8,7 @@ import {
   MockRelevanceService,
   DefaultRelevanceAugmenter,
   getOpenAiCompatibleProviderLabel,
+  type DocumentAnswerCitation,
   type HtmlDocumentLayout,
   type HtmlPageLayout,
   type PDFLayout,
@@ -149,6 +150,10 @@ export default function App(): JSX.Element {
   >({ status: 'idle' });
   const [lassoMode, setLassoMode] = useState(false);
   const [isDocumentChatOpen, setIsDocumentChatOpen] = useState(false);
+  const [activeCitationHighlight, setActiveCitationHighlight] = useState<{
+    citation: DocumentAnswerCitation;
+    activationKey: number;
+  } | null>(null);
 
   // Document loader hook with callback for canvas/zoom/focus reset
   const handleDocumentLoad = useCallback(() => {
@@ -643,30 +648,30 @@ export default function App(): JSX.Element {
     topTaskNotice
   ]);
 
+  const scrollToPage = useCallback((pageNumber: number) => {
+    const pageElement = document.querySelector(`[data-page-number="${pageNumber}"]`);
+    if (pageElement) {
+      pageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, []);
+
   // Reset active index when results change and auto-navigate to first result
   useEffect(() => {
     setActiveSemanticResultIndex(0);
     // Auto-navigate to the first result when new search results arrive
     if (sortedSemanticResults.length > 0) {
       const firstResult = sortedSemanticResults[0];
-      const pageNumber = firstResult.chunk.pageNumber;
-      const pageElement = document.querySelector(`[data-page-number="${pageNumber}"]`);
-      if (pageElement) {
-        pageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+      scrollToPage(firstResult.chunk.pageNumber);
     }
-  }, [sortedSemanticResults]);
+  }, [scrollToPage, sortedSemanticResults]);
 
   useEffect(() => {
     setActiveKeywordResultIndex(0);
     if (keywordSearchResults.length > 0) {
       const firstResult = keywordSearchResults[0];
-      const pageElement = document.querySelector(`[data-page-number="${firstResult.pageNumber}"]`);
-      if (pageElement) {
-        pageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+      scrollToPage(firstResult.pageNumber);
     }
-  }, [keywordSearchResults]);
+  }, [keywordSearchResults, scrollToPage]);
 
   // Scroll to active result
   const handleNavigateSemanticResult = useCallback((index: number) => {
@@ -674,13 +679,8 @@ export default function App(): JSX.Element {
     const result = sortedSemanticResults[index];
     if (!result) return;
 
-    // Find the page element and scroll to it
-    const pageNumber = result.chunk.pageNumber;
-    const pageElement = document.querySelector(`[data-page-number="${pageNumber}"]`);
-    if (pageElement) {
-      pageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, [sortedSemanticResults]);
+    scrollToPage(result.chunk.pageNumber);
+  }, [scrollToPage, sortedSemanticResults]);
 
   const handleNavigateKeywordResult = useCallback((index: number) => {
     setActiveKeywordResultIndex(index);
@@ -689,11 +689,8 @@ export default function App(): JSX.Element {
       return;
     }
 
-    const pageElement = document.querySelector(`[data-page-number="${result.pageNumber}"]`);
-    if (pageElement) {
-      pageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, [keywordSearchResults]);
+    scrollToPage(result.pageNumber);
+  }, [keywordSearchResults, scrollToPage]);
 
   const [canvasHighlight, setCanvasHighlight] = useState<CanvasHighlightSelection | null>(null);
   const [enableFormulaHighlight, setEnableFormulaHighlight] = useState(true);
@@ -708,6 +705,18 @@ export default function App(): JSX.Element {
   useEffect(() => {
     setCanvasHighlight(null);
   }, [htmlLayout]);
+
+  useEffect(() => {
+    setActiveCitationHighlight(null);
+  }, [loadedFileHash, loadedFileName]);
+
+  const handleDocumentCitationClick = useCallback((citation: DocumentAnswerCitation) => {
+    setActiveCitationHighlight({
+      citation,
+      activationKey: Date.now()
+    });
+    scrollToPage(citation.anchor.pageNumber);
+  }, [scrollToPage]);
 
   const layoutJson = useMemo(() => {
     if (state.status !== 'ready') {
@@ -1242,6 +1251,7 @@ export default function App(): JSX.Element {
                 enableWebSearch={enableWebSearch}
                 onClose={() => setIsDocumentChatOpen(false)}
                 onChatActivityChange={handleChatActivityChange}
+                onCitationClick={handleDocumentCitationClick}
               />
             ) : null
           }
@@ -1300,6 +1310,8 @@ export default function App(): JSX.Element {
           enableFormulaHighlight={enableFormulaHighlight}
           enableTableHighlight={enableTableHighlight}
           enableWebSearch={enableWebSearch}
+          activeCitationHighlight={activeCitationHighlight}
+          onCitationClick={handleDocumentCitationClick}
           onChatActivityChange={handleChatActivityChange}
           onImageExplanationActivityChange={handleImageExplanationActivityChange}
           onFormulaExplanationActivityChange={handleFormulaExplanationActivityChange}

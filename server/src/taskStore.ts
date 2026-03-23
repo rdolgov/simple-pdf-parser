@@ -71,6 +71,7 @@ export class TaskStore {
       mkdir(this.documentsDir(), { recursive: true }),
       mkdir(this.filesDir(), { recursive: true }),
       mkdir(this.detectionsDir(), { recursive: true }),
+      mkdir(this.evidenceIndexesDir(), { recursive: true }),
       mkdir(this.interactionsDir(), { recursive: true }),
       mkdir(this.semanticIndexesDir(), { recursive: true }),
       mkdir(this.llmExchangesDir(), { recursive: true })
@@ -348,6 +349,16 @@ export class TaskStore {
     return readJson<T>(this.semanticIndexPath(documentId, fingerprint));
   }
 
+  async getEvidenceIndex<T>(documentId: string): Promise<T | null> {
+    await this.ensureReady();
+    return readJson<T>(this.evidenceIndexPath(documentId));
+  }
+
+  async setEvidenceIndex(documentId: string, value: unknown): Promise<void> {
+    await this.ensureReady();
+    await writeJson(this.evidenceIndexPath(documentId), value);
+  }
+
   async setSemanticIndex(documentId: string, fingerprint: string, value: unknown): Promise<void> {
     await this.ensureReady();
     await writeJson(this.semanticIndexPath(documentId, fingerprint), value);
@@ -367,6 +378,10 @@ export class TaskStore {
 
   private interactionsDir(): string {
     return join(this.dataDir, 'interactions');
+  }
+
+  private evidenceIndexesDir(): string {
+    return join(this.dataDir, 'evidence-indexes');
   }
 
   private semanticIndexesDir(): string {
@@ -391,6 +406,10 @@ export class TaskStore {
 
   private interactionLogPath(documentId?: string): string {
     return join(this.interactionsDir(), `${documentId ?? 'global'}.jsonl`);
+  }
+
+  private evidenceIndexPath(documentId: string): string {
+    return join(this.evidenceIndexesDir(), `${documentId}.json`);
   }
 
   private semanticIndexPath(documentId: string, fingerprint: string): string {

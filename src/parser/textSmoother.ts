@@ -350,6 +350,10 @@ function shouldInsertSpace(
 }
 
 function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgCharWidth: number): boolean {
+  if (formsProtectedCompactToken(prevText, nextText)) {
+    return true;
+  }
+
   const prevFragment = getTrailingWordFragment(prevText);
   const nextFragment = getLeadingWordFragment(nextText);
   const prevWord = normalizeWordFragment(prevFragment);
@@ -420,6 +424,26 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
     compactSplit ||
     tightAlphabeticContinuation ||
     tightCompoundSplit
+  );
+}
+
+function formsProtectedCompactToken(prevText: string, nextText: string): boolean {
+  const left = prevText.replace(/\s+$/, '');
+  const right = nextText.replace(/^\s+/, '');
+  if (left.length === 0 || right.length === 0) {
+    return false;
+  }
+
+  if (!/[.@/:_-]$/.test(left) || !/^[A-Za-z0-9/@._-]/.test(right)) {
+    return false;
+  }
+
+  const combined = `${left}${right}`;
+  return (
+    /(?:https?:\/\/|www\.|[A-Za-z0-9._%+-]+(?:\.[A-Za-z0-9._%+-]+)+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)/i.test(
+      combined
+    ) &&
+    !/\s/.test(combined)
   );
 }
 

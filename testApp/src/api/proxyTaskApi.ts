@@ -1,4 +1,8 @@
 import { fetchWithLlmProxyPolling } from '../../../src/query/llmProxyPolling';
+import type {
+  AnswerDocumentQuestionRequest,
+  DocumentCitedAnswerResponse
+} from '../../../src/index';
 import { getLlmProxyAuthToken, getLlmProxyBaseUrl } from '../utils/llmTransportSettings';
 
 export type ProxyTaskTextProvider = 'gemini' | 'openai' | 'codex';
@@ -177,6 +181,12 @@ export async function askQuestionTask(input: {
   enableWebSearch?: boolean;
 }): Promise<ProxyTaskTextResponse> {
   return postJsonTask<ProxyTaskTextResponse>('ask-question', input);
+}
+
+export async function answerDocumentQuestionTask(
+  input: AnswerDocumentQuestionRequest
+): Promise<DocumentCitedAnswerResponse> {
+  return postJsonTask<DocumentCitedAnswerResponse>('answer-document-question', input as unknown as Record<string, unknown>);
 }
 
 export async function generateWidgetTask(input: {

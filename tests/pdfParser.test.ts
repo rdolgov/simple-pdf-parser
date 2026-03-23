@@ -799,6 +799,47 @@ ET
     expect(claireCenterText!.textRenderMode).toBe(0);
   });
 
+  it('rescales explicit render font sizes when an outer form transform shrinks text geometry', () => {
+    const fixtureUrl = new URL('../pdfs/2401.05375v1.pdf', import.meta.url);
+    const document = PDFDocument.from(readFileSync(fixtureUrl));
+    const firstPage = document.getPage(1);
+
+    expect(firstPage).toBeDefined();
+
+    const authorsLabel = firstPage!.textItems.find((item) => item.text === 'Authors: ');
+    const firstAuthor = firstPage!.textItems.find((item) => item.text === 'Zhang, ');
+    const maxRenderFontSize = Math.max(...firstPage!.textItems.map((item) => item.renderFontSize ?? 0));
+
+    expect(authorsLabel).toBeDefined();
+    expect(firstAuthor).toBeDefined();
+    expect(authorsLabel!.fontSize).toBeCloseTo(12, 6);
+    expect(authorsLabel!.renderFontSize).toBeCloseTo(12, 6);
+    expect(firstAuthor!.fontSize).toBeCloseTo(12, 6);
+    expect(firstAuthor!.renderFontSize).toBeCloseTo(12, 6);
+    expect(maxRenderFontSize).toBeLessThan(20);
+  });
+
+  it('preserves page-1 front-matter wording for 2401.05375v1 after smoothing and lexical repair', () => {
+    const fixtureUrl = new URL('../pdfs/2401.05375v1.pdf', import.meta.url);
+    const document = PDFDocument.from(readFileSync(fixtureUrl));
+    const firstPage = document.getPage(1);
+
+    expect(firstPage).toBeDefined();
+
+    const pageText = firstPage!.textItems.map((item) => item.text).join('');
+
+    expect(pageText).toContain('competencies in a minimal model of basal intelligence');
+    expect(pageText).toContain('Goldstein, A.');
+    expect(pageText).toContain('Biologically Inspired Engineering');
+    expect(pageText).toContain('Astonishing Labs.');
+    expect(pageText).toContain('Corresponding author:');
+    expect(pageText).toContain('michael.levin@tufts.edu');
+    expect(pageText).not.toContain('Goldste in');
+    expect(pageText).not.toContain('dingauthor');
+    expect(pageText).not.toContain('InspiredEngineeri');
+    expect(pageText).not.toContain('tufts. edu');
+  });
+
   it('repairs merged author-note prose on the NIPS title page', () => {
     const fixtureUrl = new URL('../pdfs/NIPS-2017-attention-is-all-you-need-Paper.pdf', import.meta.url);
     const buffer = readFileSync(fixtureUrl);

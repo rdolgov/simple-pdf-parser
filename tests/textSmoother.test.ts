@@ -155,4 +155,41 @@ describe('mergeTextRuns', () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.text).toBe('Ameri');
   });
+
+  it('does not insert spaces inside compact punctuation tokens like email local-parts and domains', () => {
+    const items: PDFTextItem[] = [
+      {
+        text: 'michael.',
+        font: 'Times New Roman',
+        fontResourceKey: 'F25',
+        fontSize: 10,
+        bounds: { minX: 200, minY: 320, maxX: 235, maxY: 330 },
+        baselineStart: { x: 200, y: 322 },
+        baselineEnd: { x: 235, y: 322 }
+      },
+      {
+        text: 'levin@tufts.',
+        font: 'Times New Roman',
+        fontResourceKey: 'F25',
+        fontSize: 10,
+        bounds: { minX: 235.1, minY: 320, maxX: 290, maxY: 330 },
+        baselineStart: { x: 235.1, y: 322 },
+        baselineEnd: { x: 290, y: 322 }
+      },
+      {
+        text: 'edu',
+        font: 'Times New Roman',
+        fontResourceKey: 'F25',
+        fontSize: 10,
+        bounds: { minX: 290.1, minY: 320, maxX: 305, maxY: 330 },
+        baselineStart: { x: 290.1, y: 322 },
+        baselineEnd: { x: 305, y: 322 }
+      }
+    ];
+
+    const merged = mergeTextRuns(items);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.text).toBe('michael.levin@tufts.edu');
+  });
 });

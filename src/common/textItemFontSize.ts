@@ -58,6 +58,42 @@ export function estimateTextItemVisualFontSize(
   return Number.isFinite(height) && height > 0 ? height : undefined;
 }
 
+export function scaleTransformedTextItemRenderFontSize(
+  item: FontSizedTextItem,
+  transformedBounds: PDFImageBounds,
+  transformedBaselineStart?: Vector2D,
+  transformedBaselineEnd?: Vector2D
+): number | undefined {
+  const explicit = readPositiveNumber(item.renderFontSize);
+  if (explicit === undefined) {
+    return undefined;
+  }
+
+  const originalVisualSize = estimateTextItemVisualFontSize(item.bounds, item.baselineStart, item.baselineEnd);
+  const transformedVisualSize = estimateTextItemVisualFontSize(
+    transformedBounds,
+    transformedBaselineStart,
+    transformedBaselineEnd
+  );
+
+  if (
+    originalVisualSize !== undefined &&
+    originalVisualSize > 0 &&
+    transformedVisualSize !== undefined &&
+    transformedVisualSize > 0
+  ) {
+    return explicit * (transformedVisualSize / originalVisualSize);
+  }
+
+  const originalHeight = readPositiveNumber(Math.abs(item.bounds.maxY - item.bounds.minY));
+  const transformedHeight = readPositiveNumber(Math.abs(transformedBounds.maxY - transformedBounds.minY));
+  if (originalHeight !== undefined && transformedHeight !== undefined) {
+    return explicit * (transformedHeight / originalHeight);
+  }
+
+  return explicit;
+}
+
 function readPositiveNumber(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
