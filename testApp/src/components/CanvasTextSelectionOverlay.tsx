@@ -19,6 +19,7 @@ interface CanvasTextSelectionOverlayProps {
   padding: number;
   selection: TextSelectionRange | null;
   onSelectionChange: (selection: TextSelectionRange | null) => void;
+  onSelectionDragStateChange?: (isDragging: boolean) => void;
 }
 
 export function CanvasTextSelectionOverlay({
@@ -28,7 +29,8 @@ export function CanvasTextSelectionOverlay({
   scaleY,
   padding,
   selection,
-  onSelectionChange
+  onSelectionChange,
+  onSelectionDragStateChange
 }: CanvasTextSelectionOverlayProps): JSX.Element | null {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const isDraggingSelectionRef = useRef(false);
@@ -83,24 +85,28 @@ export function CanvasTextSelectionOverlay({
     return true;
   }, [onSelectionChange]);
 
-  const scheduleSelectionPublish = useCallback(() => {
+  const scheduleSelectionPublish = useCallback((clearWhenEmpty = false) => {
     if (publishSelectionFrameRef.current !== null) {
       return;
     }
 
     publishSelectionFrameRef.current = window.requestAnimationFrame(() => {
       publishSelectionFrameRef.current = null;
-      publishDomSelection();
+      const didPublish = publishDomSelection();
+      if (!didPublish && clearWhenEmpty) {
+        onSelectionChange(null);
+      }
     });
-  }, [publishDomSelection]);
+  }, [onSelectionChange, publishDomSelection]);
 
   useEffect(() => {
     return () => {
       if (publishSelectionFrameRef.current !== null) {
         window.cancelAnimationFrame(publishSelectionFrameRef.current);
       }
+      onSelectionDragStateChange?.(false);
     };
-  }, []);
+  }, [onSelectionDragStateChange]);
 
   useEffect(() => {
     const handleSelectionChange = () => {
@@ -127,7 +133,8 @@ export function CanvasTextSelectionOverlay({
         return;
       }
       isDraggingSelectionRef.current = false;
-      scheduleSelectionPublish();
+      onSelectionDragStateChange?.(false);
+      scheduleSelectionPublish(true);
     };
 
     document.addEventListener('selectionchange', handleSelectionChange);
@@ -138,18 +145,19 @@ export function CanvasTextSelectionOverlay({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [onSelectionChange, publishDomSelection, scheduleSelectionPublish]);
+  }, [onSelectionChange, onSelectionDragStateChange, publishDomSelection, scheduleSelectionPublish]);
 
   const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     event.stopPropagation();
     isDraggingSelectionRef.current = true;
-    onSelectionChange(null);
+    onSelectionDragStateChange?.(true);
   };
 
   const handleMouseUp = (event: MouseEvent<HTMLDivElement>) => {
     event.stopPropagation();
     isDraggingSelectionRef.current = false;
-    scheduleSelectionPublish();
+    onSelectionDragStateChange?.(false);
+    scheduleSelectionPublish(true);
   };
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {

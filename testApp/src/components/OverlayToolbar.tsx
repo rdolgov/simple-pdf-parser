@@ -1,17 +1,21 @@
-import type { MouseEvent, ReactNode } from 'react';
+import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 
 interface OverlayToolbarProps {
   onClose: () => void;
   children?: ReactNode;
   position?: 'top-right' | 'top-left';
   showClose?: boolean;
+  style?: CSSProperties;
+  className?: string;
 }
 
 export function OverlayToolbar({
   onClose,
   children,
   position = 'top-right',
-  showClose = true
+  showClose = true,
+  style,
+  className = ''
 }: OverlayToolbarProps): JSX.Element {
   const positionClass = position === 'top-left' ? 'overlay-toolbar--left' : '';
 
@@ -27,10 +31,11 @@ export function OverlayToolbar({
 
   return (
     <div
-      className={`overlay-toolbar ${positionClass}`}
+      className={`overlay-toolbar ${positionClass} ${className}`.trim()}
       role="toolbar"
       aria-label="Overlay actions"
       onClick={handleToolbarClick}
+      style={style}
     >
       {children}
       {showClose && (

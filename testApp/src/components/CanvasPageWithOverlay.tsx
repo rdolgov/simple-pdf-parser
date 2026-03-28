@@ -14,8 +14,6 @@ import type { CanvasHighlightSelection, CanvasPageRenderState, FocusProvider, Ex
 import type { KeywordSearchResult, SemanticSearchResult } from '../search';
 import { TableViewer, type TableSortState } from './TableViewer';
 import { TableHoverIndicator } from './TableHoverIndicator';
-import { OverlayToolbar, OverlayToolbarButton } from './OverlayToolbar';
-import { ExploreIcon, ImageIcon, LoadingIcon, WidgetIcon } from './OverlayIcons';
 import { MiniChatView } from './MiniChatView';
 import { ImagePreviewPopup } from './ImagePreviewPopup';
 import { MathViewPopup } from './MathViewPopup';
@@ -24,6 +22,7 @@ import { ImageExplanationPopup, type ImageExplanationData } from './ImageExplana
 import { LassoActionMenu } from './LassoActionMenu';
 import { InterestingTextOverlay } from './InterestingTextOverlay';
 import { CanvasTextSelectionOverlay } from './CanvasTextSelectionOverlay';
+import { TextActionToolbar } from './TextActionToolbar';
 import { getCachedImageExplanation, setCachedImageExplanation, deleteCachedImageExplanation } from '../storage/imageExplanationCache';
 import { hasCachedChartImageForTable } from '../storage/tableVisualizationCache';
 import {
@@ -105,6 +104,11 @@ import {
 } from '../utils/logicalUnitContext';
 import { resolveLogicalHoverSegment } from '../utils/logicalHoverSegment';
 import type { TextSelectionRange } from '../utils/textRangeSelection';
+import {
+  buildPrioritizedSelectionChatContext,
+  resolveTextSelectionAnnotationBounds,
+  resolveTextSelectionToolbarPosition
+} from '../utils/textSelectionActions';
 import {
   analyzeFormulaTask,
   analyzeImageTask,
@@ -335,6 +339,7 @@ export function CanvasPageWithOverlay({
     error: string | null;
   } | null>(null);
   const [textRangeSelection, setTextRangeSelection] = useState<ActiveTextRangeSelection | null>(null);
+  const [isTextRangeSelectionDragging, setIsTextRangeSelectionDragging] = useState(false);
   const [formulaSuggestionAttentionKey, setFormulaSuggestionAttentionKey] = useState<string | null>(null);
   const [formulaSuggestionState, setFormulaSuggestionState] = useState<
     Record<string, { status: 'loading' | 'ready' | 'error'; hasMath: boolean }>
@@ -367,6 +372,7 @@ export function CanvasPageWithOverlay({
     setLassoSelection(null);
     setLassoActionState(null);
     setTextRangeSelection(null);
+    setIsTextRangeSelectionDragging(false);
     setFormulaSuggestionAttentionKey(null);
   }, [focusLayout]);
 
@@ -466,6 +472,7 @@ export function CanvasPageWithOverlay({
     setReferencePopup(null);
     setMathViewState(null);
     setTextRangeSelection(null);
+    setIsTextRangeSelectionDragging(false);
   }, [lassoMode, onCanvasHighlight, resetLassoDraft]);
 
   useEffect(() => {
@@ -511,23 +518,16 @@ export function CanvasPageWithOverlay({
   const handleOpenMiniChat = useCallback(
     (
       contextText: string,
-      blockLeft: number,
-      blockTop: number,
-      blockWidth: number,
+      position: { top: number; left: number },
       bounds: AnnotationBounds,
       initialMessages?: ChatMessage[]
     ) => {
-      // Position the chat panel next to the toolbar (which is at top-right of block)
-      // Toolbar is at: top: -10px, right: 8px relative to the highlight block
-      // The highlight block has HIGHLIGHT_PADDING added, so account for that
-      const chatLeft = blockLeft + blockWidth + HIGHLIGHT_PADDING + 16;
-      const chatTop = blockTop - HIGHLIGHT_PADDING - 20; // Align with toolbar position
       const boundsKey = `${bounds.minX}-${bounds.minY}-${bounds.maxX}-${bounds.maxY}`;
       setMiniChatStates((prev) => {
         const next = new Map(prev);
         next.set(boundsKey, {
           contextText,
-          position: { top: chatTop, left: chatLeft },
+          position,
           bounds,
           initialMessages
         });
@@ -1532,10 +1532,12 @@ export function CanvasPageWithOverlay({
   useEffect(() => {
     if (!activeTextSelectionKey) {
       setTextRangeSelection(null);
+      setIsTextRangeSelectionDragging(false);
       return;
     }
 
     setTextRangeSelection((current) => current?.blockKey === activeTextSelectionKey ? current : null);
+    setIsTextRangeSelectionDragging(false);
   }, [activeTextSelectionKey]);
 
   useEffect(() => {
@@ -1746,10 +1748,16 @@ export function CanvasPageWithOverlay({
     });
   }, [documentId, pageNumber, imageExplanationState]);
 
-  const clearActiveTextSelection = useCallback(() => {
+  const clearTextRangeSelection = useCallback(() => {
+    window.getSelection()?.removeAllRanges();
     setTextRangeSelection(null);
+    setIsTextRangeSelectionDragging(false);
+  }, []);
+
+  const clearActiveTextSelection = useCallback(() => {
+    clearTextRangeSelection();
     onCanvasHighlight(null);
-  }, [onCanvasHighlight]);
+  }, [clearTextRangeSelection, onCanvasHighlight]);
 
   const handleTextRangeSelectionChange = useCallback((blockKey: string, selection: TextSelectionRange | null) => {
     setTextRangeSelection((current) => {
@@ -1761,6 +1769,10 @@ export function CanvasPageWithOverlay({
         ...selection
       };
     });
+  }, []);
+
+  const handleTextRangeSelectionDragStateChange = useCallback((isDragging: boolean) => {
+    setIsTextRangeSelectionDragging(isDragging);
   }, []);
 
   const clearTextHoverSelection = useCallback(() => {
@@ -2116,6 +2128,7 @@ export function CanvasPageWithOverlay({
 
     if (isTextRangeSelectionLocked) {
       setTextRangeSelection(null);
+      setIsTextRangeSelectionDragging(false);
       onCanvasHighlight(null);
     }
 
@@ -2664,10 +2677,26 @@ export function CanvasPageWithOverlay({
               const selectionContext = selectedBlockForWidget
                 ? resolveTextSelectionContext(selectedBlockForWidget, logicalStructure, effectiveSelectedText)
                 : null;
+              const selectionActionBounds = selectedTextRange
+                ? resolveTextSelectionAnnotationBounds({
+                    fragments: selectedTextRange.fragments,
+                    blockBounds: bounds,
+                    scaleX,
+                    scaleY,
+                    padding: HIGHLIGHT_PADDING
+                  })
+                : null;
+              const selectionToolbarPosition = selectedTextRange
+                ? resolveTextSelectionToolbarPosition(selectedTextRange.fragments)
+                : null;
+              const actionBounds = selectionActionBounds ?? bounds;
+              const actionKey = buildHighlightBlockKey(page.number, actionBounds);
               const chatContextText = selectedTextRange
-                ? selectionContext?.title
-                  ? `${selectionContext.title}\n\n${effectiveSelectedText}`
-                  : effectiveSelectedText
+                ? buildPrioritizedSelectionChatContext({
+                    selectedText: effectiveSelectedText,
+                    surroundingText: selectionContext?.text,
+                    title: selectionContext?.title
+                  })
                 : selectionContext
                 ? buildChatContextText(selectionContext)
                 : highlightText;
@@ -2676,8 +2705,14 @@ export function CanvasPageWithOverlay({
                 : selectionContext
                 ? trimSelectionContextText(selectionContext.text, 900)
                 : highlightText;
-              const isLoadingImage = entry.isPrimary && Boolean(imageLoading[blockKey]);
-              const imageErrorMessage = imageError[blockKey];
+              const actionPopupPosition = getWidgetPopupPosition(actionBounds);
+              const isLoadingImage = entry.isPrimary && Boolean(imageLoading[actionKey]);
+              const imageErrorMessage = imageError[actionKey];
+              const imageTitle =
+                imageErrorMessage ||
+                (usesGeminiImageFallback(overlayAiProvider)
+                  ? 'Generate image with Gemini while Codex remains selected for text actions.'
+                  : `Generate image with ${getProviderDisplayName(overlayImageProvider)}`);
               // Account for canvas padding (16px matches DEFAULT_OPTIONS.pagePadding)
               const canvasPadding = 16 * zoom;
               const blockLeft = bounds.minX * scaleX + canvasPadding;
@@ -2709,41 +2744,26 @@ export function CanvasPageWithOverlay({
                 >
                   {entry.isPrimary ? (
                     <>
-                      <OverlayToolbar onClose={clearActiveTextSelection} showClose={!isLogicalTextHoverOverlay}>
-                        <OverlayToolbarButton
-                          onClick={() => handleOpenMiniChat(chatContextText, blockLeft, blockTop, blockWidth, bounds)}
-                          icon={<ExploreIcon />}
-                          label="Chat about this"
-                          title="Ask questions about this selection"
-                        />
-                        <OverlayToolbarButton
-                          onClick={() => handleGenerateImage(blockKey, generationPromptText, bounds)}
-                          icon={isLoadingImage ? <LoadingIcon /> : <ImageIcon />}
-                          label="Generate image"
-                          title={
-                            imageErrorMessage ||
-                            (usesGeminiImageFallback(overlayAiProvider)
-                              ? 'Generate image with Gemini while Codex remains selected for text actions.'
-                              : `Generate image with ${getProviderDisplayName(overlayImageProvider)}`)
-                          }
-                          disabled={isLoadingImage}
-                        />
-                        <OverlayToolbarButton
-                          onClick={() =>
+                      {!selectedTextRange && (
+                        <TextActionToolbar
+                          onChat={() => handleOpenMiniChat(chatContextText, actionPopupPosition, actionBounds)}
+                          onGenerateImage={() => handleGenerateImage(actionKey, generationPromptText, actionBounds)}
+                          onGenerateInteractive={() =>
                             void handleGenerateInteractiveWidget(
                               generationPromptText,
-                              getWidgetPopupPosition(bounds),
-                              bounds,
+                              actionPopupPosition,
+                              actionBounds,
                               selectedBlockForWidget,
-                              { preferSelectedExcerpt: Boolean(selectedTextRange) }
+                              { preferSelectedExcerpt: false }
                             )
                           }
-                          icon={isGeneratingInteractiveWidget ? <LoadingIcon /> : <WidgetIcon />}
-                          label="Create interactive widget"
-                          title="Generate a sandboxed interactive widget for this selection"
-                          disabled={isGeneratingInteractiveWidget}
+                          onClose={clearActiveTextSelection}
+                          showClose={!isLogicalTextHoverOverlay}
+                          isImageLoading={isLoadingImage}
+                          isInteractiveLoading={isGeneratingInteractiveWidget}
+                          imageTitle={imageTitle}
                         />
-                      </OverlayToolbar>
+                      )}
                       <div className="canvas-overlay-highlight-inner canvas-overlay-highlight-inner--interactive-text">
                         <CanvasTextSelectionOverlay
                           blockBounds={bounds}
@@ -2753,7 +2773,34 @@ export function CanvasPageWithOverlay({
                           padding={HIGHLIGHT_PADDING}
                           selection={selectedTextRange}
                           onSelectionChange={(selection) => handleTextRangeSelectionChange(blockKey, selection)}
+                          onSelectionDragStateChange={handleTextRangeSelectionDragStateChange}
                         />
+                        {selectedTextRange && selectionToolbarPosition && !isTextRangeSelectionDragging && (
+                          <TextActionToolbar
+                            onChat={() => handleOpenMiniChat(chatContextText, actionPopupPosition, actionBounds)}
+                            onGenerateImage={() => handleGenerateImage(actionKey, generationPromptText, actionBounds)}
+                            onGenerateInteractive={() =>
+                              void handleGenerateInteractiveWidget(
+                                generationPromptText,
+                                actionPopupPosition,
+                                actionBounds,
+                                selectedBlockForWidget,
+                                { preferSelectedExcerpt: true }
+                              )
+                            }
+                            onClose={clearTextRangeSelection}
+                            isImageLoading={isLoadingImage}
+                            isInteractiveLoading={isGeneratingInteractiveWidget}
+                            imageTitle={imageTitle}
+                            className="overlay-toolbar--selection-anchor"
+                            style={{
+                              top: `${selectionToolbarPosition.top}px`,
+                              left: `${selectionToolbarPosition.left}px`,
+                              right: 'auto',
+                              transform: 'none'
+                            }}
+                          />
+                        )}
                         <InterestingTextOverlay
                           blockBounds={bounds}
                           lines={block.lines}

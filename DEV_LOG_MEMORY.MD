@@ -172,6 +172,24 @@ Use it as follows:
 - During an active drag, schedule selection publication from document-level mouse movement with `requestAnimationFrame`, and use document-level mouseup to finalize even if the drag ends outside the block.
 - Reason: some browser/event combinations do not surface a timely enough `selectionchange` for this overlay, which leaves users with no visible feedback until they release the mouse.
 
+### 2026-03-28: Selection actions should anchor and persist against the selected range, not the whole paragraph block
+
+- When a text range inside a highlighted block becomes active, show its action toolbar next to the selected fragments and convert those fragment rects back into PDF bounds for chat/image/widget annotations and popup placement.
+- For selection chat, structure the context so the selected excerpt is explicitly primary and the surrounding logical-unit text is explicitly secondary.
+- Reason: otherwise the UI looks like it still acts on the full paragraph and saved artifacts from multiple different selections inside one block overwrite each other.
+
+### 2026-03-28: Selection-anchored toolbars should not be cleared before the replacement range is published
+
+- If a toolbar is anchored to the current text range, do not clear that range immediately on `mousedown` when the user starts adjusting the selection.
+- Keep the previous range alive until the next DOM selection is published, then animate the toolbar's `left` and `top` to the new anchor.
+- Reason: clearing first makes the toolbar disappear and snap back in, which feels visually harsh even when the selection logic itself is correct.
+
+### 2026-03-28: Range-action toolbars should stay hidden while the user is actively dragging a selection
+
+- The selection overlay should report drag start/end explicitly so the parent can suppress the range-anchored toolbar until the mouse is released.
+- Keep the selected text highlight itself live during the drag, but do not show the anchored action chrome until selection interaction has stopped.
+- Reason: otherwise the toolbar appears to chase the mouse while the user is still selecting, which is visually distracting even if the final anchor is correct.
+
 ## Recent Examples
 
 - `pdfs/IRA contribution IRS.pdf`
