@@ -2,7 +2,7 @@ import type { CSSProperties, MouseEvent } from 'react';
 
 import type { AnnotationBounds } from '../storage/annotationStorage';
 import { findFormulaFragmentMatches, type FormulaFragmentMatch } from '../utils/formulaFragmentDetector';
-import type { HighlightLineData } from '../utils/highlightUtils';
+import { buildHighlightLineSpanSlices, type HighlightLineData } from '../utils/highlightUtils';
 import { buildInterestingTextLayout, type InterestingTextMatch } from '../utils/interestingTextSegments';
 
 const HIGHLIGHT_PADDING = 12;
@@ -199,7 +199,7 @@ function buildSpanHotspots(payload: {
   scaleY: number;
 }): Hotspot[] {
   const { match, line, lineIndex, lineLocalStart, lineLocalEnd, blockBounds, scaleX, scaleY } = payload;
-  const spanSlices = buildLineSpanSlices(line);
+  const spanSlices = buildHighlightLineSpanSlices(line);
   if (spanSlices.length === 0) {
     return [];
   }
@@ -272,52 +272,4 @@ function buildApproximateLineHotspot(payload: {
       height: `${hotspotHeight}px`
     }
   };
-}
-
-function buildLineSpanSlices(line: HighlightLineData): Array<{
-  start: number;
-  end: number;
-  bounds: AnnotationBounds;
-}> {
-  if (!Array.isArray(line.spans) || line.spans.length === 0) {
-    return [];
-  }
-
-  const slices: Array<{ start: number; end: number; bounds: AnnotationBounds }> = [];
-  let searchFrom = 0;
-
-  for (const span of line.spans) {
-    if (!span.bounds || !span.text) {
-      continue;
-    }
-
-    const start = findSpanStart(line.text, span.text, searchFrom);
-    if (start < 0) {
-      continue;
-    }
-
-    const end = start + span.text.length;
-    slices.push({
-      start,
-      end,
-      bounds: span.bounds
-    });
-    searchFrom = end;
-  }
-
-  return slices;
-}
-
-function findSpanStart(lineText: string, spanText: string, fromIndex: number): number {
-  const directIndex = lineText.indexOf(spanText, fromIndex);
-  if (directIndex >= 0) {
-    return directIndex;
-  }
-
-  const trimmedSpanText = spanText.trim();
-  if (!trimmedSpanText) {
-    return -1;
-  }
-
-  return lineText.indexOf(trimmedSpanText, fromIndex);
 }

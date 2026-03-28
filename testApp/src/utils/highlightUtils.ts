@@ -28,6 +28,12 @@ export interface HighlightSpanData {
   bounds?: PDFImageBounds;
 }
 
+export interface HighlightLineSpanSlice {
+  start: number;
+  end: number;
+  bounds: PDFImageBounds;
+}
+
 export type TableDetectionSource = 'layout-bounds' | 'cell-bounds' | 'ai';
 
 export type TableDetectionResult = {
@@ -111,6 +117,36 @@ export function buildMergedTextHighlightBlockData(blocks: Array<HtmlParagraphBlo
     fontFamily: fontFamilies[0],
     fontSize: fontSizes.length > 0 ? average(fontSizes) : undefined
   };
+}
+
+export function buildHighlightLineSpanSlices(line: HighlightLineData): HighlightLineSpanSlice[] {
+  if (!Array.isArray(line.spans) || line.spans.length === 0) {
+    return [];
+  }
+
+  const slices: HighlightLineSpanSlice[] = [];
+  let searchFrom = 0;
+
+  for (const span of line.spans) {
+    if (!span.bounds || !span.text) {
+      continue;
+    }
+
+    const start = findSpanStart(line.text, span.text, searchFrom);
+    if (start < 0) {
+      continue;
+    }
+
+    const end = start + span.text.length;
+    slices.push({
+      start,
+      end,
+      bounds: span.bounds
+    });
+    searchFrom = end;
+  }
+
+  return slices;
 }
 
 export function findParagraphBlockAtPoint(
@@ -395,6 +431,20 @@ function deriveLineText(line: any): string {
     return line.items.map((item: any) => (typeof item?.text === 'string' ? item.text : '')).join('');
   }
   return '';
+}
+
+function findSpanStart(lineText: string, spanText: string, fromIndex: number): number {
+  const directIndex = lineText.indexOf(spanText, fromIndex);
+  if (directIndex >= 0) {
+    return directIndex;
+  }
+
+  const trimmedSpanText = spanText.trim();
+  if (!trimmedSpanText) {
+    return -1;
+  }
+
+  return lineText.indexOf(trimmedSpanText, fromIndex);
 }
 
 function extractFontFamily(block: any): string | undefined {

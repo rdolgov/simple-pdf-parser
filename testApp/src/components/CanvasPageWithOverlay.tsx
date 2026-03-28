@@ -23,6 +23,7 @@ import { InteractiveWidgetPopup } from './InteractiveWidgetPopup';
 import { ImageExplanationPopup, type ImageExplanationData } from './ImageExplanationPopup';
 import { LassoActionMenu } from './LassoActionMenu';
 import { InterestingTextOverlay } from './InterestingTextOverlay';
+import { CanvasTextSelectionOverlay } from './CanvasTextSelectionOverlay';
 import { getCachedImageExplanation, setCachedImageExplanation, deleteCachedImageExplanation } from '../storage/imageExplanationCache';
 import { hasCachedChartImageForTable } from '../storage/tableVisualizationCache';
 import {
@@ -103,6 +104,7 @@ import {
   trimSelectionContextText
 } from '../utils/logicalUnitContext';
 import { resolveLogicalHoverSegment } from '../utils/logicalHoverSegment';
+import type { TextSelectionRange } from '../utils/textRangeSelection';
 import {
   analyzeFormulaTask,
   analyzeImageTask,
@@ -165,6 +167,10 @@ type OverlayHighlightEntry = {
   fragments?: HighlightBlockData[];
   blockIndex?: number;
   isPrimary: boolean;
+};
+
+type ActiveTextRangeSelection = TextSelectionRange & {
+  blockKey: string;
 };
 
 interface CanvasPageWithOverlayProps {
@@ -328,6 +334,7 @@ export function CanvasPageWithOverlay({
     action: 'explain' | 'graphic' | 'interactive';
     error: string | null;
   } | null>(null);
+  const [textRangeSelection, setTextRangeSelection] = useState<ActiveTextRangeSelection | null>(null);
   const [formulaSuggestionAttentionKey, setFormulaSuggestionAttentionKey] = useState<string | null>(null);
   const [formulaSuggestionState, setFormulaSuggestionState] = useState<
     Record<string, { status: 'loading' | 'ready' | 'error'; hasMath: boolean }>
@@ -359,6 +366,7 @@ export function CanvasPageWithOverlay({
     setLassoDraftPoints([]);
     setLassoSelection(null);
     setLassoActionState(null);
+    setTextRangeSelection(null);
     setFormulaSuggestionAttentionKey(null);
   }, [focusLayout]);
 
@@ -457,6 +465,7 @@ export function CanvasPageWithOverlay({
     setHoveredExtractTable(null);
     setReferencePopup(null);
     setMathViewState(null);
+    setTextRangeSelection(null);
   }, [lassoMode, onCanvasHighlight, resetLassoDraft]);
 
   useEffect(() => {
@@ -1026,7 +1035,10 @@ export function CanvasPageWithOverlay({
       selectedText: string,
       position: { top: number; left: number },
       bounds: AnnotationBounds,
-      selectedBlock: Extract<CanvasHighlightSelection, { kind: 'text' }> | null
+      selectedBlock: Extract<CanvasHighlightSelection, { kind: 'text' }> | null,
+      options?: {
+        preferSelectedExcerpt?: boolean;
+      }
     ) => {
       const trimmedText = selectedText.trim();
       if (trimmedText.length === 0) {
@@ -1060,7 +1072,10 @@ export function CanvasPageWithOverlay({
 
         const prompt = buildInteractiveWidgetPrompt({
           documentTitle,
-          selectedText: logicalContext.scope === 'block' ? trimmedText : selectedUnitText,
+          selectedText:
+            options?.preferSelectedExcerpt || logicalContext.scope === 'block'
+              ? trimmedText
+              : selectedUnitText,
           sectionHeading,
           sectionText
         });
@@ -1476,12 +1491,78 @@ export function CanvasPageWithOverlay({
     canvasHighlight.kind === 'text'
       ? canvasHighlight
       : null;
-  const activeTextSelectionKey = activeTextSelection
-    ? buildHighlightBlockKey(page.number, activeTextSelection.block.bounds)
+  const activeTextSelectionHighlight = (() => {
+    if (!activeTextSelection) {
+      return null;
+    }
+
+    const logicalUnit = findHtmlLogicalUnitById(logicalStructure, activeTextSelection.logicalUnitId);
+    const pageSegment = getHtmlLogicalUnitPageSegment(logicalUnit, page.number);
+
+    if (htmlPage && pageSegment && pageSegment.blockIndexes.length > 0) {
+      const clippedSegment = resolveLogicalHoverSegment({
+        page: htmlPage,
+        blockIndexes: pageSegment.blockIndexes,
+        selectedBlockIndex: activeTextSelection.blockIndex
+      });
+      const sourceBlocks = (clippedSegment?.blockIndexes ?? pageSegment.blockIndexes)
+        .map((blockIndex) =>
+          activeTextSelection.pageNumber === page.number && activeTextSelection.blockIndex === blockIndex
+            ? activeTextSelection.block
+            : htmlPage.content[blockIndex]
+        )
+        .filter(isParagraphBlock);
+      return buildMergedTextHighlightBlockData(sourceBlocks);
+    }
+
+    return buildHighlightBlockData(activeTextSelection.block);
+  })();
+  const activeTextSelectionKey = activeTextSelectionHighlight
+    ? buildHighlightBlockKey(page.number, activeTextSelectionHighlight.bounds)
     : null;
-  const activeTextSelectionText = activeTextSelection?.block.text.trim() ?? '';
+  const activeTextRangeSelection =
+    activeTextSelectionKey && textRangeSelection?.blockKey === activeTextSelectionKey
+      ? textRangeSelection
+      : null;
+  const activeTextSelectionText = activeTextRangeSelection?.normalizedText ?? activeTextSelection?.block.text.trim() ?? '';
+  const isTextRangeSelectionLocked = Boolean(activeTextRangeSelection);
   const isGeneratingInteractiveWidget = interactiveWidgetState?.isLoading ?? false;
   const enableAutomaticFormulaSuggestion = false;
+
+  useEffect(() => {
+    if (!activeTextSelectionKey) {
+      setTextRangeSelection(null);
+      return;
+    }
+
+    setTextRangeSelection((current) => current?.blockKey === activeTextSelectionKey ? current : null);
+  }, [activeTextSelectionKey]);
+
+  useEffect(() => {
+    if (!activeTextRangeSelection) {
+      return;
+    }
+
+    const handleCopy = (event: ClipboardEvent) => {
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (
+        activeElement &&
+        (activeElement.tagName === 'INPUT' ||
+          activeElement.tagName === 'TEXTAREA' ||
+          activeElement.isContentEditable)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.clipboardData?.setData('text/plain', activeTextRangeSelection.text);
+    };
+
+    document.addEventListener('copy', handleCopy);
+    return () => {
+      document.removeEventListener('copy', handleCopy);
+    };
+  }, [activeTextRangeSelection]);
 
   useEffect(() => {
     if (!enableAutomaticFormulaSuggestion || !enableFormulaHighlight || !activeTextSelectionKey || activeTextSelectionText.length === 0) {
@@ -1665,11 +1746,31 @@ export function CanvasPageWithOverlay({
     });
   }, [documentId, pageNumber, imageExplanationState]);
 
+  const clearActiveTextSelection = useCallback(() => {
+    setTextRangeSelection(null);
+    onCanvasHighlight(null);
+  }, [onCanvasHighlight]);
+
+  const handleTextRangeSelectionChange = useCallback((blockKey: string, selection: TextSelectionRange | null) => {
+    setTextRangeSelection((current) => {
+      if (!selection) {
+        return current?.blockKey === blockKey ? null : current;
+      }
+      return {
+        blockKey,
+        ...selection
+      };
+    });
+  }, []);
+
   const clearTextHoverSelection = useCallback(() => {
+    if (isTextRangeSelectionLocked) {
+      return;
+    }
     if (canvasHighlight?.kind === 'text' && canvasHighlight.pageNumber === page.number) {
       onCanvasHighlight(null);
     }
-  }, [canvasHighlight, onCanvasHighlight, page.number]);
+  }, [canvasHighlight, isTextRangeSelectionLocked, onCanvasHighlight, page.number]);
 
   const isPointWithinActiveTextHoverShell = useCallback((clientX: number, clientY: number): boolean => {
     const blockElement = activeTextHoverBlockRef.current;
@@ -1697,6 +1798,9 @@ export function CanvasPageWithOverlay({
 
   const updateHoverTextSelection = useCallback(
     (pdfX: number, pdfY: number) => {
+      if (isTextRangeSelectionLocked) {
+        return;
+      }
       if (!enableTextHoverOverlay) {
         clearTextHoverSelection();
         return;
@@ -1746,14 +1850,23 @@ export function CanvasPageWithOverlay({
 
       onCanvasHighlight(nextSelection);
     },
-    [canvasHighlight, clearTextHoverSelection, enableTextHoverOverlay, htmlPage, logicalStructure, onCanvasHighlight, page.number]
+    [
+      canvasHighlight,
+      clearTextHoverSelection,
+      enableTextHoverOverlay,
+      htmlPage,
+      isTextRangeSelectionLocked,
+      logicalStructure,
+      onCanvasHighlight,
+      page.number
+    ]
   );
 
   useEffect(() => {
     if (!enableTextHoverOverlay && canvasHighlight?.kind === 'text') {
-      onCanvasHighlight(null);
+      clearActiveTextSelection();
     }
-  }, [canvasHighlight, enableTextHoverOverlay, onCanvasHighlight]);
+  }, [canvasHighlight, clearActiveTextSelection, enableTextHoverOverlay]);
 
   // Handle mouse move to detect hoverable elements
   const handleCanvasMouseMove = useCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -1766,6 +1879,16 @@ export function CanvasPageWithOverlay({
 
     const target = event.target as HTMLElement | null;
     if (target?.closest('.overlay-toolbar')) {
+      return;
+    }
+
+    if (isTextRangeSelectionLocked) {
+      if (hoveredElement) {
+        setHoveredElement(null);
+      }
+      if (hoveredExtractTable) {
+        setHoveredExtractTable(null);
+      }
       return;
     }
 
@@ -1945,6 +2068,7 @@ export function CanvasPageWithOverlay({
     geminiExtraction,
     hoveredElement,
     hoveredExtractTable,
+    isTextRangeSelectionLocked,
     lassoMode,
     page,
     page.size.height,
@@ -1957,6 +2081,9 @@ export function CanvasPageWithOverlay({
 
   // Clear hover on mouse leave
   const handleCanvasMouseLeave = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (isTextRangeSelectionLocked) {
+      return;
+    }
     const relatedTarget = event.relatedTarget;
     if (relatedTarget instanceof Node && activeTextHoverBlockRef.current?.contains(relatedTarget)) {
       return;
@@ -1964,7 +2091,7 @@ export function CanvasPageWithOverlay({
     setHoveredElement(null);
     setHoveredExtractTable(null);
     clearTextHoverSelection();
-  }, [clearTextHoverSelection]);
+  }, [clearTextHoverSelection, isTextRangeSelectionLocked]);
 
   const handleCanvasClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (ignoreNextCanvasClickRef.current) {
@@ -1983,8 +2110,13 @@ export function CanvasPageWithOverlay({
       return;
     }
     const target = event.target as HTMLElement | null;
-    if (target?.closest('.canvas-overlay-toolbar-button, .overlay-toolbar, .interesting-text-overlay')) {
+    if (target?.closest('.canvas-overlay-toolbar-button, .overlay-toolbar, .interesting-text-overlay, .canvas-text-selection-overlay')) {
       return;
+    }
+
+    if (isTextRangeSelectionLocked) {
+      setTextRangeSelection(null);
+      onCanvasHighlight(null);
     }
 
     const rect = canvasRef.current.getBoundingClientRect();
@@ -2190,7 +2322,23 @@ export function CanvasPageWithOverlay({
     }
 
     setTableOverlay(null);
-  }, [focusMode, htmlPage, lassoMode, logicalStructure, onCanvasHighlight, page.number, page.size.height, page.size.width, extractedTables, geminiExtraction, pageNumber, zoom, documentId, enableImageHighlight]);
+  }, [
+    focusMode,
+    htmlPage,
+    lassoMode,
+    logicalStructure,
+    onCanvasHighlight,
+    page.number,
+    page.size.height,
+    page.size.width,
+    extractedTables,
+    geminiExtraction,
+    pageNumber,
+    zoom,
+    documentId,
+    enableImageHighlight,
+    isTextRangeSelectionLocked
+  ]);
 
   const handleTableInfographicMarkerClick = useCallback((table: ExtractedTable) => {
     if (!table.bounds) {
@@ -2507,12 +2655,25 @@ export function CanvasPageWithOverlay({
                 entry.isPrimary && activeTextSelection && activeTextSelection.pageNumber === page.number
                   ? activeTextSelection
                   : null;
+              const selectedTextRange =
+                entry.isPrimary && activeTextRangeSelection?.blockKey === blockKey
+                  ? activeTextRangeSelection
+                  : null;
               const highlightText = entry.text?.trim() ?? selectedBlockForWidget?.block.text.trim() ?? '';
+              const effectiveSelectedText = selectedTextRange?.normalizedText ?? highlightText;
               const selectionContext = selectedBlockForWidget
-                ? resolveTextSelectionContext(selectedBlockForWidget, logicalStructure, highlightText)
+                ? resolveTextSelectionContext(selectedBlockForWidget, logicalStructure, effectiveSelectedText)
                 : null;
-              const chatContextText = selectionContext ? buildChatContextText(selectionContext) : highlightText;
-              const generationPromptText = selectionContext
+              const chatContextText = selectedTextRange
+                ? selectionContext?.title
+                  ? `${selectionContext.title}\n\n${effectiveSelectedText}`
+                  : effectiveSelectedText
+                : selectionContext
+                ? buildChatContextText(selectionContext)
+                : highlightText;
+              const generationPromptText = selectedTextRange
+                ? effectiveSelectedText
+                : selectionContext
                 ? trimSelectionContextText(selectionContext.text, 900)
                 : highlightText;
               const isLoadingImage = entry.isPrimary && Boolean(imageLoading[blockKey]);
@@ -2548,7 +2709,7 @@ export function CanvasPageWithOverlay({
                 >
                   {entry.isPrimary ? (
                     <>
-                      <OverlayToolbar onClose={() => onCanvasHighlight(null)} showClose={!isLogicalTextHoverOverlay}>
+                      <OverlayToolbar onClose={clearActiveTextSelection} showClose={!isLogicalTextHoverOverlay}>
                         <OverlayToolbarButton
                           onClick={() => handleOpenMiniChat(chatContextText, blockLeft, blockTop, blockWidth, bounds)}
                           icon={<ExploreIcon />}
@@ -2573,7 +2734,8 @@ export function CanvasPageWithOverlay({
                               generationPromptText,
                               getWidgetPopupPosition(bounds),
                               bounds,
-                              selectedBlockForWidget
+                              selectedBlockForWidget,
+                              { preferSelectedExcerpt: Boolean(selectedTextRange) }
                             )
                           }
                           icon={isGeneratingInteractiveWidget ? <LoadingIcon /> : <WidgetIcon />}
@@ -2583,6 +2745,15 @@ export function CanvasPageWithOverlay({
                         />
                       </OverlayToolbar>
                       <div className="canvas-overlay-highlight-inner canvas-overlay-highlight-inner--interactive-text">
+                        <CanvasTextSelectionOverlay
+                          blockBounds={bounds}
+                          lines={block.lines}
+                          scaleX={scaleX}
+                          scaleY={scaleY}
+                          padding={HIGHLIGHT_PADDING}
+                          selection={selectedTextRange}
+                          onSelectionChange={(selection) => handleTextRangeSelectionChange(blockKey, selection)}
+                        />
                         <InterestingTextOverlay
                           blockBounds={bounds}
                           lines={block.lines}

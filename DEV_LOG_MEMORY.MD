@@ -154,6 +154,24 @@ Use it as follows:
 - Merge those ultra-tight fragments in `textSmoother` so the shared lexical repair sees the whole token, then repair internal `lowercaseUppercase` joins and attached connector suffixes before the generic segmentation scorer runs.
 - Reason: the reduced-paper title needed `Ingressing Minds`, `Patterns Beyond`, `Genetics and`, and `Hybrid Embodiments` restored without adding PDF-specific exceptions, and the generic scorer alone produced bad splits like `Pattern sBeyond`.
 
+### 2026-03-28: Canvas text selection should follow highlight geometry, not browser text-layer layout
+
+- The canvas viewer should expose real browser text selection through a DOM layer, but that layer must be built from our own per-character geometry derived from highlight line/span bounds, including synthetic gap boxes for spaces between spans.
+- Do not rely on generic browser line layout or an approximate text layer; render transparent character boxes at PDF-backed positions so drag selection, copied text, and overlay actions stay aligned.
+- Reason: the first custom drag-highlighter did not behave like actual text selection, while the DOM layer backed by our own character widths keeps native selection behavior without giving up PDF-grounded geometry.
+
+### 2026-03-28: Hide native per-character selection fill when the viewer paints merged selection bars
+
+- If the DOM selection layer uses one span per character for precise hit geometry, the browser's own `::selection` background will appear as letter-by-letter blocks.
+- Keep the native selection fill transparent and render the visible selection state from merged same-line client rects instead.
+- Reason: this preserves accurate copying/drag selection while making the visible highlight read like a normal continuous text selection.
+
+### 2026-03-28: Transparent custom selection fills need drag-time repaint independent of browser selection timing
+
+- Once the browser's native `::selection` fill is hidden, the viewer cannot wait until mouseup to repaint the custom merged selection bars.
+- During an active drag, schedule selection publication from document-level mouse movement with `requestAnimationFrame`, and use document-level mouseup to finalize even if the drag ends outside the block.
+- Reason: some browser/event combinations do not surface a timely enough `selectionchange` for this overlay, which leaves users with no visible feedback until they release the mouse.
+
 ## Recent Examples
 
 - `pdfs/IRA contribution IRS.pdf`

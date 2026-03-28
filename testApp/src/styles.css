@@ -1133,6 +1133,57 @@ header p {
   overflow: visible;
 }
 
+.canvas-text-selection-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.canvas-text-selection-text-layer {
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.canvas-text-selection-line {
+  position: absolute;
+  white-space: nowrap;
+  font-size: 0;
+}
+
+.canvas-text-selection-char {
+  display: inline-block;
+  vertical-align: top;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.canvas-text-selection-char::selection {
+  background: transparent;
+  color: transparent;
+}
+
+.canvas-text-selection-char::-moz-selection {
+  background: transparent;
+  color: transparent;
+}
+
+.canvas-text-selection-fragment {
+  position: absolute;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.16);
+  box-shadow:
+    inset 0 0 0 1px rgba(37, 99, 235, 0.22),
+    0 0 0 1px rgba(191, 219, 254, 0.12);
+  pointer-events: none;
+}
+
 .interesting-text-overlay {
   position: relative;
   width: 100%;
