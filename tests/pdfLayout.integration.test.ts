@@ -246,6 +246,34 @@ describe('PDF layout integration', () => {
     expect(figureImage!.softMaskPixels!.height).toBe(1396);
   });
 
+  it('restores missing title spacing on the reduced paper front matter', () => {
+    const document = loadPaperReducedDocument();
+    const page = document.getPage(1);
+    const layout = convertLayoutToHtml({ pages: document.pages });
+
+    expect(page).toBeDefined();
+
+    const pageText = page!.textItems.map((item) => item.text).join('\n');
+    const htmlPage = layout.pages[0];
+
+    expect(pageText).toContain('Ingressing Minds');
+    expect(pageText).toContain('Patterns Beyond');
+    expect(pageText).toContain('Genetics and');
+    expect(pageText).toContain('Hybrid Embodiments');
+    expect(pageText).not.toContain('IngressingMinds');
+    expect(pageText).not.toContain('PatternsBeyond');
+    expect(pageText).not.toContain('Geneticsand');
+    expect(pageText).not.toContain('HybridEmbodiments');
+    expect(htmlPage.content[0]).toMatchObject({
+      type: 'paragraph',
+      text: '“Ingressing Minds: Causal Patterns Beyond Genetics and Environment in'
+    });
+    expect(htmlPage.content[1]).toMatchObject({
+      type: 'paragraph',
+      text: 'Natural, Synthetic, and Hybrid Embodiments”'
+    });
+  });
+
   it('keeps word2vec page-1 title-case names and title words intact', () => {
     const document = loadWordEmbeddingsDocument();
     const page = document.getPage(1);

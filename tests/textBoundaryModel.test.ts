@@ -204,4 +204,22 @@ describe('text boundary model', () => {
     expect(refined[0]?.text).toContain('I teach in Cambridge');
     expect(refined[0]?.text).not.toContain('Iteach');
   });
+
+  it('splits merged title-case words and attached connector suffixes without breaking short surnames', () => {
+    const items: PDFTextItem[] = [
+      buildItem('HybridEmbodiments', wordGlyphs('HybridEmbodiments'), 320),
+      buildItem('IngressingMinds', wordGlyphs('IngressingMinds'), 300),
+      buildItem('PatternsBeyond', wordGlyphs('PatternsBeyond'), 280),
+      buildItem('Geneticsand', wordGlyphs('Geneticsand'), 260),
+      buildItem('McKay', wordGlyphs('McKay'), 240)
+    ];
+
+    const refined = refineLexicalTextBoundaries(items);
+
+    expect(refined[0]?.text).toBe('Hybrid Embodiments');
+    expect(refined[1]?.text).toBe('Ingressing Minds');
+    expect(refined[2]?.text).toBe('Patterns Beyond');
+    expect(refined[3]?.text).toBe('Genetics and');
+    expect(refined[4]?.text).toBe('McKay');
+  });
 });

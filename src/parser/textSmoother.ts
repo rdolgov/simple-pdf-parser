@@ -231,7 +231,12 @@ function mergeDecision(
   const requiresSpace = shouldInsertSpace(prev, next, gap, Math.max(prevSize, nextSize), options);
 
   if (!requiresSpace) {
-    if (gap > 0 && !isLikelySplitWord(prev.text, next.text, gap, avgCharWidth) && canLeaveAsSeparateFragments(prev.text, next.text)) {
+    const separateFragmentGapThreshold = Math.max(avgCharWidth * 0.08, 0.35);
+    if (
+      gap > separateFragmentGapThreshold &&
+      !isLikelySplitWord(prev.text, next.text, gap, avgCharWidth) &&
+      canLeaveAsSeparateFragments(prev.text, next.text)
+    ) {
       return { merge: false, insertSpace: false };
     }
     const mergeGapLimit = -options.overlapTolerance * options.mergeGapMultiplier;

@@ -192,4 +192,32 @@ describe('mergeTextRuns', () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.text).toBe('michael.levin@tufts.edu');
   });
+
+  it('merges ultra-tight title fragments so later lexical repair can restore missing spaces', () => {
+    const items: PDFTextItem[] = [
+      {
+        text: 'Ingressing',
+        font: 'Cambria',
+        fontResourceKey: 'F1',
+        fontSize: 12,
+        bounds: { minX: 107.47, minY: 705.83, maxX: 172.74, maxY: 717.83 },
+        baselineStart: { x: 107.47, y: 705.83 },
+        baselineEnd: { x: 172.74, y: 705.83 }
+      },
+      {
+        text: 'Minds',
+        font: 'Cambria',
+        fontResourceKey: 'F1',
+        fontSize: 12,
+        bounds: { minX: 172.7424, minY: 705.83, maxX: 206.18, maxY: 717.83 },
+        baselineStart: { x: 172.7424, y: 705.83 },
+        baselineEnd: { x: 206.18, y: 705.83 }
+      }
+    ];
+
+    const merged = mergeTextRuns(items);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.text).toBe('IngressingMinds');
+  });
 });

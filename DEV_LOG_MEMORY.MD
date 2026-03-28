@@ -148,6 +148,12 @@ Use it as follows:
 - The final assistant turn should be replaced with the validated cited-answer object once the stream completes.
 - Reason: users need readable partial text immediately, but the product still needs exact grounded citations and stable anchor resolution at the end.
 
+### 2026-03-27: Ultra-tight title fragments should merge before lexical repair, and cased joins need a dedicated path
+
+- Some PDFs emit adjacent title/front-matter words as separate same-font runs with effectively zero geometric gap, so leaving them separate causes HTML text concatenation to drop spaces even though the visual canvas positions look continuous.
+- Merge those ultra-tight fragments in `textSmoother` so the shared lexical repair sees the whole token, then repair internal `lowercaseUppercase` joins and attached connector suffixes before the generic segmentation scorer runs.
+- Reason: the reduced-paper title needed `Ingressing Minds`, `Patterns Beyond`, `Genetics and`, and `Hybrid Embodiments` restored without adding PDF-specific exceptions, and the generic scorer alone produced bad splits like `Pattern sBeyond`.
+
 ## Recent Examples
 
 - `pdfs/IRA contribution IRS.pdf`

@@ -63,6 +63,7 @@ const COMMON_BIGRAMS = new Set([
 const TITLE_CASE_CONNECTOR_WORDS = new Set([
   'a', 'an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'of', 'on', 'or', 'the', 'to', 'via', 'vs', 'with'
 ]);
+const SORTED_TITLE_CASE_CONNECTOR_SUFFIXES = [...TITLE_CASE_CONNECTOR_WORDS].sort((left, right) => right.length - left.length);
 
 const MATH_FONT_PATTERN = /(cmex|cmsy|cmmi|line10|msam|msbm|symbol|wasy|stmary)/i;
 const MAX_WORD_LENGTH = 28;
@@ -244,7 +245,8 @@ function refineItemText(
   }
 
   const repairedPunctuation = repairPunctuationSpacing(refined);
-  const repairedRecurringPatterns = repairRecurringFrontMatterPatterns(repairedPunctuation);
+  const repairedCapitalizedJoins = repairCapitalizedWordJoins(repairedPunctuation);
+  const repairedRecurringPatterns = repairRecurringFrontMatterPatterns(repairedCapitalizedJoins);
   if (!hasSuspiciousSpaces) {
     const repairedAttachedJoins = repairAttachedWordJoins(repairedRecurringPatterns, fontKey, lexicon);
     const repairedMergedPhrases = repairMergedWordPhrases(repairedAttachedJoins, fontKey, lexicon);
@@ -297,6 +299,12 @@ function refineSegment(
   if (originalWords.length === 1) {
     const singleWord = originalWords[0] ?? '';
     if (isProtectedTitleCaseWordToken(singleWord) && !resolveLeadingArticleWords(singleWord, fontKey, lexicon)) {
+      return segment;
+    }
+    if (
+      resolveCapitalizedCaseBoundaryWords(singleWord, fontKey, lexicon) ||
+      resolveAttachedConnectorSuffixWords(singleWord, fontKey, lexicon)
+    ) {
       return segment;
     }
   }
@@ -1004,6 +1012,25 @@ function repairRecurringFrontMatterPatterns(text: string): string {
     .replace(/\betal\b/g, 'et al');
 }
 
+function repairCapitalizedWordJoins(text: string): string {
+  return text.replace(/\b[A-Z][A-Za-z]{7,}\b/g, (word) => {
+    if (!/[a-z][A-Z]/.test(word)) {
+      return word;
+    }
+
+    const parts = word.split(/(?<=[a-z])(?=[A-Z])/u);
+    if (parts.length < 2 || parts.length > 4) {
+      return word;
+    }
+
+    if (parts.some((part) => !/^[A-Z][a-z]{3,}$/.test(part))) {
+      return word;
+    }
+
+    return parts.join(' ');
+  });
+}
+
 function repairPunctuationSpacing(text: string): string {
   return text.replace(/([,.;:!?])(?=[A-Za-z])/g, (match, punctuation, offset, input) =>
     shouldPreserveCompactPunctuation(input, Number(offset))
@@ -1061,7 +1088,85 @@ function splitAttachedWordToken(
     return leadingArticleWords.join(' ');
   }
 
+  const casedBoundaryWords = resolveCapitalizedCaseBoundaryWords(word, fontKey, lexicon);
+  if (casedBoundaryWords) {
+    return casedBoundaryWords.join(' ');
+  }
+
+  const connectorSuffixWords = resolveAttachedConnectorSuffixWords(word, fontKey, lexicon);
+  if (connectorSuffixWords) {
+    return connectorSuffixWords.join(' ');
+  }
+
   return word;
+}
+
+function resolveCapitalizedCaseBoundaryWords(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string[] | undefined {
+  if (!/^[A-Z][A-Za-z]+$/.test(word) || !/[a-z][A-Z]/.test(word)) {
+    return undefined;
+  }
+
+  const parts = word.split(/(?<=[a-z])(?=[A-Z])/u);
+  if (parts.length < 2 || parts.length > 4) {
+    return undefined;
+  }
+
+  if (parts.some((part) => !isAcceptedCapitalizedBoundaryWord(part, fontKey, lexicon))) {
+    return undefined;
+  }
+
+  return parts;
+}
+
+function resolveAttachedConnectorSuffixWords(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string[] | undefined {
+  if (!/^[A-Z][a-z]{7,}$/.test(word)) {
+    return undefined;
+  }
+
+  const lowerWord = word.toLowerCase();
+  for (const suffix of SORTED_TITLE_CASE_CONNECTOR_SUFFIXES) {
+    if (!lowerWord.endsWith(suffix) || word.length <= suffix.length + 4) {
+      continue;
+    }
+
+    const base = word.slice(0, word.length - suffix.length);
+    if (!/^[A-Z][a-z]{3,}$/.test(base) || !isAcceptedCapitalizedBoundaryWord(base, fontKey, lexicon)) {
+      continue;
+    }
+
+    const splitScore =
+      scoreWord(base, fontKey, lexicon) +
+      scoreWord(suffix, fontKey, lexicon) +
+      scoreBoundary(base, suffix, false, fontKey, lexicon);
+    if (splitScore <= scoreWord(word, fontKey, lexicon) + 1) {
+      continue;
+    }
+
+    return [base, suffix];
+  }
+
+  return undefined;
+}
+
+function isAcceptedCapitalizedBoundaryWord(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): boolean {
+  const normalized = word.toLowerCase();
+  if (isBackedLexiconWord(word, fontKey, lexicon) || TITLE_CASE_CONNECTOR_WORDS.has(normalized)) {
+    return true;
+  }
+
+  return /^[A-Z][a-z]{3,}$/.test(word) && hasPlausibleWordShape(normalized);
 }
 
 function repairMergedWordPhrases(
