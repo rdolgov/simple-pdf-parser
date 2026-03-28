@@ -134,6 +134,20 @@ Use it as follows:
 - When adjacent runs form an email local-part, domain, or similar compact punctuation token, treat that boundary like an in-word continuation and do not insert a space.
 - Reason: the smoother was inventing spaces in `michael.levin@tufts.edu`, which then survived lexical repair because email-like text is intentionally protected.
 
+### 2026-03-23: Interactive chat should use dedicated streaming task routes, not async-job polling
+
+- Keep the existing `/api/tasks/*` async-job endpoints for non-interactive work, but add parallel `/stream` routes for chat so the browser can render deltas immediately.
+- Stream browser-facing events as NDJSON over `fetch`, not EventSource, because chat requests are POST bodies and need auth headers.
+- For whole-document grounded chat, reuse the same evidence retrieval/materialization pipeline as the non-streaming cited-answer path; only the transport changes.
+- Reason: polling is fine for background tasks, but it cannot provide token-by-token UI updates or a stable single-message chat history model.
+
+### 2026-03-23: Whole-document streaming should separate preview text from final cited structure
+
+- Do not stream raw citation JSON into the chat bubble.
+- Use a streaming-specific prompt that returns an `ANSWER:` section first and a `JSON:` section second, then stream only the preview answer while still parsing the final structured citation payload at completion.
+- The final assistant turn should be replaced with the validated cited-answer object once the stream completes.
+- Reason: users need readable partial text immediately, but the product still needs exact grounded citations and stable anchor resolution at the end.
+
 ## Recent Examples
 
 - `pdfs/IRA contribution IRS.pdf`

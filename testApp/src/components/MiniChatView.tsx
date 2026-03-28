@@ -15,7 +15,10 @@ import {
   deleteDocumentChatAnnotation,
   findAnnotationAtBounds
 } from '../storage/annotationStorage';
-import { answerDocumentQuestionTask, askQuestionTask } from '../api/proxyTaskApi';
+import {
+  answerDocumentQuestionTaskStream,
+  askQuestionTaskStream
+} from '../api/proxyTaskApi';
 import { CitedAnswerMessage } from './CitedAnswerMessage';
 import { renderMarkdownToHtml } from '../utils/markdownRenderer';
 
@@ -132,6 +135,7 @@ export function MiniChatView({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [streamingAssistantTimestamp, setStreamingAssistantTimestamp] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [hasPersistedHistory, setHasPersistedHistory] = useState(false);
@@ -349,29 +353,32 @@ export function MiniChatView({
     const userMessage: ChatMessage = { role: 'user', content: trimmed, timestamp: Date.now() };
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
+    setStreamingAssistantTimestamp(null);
     let tracksChatActivity = false;
+    const assistantTimestamp = Date.now();
 
     try {
       onChatActivityChange?.(1);
       tracksChatActivity = true;
 
-      let assistantMessage: ChatMessage;
       if (taskDocumentId) {
         const nextContextText = storedContextText;
         const groundedScope = buildGroundedQuestionScope(chatScope, pageNumber, bounds, nextContextText);
-        const result = await answerDocumentQuestionTask({
+        let streamedText = '';
+        const result = await answerDocumentQuestionTaskStream({
           documentId: taskDocumentId,
           question: trimmed,
           provider,
           ...(model && model.trim().length > 0 ? { model: model.trim() } : {}),
           scope: groundedScope
+        }, {
+          onDelta: (delta) => {
+            streamedText += delta;
+            setStreamingAssistantTimestamp(assistantTimestamp);
+            setMessages((prev) => upsertAssistantMessage(prev, assistantTimestamp, streamedText));
+          }
         });
-        assistantMessage = {
-          role: 'assistant',
-          content: result.answerText,
-          timestamp: Date.now(),
-          citedAnswer: result
-        };
+        setMessages((prev) => upsertAssistantMessage(prev, assistantTimestamp, result.answerText, result));
         setStoredContextText(nextContextText);
       } else {
         const promptResult = buildPrompt
@@ -387,16 +394,22 @@ export function MiniChatView({
         const nextContextText = typeof promptResult === 'string'
           ? storedContextText
           : promptResult.contextText ?? storedContextText;
-        const result = await askQuestionTask({
+        let streamedText = '';
+        const result = await askQuestionTaskStream({
           prompt: fullPrompt,
           provider,
           ...(model && model.trim().length > 0 ? { model: model.trim() } : {}),
           enableWebSearch
+        }, {
+          onDelta: (delta) => {
+            streamedText += delta;
+            setStreamingAssistantTimestamp(assistantTimestamp);
+            setMessages((prev) => upsertAssistantMessage(prev, assistantTimestamp, streamedText));
+          }
         });
-        assistantMessage = { role: 'assistant', content: result.text, timestamp: Date.now() };
+        setMessages((prev) => upsertAssistantMessage(prev, assistantTimestamp, result.text));
         setStoredContextText(nextContextText);
       }
-      setMessages((prev) => [...prev, assistantMessage]);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to get response';
       setError(message);
@@ -404,6 +417,7 @@ export function MiniChatView({
       if (tracksChatActivity) {
         onChatActivityChange?.(-1);
       }
+      setStreamingAssistantTimestamp(null);
       setIsLoading(false);
     }
   }, [
@@ -500,6 +514,8 @@ export function MiniChatView({
     'mini-chat-messages',
     isFloating ? 'mini-chat-messages--floating' : 'mini-chat-messages--docked'
   ].join(' ');
+  const hasStreamingAssistantMessage = streamingAssistantTimestamp !== null
+    && messages.some((message) => message.role === 'assistant' && message.timestamp === streamingAssistantTimestamp);
 
   return (
     <div
@@ -561,7 +577,9 @@ export function MiniChatView({
         {messages.map((message, index) => (
           <div
             key={index}
-            className={`mini-chat-message mini-chat-message--${message.role}`}
+            className={`mini-chat-message mini-chat-message--${message.role}${
+              isLoading && streamingAssistantTimestamp === message.timestamp ? ' mini-chat-message--streaming' : ''
+            }`}
           >
             {message.role === 'assistant' && message.citedAnswer ? (
               <CitedAnswerMessage answer={message.citedAnswer} onCitationClick={onCitationClick} />
@@ -573,7 +591,7 @@ export function MiniChatView({
             )}
           </div>
         ))}
-        {isLoading && (
+        {isLoading && !hasStreamingAssistantMessage && (
           <div className="mini-chat-message mini-chat-message--assistant">
             <div className="mini-chat-message-content mini-chat-loading">
               <LoadingDots />
@@ -635,6 +653,27 @@ function buildGroundedQuestionScope(
     bounds: selectionAnchor.bounds,
     ...(contextText.trim() ? { contextText } : {})
   };
+}
+
+function upsertAssistantMessage(
+  messages: ChatMessage[],
+  timestamp: number,
+  content: string,
+  citedAnswer?: ChatMessage['citedAnswer']
+): ChatMessage[] {
+  const nextMessage: ChatMessage = {
+    role: 'assistant',
+    content,
+    timestamp,
+    ...(citedAnswer ? { citedAnswer } : {})
+  };
+  const existingIndex = messages.findIndex((message) => message.role === 'assistant' && message.timestamp === timestamp);
+  if (existingIndex >= 0) {
+    const nextMessages = [...messages];
+    nextMessages[existingIndex] = nextMessage;
+    return nextMessages;
+  }
+  return [...messages, nextMessage];
 }
 
 function DragIcon(): JSX.Element {

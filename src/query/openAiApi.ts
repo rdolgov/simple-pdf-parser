@@ -1,5 +1,6 @@
 import { normalizeProviderApiError, readFormattedOpenAiErrorBody } from './apiErrorUtils.js';
 import { fetchWithLlmProxyPolling } from './llmProxyPolling.js';
+import { readServerSentEvents } from './serverSentEvents.js';
 
 export type OpenAiContent = string | OpenAiContentParts | OpenAiContentParts[];
 
@@ -97,6 +98,20 @@ export class OpenAiAPI {
     });
   }
 
+  async generateTextStream(
+    prompt: string,
+    onDelta: (delta: string) => void | Promise<void>,
+    options?: Omit<OpenAiGenerateRequest, 'contents'>
+  ): Promise<OpenAiGenerateResult> {
+    return this.generateContentStream(
+      {
+        contents: prompt,
+        ...options
+      },
+      onDelta
+    );
+  }
+
   async generateFromImage(
     imageData: string,
     mimeType: string,
@@ -154,6 +169,127 @@ export class OpenAiAPI {
     return {
       text,
       raw,
+      model: modelFromResponse ?? model
+    };
+  }
+
+  async generateContentStream(
+    request: OpenAiGenerateRequest,
+    onDelta: (delta: string) => void | Promise<void>
+  ): Promise<OpenAiGenerateResult> {
+    const model = sanitizeOpenAiModel(request.model ?? this.defaultModel);
+    const generationConfig = request.generationConfig ?? this.defaultGenerationConfig;
+
+    const payload: Record<string, unknown> = {
+      model,
+      input: toResponsesInput(request.contents),
+      stream: true
+    };
+    applyGenerationConfig(payload, generationConfig);
+
+    const fetchImpl = resolveFetch();
+    let response: Response;
+    try {
+      response = await fetchImpl(this.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      throw normalizeProviderApiError('OpenAI', error);
+    }
+
+    if (!response.ok) {
+      const message = await readFormattedOpenAiErrorBody(response);
+      throw new Error(`OpenAI request failed with status ${response.status}: ${message}`);
+    }
+
+    let text = '';
+    let completedResponse: OpenAiResponsesResponse | null = null;
+    const streamedEvents: unknown[] = [];
+
+    await readServerSentEvents(response, async (event) => {
+      const data = event.data.trim();
+      if (!data) {
+        return;
+      }
+      if (data === '[DONE]') {
+        streamedEvents.push(data);
+        return;
+      }
+
+      const parsed = safeParseJsonRecord(data);
+      if (!parsed) {
+        return;
+      }
+      streamedEvents.push(parsed);
+
+      const eventType = typeof parsed.type === 'string' ? parsed.type : '';
+      if (eventType === 'response.output_text.delta') {
+        const delta = readPath(parsed, ['delta']);
+        if (typeof delta === 'string' && delta.length > 0) {
+          text += delta;
+          await onDelta(delta);
+        }
+        return;
+      }
+
+      if (eventType === 'response.output_text.done') {
+        const completedText = readPath(parsed, ['text']);
+        if (typeof completedText === 'string' && completedText.length > 0 && text.length === 0) {
+          text = completedText;
+          await onDelta(completedText);
+        }
+        return;
+      }
+
+      if (eventType === 'response.completed') {
+        const rawResponse = readPath(parsed, ['response']);
+        if (rawResponse && typeof rawResponse === 'object' && !Array.isArray(rawResponse)) {
+          completedResponse = rawResponse as OpenAiResponsesResponse;
+          const completedText = extractFullText(completedResponse);
+          if (completedText.length > text.length && completedText.startsWith(text)) {
+            const tail = completedText.slice(text.length);
+            if (tail.length > 0) {
+              text = completedText;
+              await onDelta(tail);
+            } else {
+              text = completedText;
+            }
+          } else if (text.length === 0 && completedText.length > 0) {
+            text = completedText;
+            await onDelta(completedText);
+          }
+        }
+        return;
+      }
+
+      if (eventType === 'error') {
+        const message = normalizeText(readPath(parsed, ['message']))
+          ?? normalizeText(readPath(parsed, ['error', 'message']))
+          ?? 'OpenAI streaming request failed.';
+        throw new Error(message);
+      }
+    });
+
+    if (text.length === 0 && completedResponse) {
+      const completedText = extractFullText(completedResponse);
+      if (completedText.length > 0) {
+        text = completedText;
+      }
+    }
+
+    if (text.length === 0) {
+      throw new Error('OpenAI response did not include text content');
+    }
+
+    const modelFromResponse = completedResponse ? normalizeText(readPath(completedResponse, ['model'])) : undefined;
+    return {
+      text,
+      raw: completedResponse ?? { model: modelFromResponse ?? model, output_text: text, events: streamedEvents },
       model: modelFromResponse ?? model
     };
   }
@@ -405,6 +541,55 @@ function extractText(response: OpenAiResponsesResponse): string | undefined {
   }
 
   return undefined;
+}
+
+function extractFullText(response: OpenAiResponsesResponse): string {
+  const outputText = readPath(response, ['output_text']);
+  if (typeof outputText === 'string' && outputText.length > 0) {
+    return outputText;
+  }
+
+  const chunks: string[] = [];
+  const output = readPath(response, ['output']);
+  if (Array.isArray(output)) {
+    for (const item of output) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+      const content = readPath(item as Record<string, unknown>, ['content']);
+      if (!Array.isArray(content)) {
+        continue;
+      }
+      for (const part of content) {
+        if (!part || typeof part !== 'object') {
+          continue;
+        }
+        const direct = readPath(part as Record<string, unknown>, ['text']);
+        if (typeof direct === 'string' && direct.length > 0) {
+          chunks.push(direct);
+          continue;
+        }
+        const value = readPath(part as Record<string, unknown>, ['text', 'value']);
+        if (typeof value === 'string' && value.length > 0) {
+          chunks.push(value);
+        }
+      }
+    }
+  }
+
+  return chunks.join('');
+}
+
+function safeParseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Ignore malformed partial events.
+  }
+  return null;
 }
 
 function readPath(value: Record<string, unknown>, path: string[]): unknown {

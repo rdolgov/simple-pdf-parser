@@ -66,6 +66,15 @@ export interface ProxyTaskTextResponse {
   model: string;
 }
 
+interface ProxyTaskStreamCallbacks {
+  onDelta?: (delta: string) => void;
+}
+
+type ProxyTaskStreamEvent<TResult> =
+  | { type: 'delta'; delta: string }
+  | { type: 'complete'; result: TResult }
+  | { type: 'error'; error: string };
+
 export interface ProxyTaskImageResponse {
   dataUri: string;
   mimeType: string;
@@ -183,10 +192,34 @@ export async function askQuestionTask(input: {
   return postJsonTask<ProxyTaskTextResponse>('ask-question', input);
 }
 
+export async function askQuestionTaskStream(
+  input: {
+    documentId?: string | null;
+    prompt: string;
+    provider?: ProxyTaskTextProvider;
+    model?: string | null;
+    enableWebSearch?: boolean;
+  },
+  callbacks?: ProxyTaskStreamCallbacks
+): Promise<ProxyTaskTextResponse> {
+  return postJsonTaskStream<ProxyTaskTextResponse>('ask-question/stream', input, callbacks);
+}
+
 export async function answerDocumentQuestionTask(
   input: AnswerDocumentQuestionRequest
 ): Promise<DocumentCitedAnswerResponse> {
   return postJsonTask<DocumentCitedAnswerResponse>('answer-document-question', input as unknown as Record<string, unknown>);
+}
+
+export async function answerDocumentQuestionTaskStream(
+  input: AnswerDocumentQuestionRequest,
+  callbacks?: ProxyTaskStreamCallbacks
+): Promise<DocumentCitedAnswerResponse> {
+  return postJsonTaskStream<DocumentCitedAnswerResponse>(
+    'answer-document-question/stream',
+    input as unknown as Record<string, unknown>,
+    callbacks
+  );
 }
 
 export async function generateWidgetTask(input: {
@@ -299,6 +332,82 @@ async function postJsonTask<T>(taskName: string, body: Record<string, unknown>):
   return parseJsonResponse<T>(response);
 }
 
+async function postJsonTaskStream<T>(
+  taskName: string,
+  body: Record<string, unknown>,
+  callbacks?: ProxyTaskStreamCallbacks
+): Promise<T> {
+  const response = await fetch(`${getProxyTasksBaseUrl()}/${taskName}`, {
+    method: 'POST',
+    headers: withTaskHeaders({
+      'Content-Type': 'application/json'
+    }),
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const message = await safeReadError(response);
+    throw new Error(message);
+  }
+
+  const stream = response.body;
+  if (!stream) {
+    throw new Error('Streaming task response did not include a body.');
+  }
+
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: T | undefined;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+
+    while (true) {
+      const newlineIndex = buffer.indexOf('\n');
+      if (newlineIndex < 0) {
+        break;
+      }
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (!line) {
+        continue;
+      }
+      const event = parseTaskStreamEvent<T>(line);
+      if (event.type === 'delta') {
+        callbacks?.onDelta?.(event.delta);
+      } else if (event.type === 'complete') {
+        result = event.result;
+      } else if (event.type === 'error') {
+        throw new Error(event.error);
+      }
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  const trailing = buffer.trim();
+  if (trailing) {
+    const event = parseTaskStreamEvent<T>(trailing);
+    if (event.type === 'delta') {
+      callbacks?.onDelta?.(event.delta);
+    } else if (event.type === 'complete') {
+      result = event.result;
+    } else if (event.type === 'error') {
+      throw new Error(event.error);
+    }
+  }
+
+  if (typeof result === 'undefined') {
+    throw new Error('Streaming task ended without a completion event.');
+  }
+
+  return result;
+}
+
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const message = await safeReadError(response);
@@ -330,6 +439,14 @@ function withTaskHeaders(headers: Record<string, string> = {}): Headers {
 
 function getProxyTasksBaseUrl(): string {
   return getLlmProxyBaseUrl().trim().replace(/\/+$/, '');
+}
+
+function parseTaskStreamEvent<T>(line: string): ProxyTaskStreamEvent<T> {
+  try {
+    return JSON.parse(line) as ProxyTaskStreamEvent<T>;
+  } catch (error) {
+    throw new Error(`Failed to parse streaming task event: ${(error as Error).message}`);
+  }
 }
 
 function delay(ms: number): Promise<void> {

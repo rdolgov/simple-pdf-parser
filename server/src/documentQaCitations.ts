@@ -33,6 +33,13 @@ interface RawAnswerSegment {
   citations?: unknown;
 }
 
+export interface PreparedDocumentQuestionAnswer {
+  evidence: DocumentEvidenceRecord[];
+  prompt: string;
+  streamingPrompt: string;
+  unsupportedAnswer?: DocumentCitedAnswerResponse;
+}
+
 const RETRIEVAL_LIMIT = 8;
 
 export async function answerDocumentQuestion(
@@ -47,8 +54,43 @@ export async function answerDocumentQuestion(
   taskStore: TaskStore
 ): Promise<DocumentCitedAnswerResponse> {
   const provider = input.provider ?? 'gemini';
+  const prepared = await prepareDocumentQuestionAnswer(input, config, taskStore);
+  if (prepared.unsupportedAnswer) {
+    return prepared.unsupportedAnswer;
+  }
+
+  const response = await executeTextTask(
+    {
+      provider,
+      ...(input.model?.trim() ? { model: input.model.trim() } : {}),
+      prompt: prepared.prompt,
+      responseFormat: 'json'
+    },
+    config
+  );
+
+  return materializeDocumentQuestionAnswer({
+    documentId: input.document.id,
+    model: response.model,
+    evidence: prepared.evidence,
+    responseText: response.text
+  });
+}
+
+export async function prepareDocumentQuestionAnswer(
+  input: {
+    document: StoredDocumentRecord;
+    question: string;
+    provider?: TaskTextProvider;
+    model?: string;
+    scope?: DocumentQuestionScope;
+  },
+  config: TaskServerProvidersConfig,
+  taskStore: TaskStore
+): Promise<PreparedDocumentQuestionAnswer> {
+  const provider = input.provider ?? 'gemini';
   const evidenceIndex = await loadOrBuildEvidenceIndex(input.document, taskStore);
-  const retrievedEvidence = await retrieveRelevantEvidence(
+  const evidence = await retrieveRelevantEvidence(
     {
       document: input.document,
       question: input.question,
@@ -60,32 +102,31 @@ export async function answerDocumentQuestion(
     taskStore
   );
 
-  if (retrievedEvidence.length === 0) {
-    return buildUnsupportedAnswer(providerLabel(provider), 'The document does not provide enough text evidence to answer this question.');
+  if (evidence.length === 0) {
+    return {
+      evidence,
+      prompt: '',
+      streamingPrompt: '',
+      unsupportedAnswer: buildUnsupportedAnswer(
+        providerLabel(provider),
+        'The document does not provide enough text evidence to answer this question.'
+      )
+    };
   }
 
-  const prompt = buildDocumentQuestionPrompt({
-    question: input.question,
-    scope: input.scope,
-    evidence: retrievedEvidence
-  });
-  const response = await executeTextTask(
-    {
-      provider,
-      ...(input.model?.trim() ? { model: input.model.trim() } : {}),
-      prompt,
-      responseFormat: 'json'
-    },
-    config
-  );
-
-  const parsed = parseStructuredAnswer(response.text);
-  return materializeValidatedAnswer({
-    documentId: input.document.id,
-    model: response.model,
-    evidence: retrievedEvidence,
-    parsed
-  });
+  return {
+    evidence,
+    prompt: buildDocumentQuestionPrompt({
+      question: input.question,
+      scope: input.scope,
+      evidence
+    }),
+    streamingPrompt: buildDocumentQuestionStreamingPrompt({
+      question: input.question,
+      scope: input.scope,
+      evidence
+    })
+  };
 }
 
 async function retrieveRelevantEvidence(
@@ -235,14 +276,80 @@ ${evidenceText}
 JSON:`;
 }
 
-function materializeValidatedAnswer(input: {
+function buildDocumentQuestionStreamingPrompt(input: {
+  question: string;
+  scope?: DocumentQuestionScope;
+  evidence: DocumentEvidenceRecord[];
+}): string {
+  const scopeText = input.scope?.kind === 'selection'
+    ? [
+        `The question came from a selected region on page ${input.scope.pageNumber}.`,
+        `Selection bounds: x=${formatNumber(input.scope.bounds.minX)}-${formatNumber(input.scope.bounds.maxX)}, y=${formatNumber(input.scope.bounds.minY)}-${formatNumber(input.scope.bounds.maxY)}.`,
+        input.scope.contextText ? `Selected context:\n"""${input.scope.contextText.trim()}"""` : ''
+      ].filter(Boolean).join('\n')
+    : input.scope?.contextText
+      ? `Document context hint:\n"""${input.scope.contextText.trim()}"""`
+      : 'The question is about the whole document.';
+
+  const evidenceText = input.evidence
+    .map((record) => [
+      `Evidence ID: ${record.evidenceId}`,
+      `Page: ${record.pageNumber}`,
+      `Kind: ${record.kind}`,
+      'Text:',
+      `"""${record.text}"""`
+    ].join('\n'))
+    .join('\n\n');
+
+  return `You answer questions about a PDF using only the provided evidence.
+Return exactly two sections in this order and do not add anything before or after them:
+
+ANSWER:
+Plain-language answer grounded only in the evidence. Keep it concise.
+
+JSON:
+{
+  "segments": [
+    {
+      "text": "answer text",
+      "citations": [
+        {
+          "evidenceId": "Evidence ID from the prompt",
+          "quote": "short verbatim support quote copied from that evidence"
+        }
+      ]
+    }
+  ]
+}
+
+Rules:
+- Use only the evidence provided below.
+- The ANSWER section must be plain text only.
+- The ANSWER section should closely match the combined meaning of the JSON segments.
+- Every grounded factual JSON segment must include at least one citation.
+- Every citation quote must be copied verbatim from the cited evidence block.
+- Do not invent evidence ids.
+- Do not output coordinates.
+- If the evidence is insufficient, the ANSWER section must say so and the JSON section must return one segment with an empty citations array.
+
+${scopeText}
+
+Question:
+${input.question}
+
+Evidence:
+${evidenceText}`;
+}
+
+export function materializeDocumentQuestionAnswer(input: {
   documentId: string;
   model: string;
   evidence: DocumentEvidenceRecord[];
-  parsed: unknown;
+  responseText: string;
 }): DocumentCitedAnswerResponse {
+  const parsed = parseStructuredAnswer(input.responseText);
   const evidenceById = new Map(input.evidence.map((record) => [record.evidenceId, record] as const));
-  const rawSegments = normalizeRawSegments(input.parsed);
+  const rawSegments = normalizeRawSegments(parsed);
   const citations: DocumentAnswerCitation[] = [];
   const citationKeyToId = new Map<string, string>();
   const segments: DocumentAnswerSegment[] = [];
@@ -339,6 +446,14 @@ function parseStructuredAnswer(text: string): unknown {
     return null;
   }
 
+  const jsonSection = extractJsonSection(trimmed);
+  if (jsonSection) {
+    const sectionParsed = safeParseJson(jsonSection);
+    if (sectionParsed !== null) {
+      return sectionParsed;
+    }
+  }
+
   const direct = safeParseJson(trimmed);
   if (direct !== null) {
     return direct;
@@ -361,6 +476,14 @@ function parseStructuredAnswer(text: string): unknown {
   }
 
   return null;
+}
+
+function extractJsonSection(text: string): string | null {
+  const markerIndex = text.indexOf('JSON:');
+  if (markerIndex < 0) {
+    return null;
+  }
+  return text.slice(markerIndex + 'JSON:'.length).trim();
 }
 
 function resolveUnsupportedMessage(rawSegments: RawAnswerSegment[]): string {

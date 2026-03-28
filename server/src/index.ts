@@ -3,7 +3,12 @@ import { createHash } from 'node:crypto';
 import type { DocumentQuestionScope, HtmlDocumentLayout } from '../../src/index.js';
 import { isBackofficeAllowedUser, listBackofficeAllowedUsers } from './backofficeUsers.js';
 import { executeCodexResponses, type CodexExecConfig, type CodexProxyResponse } from './codexExecProxy.js';
-import { answerDocumentQuestion } from './documentQaCitations.js';
+import {
+  answerDocumentQuestion,
+  materializeDocumentQuestionAnswer,
+  prepareDocumentQuestionAnswer
+} from './documentQaCitations.js';
+import { DocumentAnswerPreviewStream } from './documentQaStreamPreview.js';
 import { renderGeminiBackofficeHtml } from './geminiBackoffice.js';
 import { GeminiAnalyticsStore } from './geminiAnalyticsStore.js';
 import { resolveGeminiProxyUpstreamPath } from './geminiProxyModel.js';
@@ -27,9 +32,11 @@ import {
   executeImageGenerationTask,
   executeStructuredDetectTask,
   executeTextTask,
+  executeTextTaskStream,
   type TaskImageProvider,
   type TaskTextProvider
 } from './taskExecutors.js';
+import { writeTaskStreamEvent, writeTaskStreamHeaders } from './taskStreamProtocol.js';
 import { executeStructuredDetectTaskProgressive } from './progressiveStructuredDetect.js';
 import { executeRelevanceTask } from './taskRelevance.js';
 import {
@@ -115,9 +122,17 @@ const PROXY_TASK_DOCUMENTS_PREFIX = `${PROXY_TASKS_PREFIX}/documents`;
 const TASK_JOBS_PREFIX = `${TASKS_PREFIX}/jobs/`;
 const PROXY_TASK_JOBS_PREFIX = `${PROXY_TASKS_PREFIX}/jobs/`;
 const TASK_ASK_QUESTION_PATHS = new Set([`${TASKS_PREFIX}/ask-question`, `${PROXY_TASKS_PREFIX}/ask-question`]);
+const TASK_ASK_QUESTION_STREAM_PATHS = new Set([
+  `${TASKS_PREFIX}/ask-question/stream`,
+  `${PROXY_TASKS_PREFIX}/ask-question/stream`
+]);
 const TASK_ANSWER_DOCUMENT_QUESTION_PATHS = new Set([
   `${TASKS_PREFIX}/answer-document-question`,
   `${PROXY_TASKS_PREFIX}/answer-document-question`
+]);
+const TASK_ANSWER_DOCUMENT_QUESTION_STREAM_PATHS = new Set([
+  `${TASKS_PREFIX}/answer-document-question/stream`,
+  `${PROXY_TASKS_PREFIX}/answer-document-question/stream`
 ]);
 const TASK_ANALYZE_IMAGE_PATHS = new Set([`${TASKS_PREFIX}/analyze-image`, `${PROXY_TASKS_PREFIX}/analyze-image`]);
 const TASK_GENERATE_IMAGE_PATHS = new Set([`${TASKS_PREFIX}/generate-image`, `${PROXY_TASKS_PREFIX}/generate-image`]);
@@ -344,8 +359,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       await handleTaskDocumentUploadRequest(request, response, requestUrl, config);
       return;
     }
+    if (TASK_ASK_QUESTION_STREAM_PATHS.has(requestUrl.pathname)) {
+      await handleTextTaskStreamRequest(request, response, requestUrl, config, 'ask-question');
+      return;
+    }
     if (TASK_ASK_QUESTION_PATHS.has(requestUrl.pathname)) {
       await handleTextTaskRequest(request, response, requestUrl, config, 'ask-question');
+      return;
+    }
+    if (TASK_ANSWER_DOCUMENT_QUESTION_STREAM_PATHS.has(requestUrl.pathname)) {
+      await handleDocumentQuestionTaskStreamRequest(request, response, requestUrl, config);
       return;
     }
     if (TASK_ANSWER_DOCUMENT_QUESTION_PATHS.has(requestUrl.pathname)) {
@@ -914,6 +937,164 @@ async function handleTextTaskRequest(
   sendJson(response, 400, { error: 'Task requests must use async polling.' });
 }
 
+async function handleTextTaskStreamRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  currentConfig: ServerConfig,
+  taskType: 'ask-question' | 'generate-widget' | 'analyze-formula' | 'logical-structure',
+  responseFormat: 'text' | 'json' = 'text'
+): Promise<void> {
+  if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
+    sendJson(response, 401, { error: 'Proxy authorization failed.' });
+    return;
+  }
+
+  const actor = resolveRequestActor(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth);
+  const body = await readJsonBody(request);
+  const prompt = normalizeNonEmptyString(body.prompt);
+  if (!prompt) {
+    sendJson(response, 400, { error: 'Task prompt is required.' });
+    return;
+  }
+  const provider = normalizeTextTaskProvider(body.provider) ?? 'gemini';
+  const model = normalizeNonEmptyString(body.model);
+  let document: StoredDocumentRecord | null = null;
+  try {
+    document = await resolveAuthorizedTaskDocument(actor, normalizeNonEmptyString(body.documentId));
+  } catch (error) {
+    sendJson(response, 404, { error: error instanceof Error ? error.message : 'Unknown task document.' });
+    return;
+  }
+
+  const enableWebSearch = body.enableWebSearch === true;
+  const sequence = ++proxyRequestSequence;
+  const startedAt = Date.now();
+  logProxyEvent(
+    sequence,
+    `task-stream-start provider=${provider} task=${taskType} model=${model ?? 'default'} document=${document?.id ?? 'none'} prompt="${summarizeTextForLog(prompt)}"`
+  );
+
+  writeTaskStreamHeaders(response);
+
+  try {
+    const result = await executeTextTaskStream(
+      {
+        provider,
+        ...(model ? { model } : {}),
+        prompt,
+        responseFormat,
+        enableWebSearch
+      },
+      currentConfig,
+      async (delta) => {
+        if (!delta || response.writableEnded || response.destroyed) {
+          return;
+        }
+        writeTaskStreamEvent(response, { type: 'delta', delta });
+      }
+    );
+
+    const archivedPath = await archiveTaskLlmExchange({
+      actor,
+      document,
+      taskType,
+      provider,
+      model: result.model,
+      stage: 'stream',
+      status: 'succeeded',
+      request: {
+        prompt,
+        responseFormat,
+        enableWebSearch
+      },
+      response: {
+        text: result.text,
+        raw: result.raw
+      }
+    });
+    if (archivedPath) {
+      logProxyEvent(sequence, `task-stream-exchange saved task=${taskType} path=${archivedPath}`);
+    }
+    await taskStore.recordInteraction({
+      actor,
+      ...(document ? { documentId: document.id } : {}),
+      taskType,
+      provider,
+      model: result.model,
+      status: 'succeeded',
+      inputSummary: summarizePromptInput(prompt, body),
+      outputSummary: summarizeTextOutput(result.text)
+    });
+
+    if (!response.writableEnded && !response.destroyed) {
+      writeTaskStreamEvent(response, {
+        type: 'complete',
+        result: {
+          text: result.text,
+          model: result.model
+        }
+      });
+      response.end();
+    }
+
+    logProxyCompletion({
+      sequence,
+      provider: 'task',
+      requestKind: `${taskType}/stream`,
+      cacheStatus: 'BYPASS',
+      durationMs: Date.now() - startedAt,
+      extras: `status=200 model=${result.model}`
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : `Failed to run ${taskType}.`;
+    const archivedPath = await archiveTaskLlmExchange({
+      actor,
+      document,
+      taskType,
+      provider,
+      ...(model ? { model } : {}),
+      stage: 'stream',
+      status: 'failed',
+      request: {
+        prompt,
+        responseFormat,
+        enableWebSearch
+      },
+      error: {
+        message
+      }
+    });
+    if (archivedPath) {
+      logProxyEvent(sequence, `task-stream-exchange-error saved task=${taskType} path=${archivedPath}`);
+    }
+    await taskStore.recordInteraction({
+      actor,
+      ...(document ? { documentId: document.id } : {}),
+      taskType,
+      provider,
+      ...(model ? { model } : {}),
+      status: 'failed',
+      inputSummary: summarizePromptInput(prompt, body),
+      outputSummary: { error: message }
+    });
+
+    if (!response.writableEnded && !response.destroyed) {
+      writeTaskStreamEvent(response, { type: 'error', error: message });
+      response.end();
+    }
+
+    logProxyCompletion({
+      sequence,
+      provider: 'task',
+      requestKind: `${taskType}/stream`,
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=500'
+    });
+  }
+}
+
 async function handleDocumentQuestionTaskRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1054,6 +1235,213 @@ async function handleDocumentQuestionTaskRequest(
   }
 
   sendJson(response, 400, { error: 'Task requests must use async polling.' });
+}
+
+async function handleDocumentQuestionTaskStreamRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  currentConfig: ServerConfig
+): Promise<void> {
+  if (!isAuthorized(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth)) {
+    sendJson(response, 401, { error: 'Proxy authorization failed.' });
+    return;
+  }
+
+  const actor = resolveRequestActor(request, requestUrl, currentConfig.proxyAuthToken, sessionAuth);
+  const body = await readJsonBody(request);
+  const question = normalizeNonEmptyString(body.question);
+  const documentId = normalizeNonEmptyString(body.documentId);
+  if (!question || !documentId) {
+    sendJson(response, 400, { error: 'Document question requests require documentId and question.' });
+    return;
+  }
+
+  const provider = normalizeTextTaskProvider(body.provider) ?? 'gemini';
+  const model = normalizeNonEmptyString(body.model);
+  const scope = normalizeDocumentQuestionScope(body.scope);
+  let document: StoredDocumentRecord | null = null;
+  try {
+    document = await resolveAuthorizedTaskDocument(actor, documentId);
+  } catch (error) {
+    sendJson(response, 404, { error: error instanceof Error ? error.message : 'Unknown task document.' });
+    return;
+  }
+  if (!document) {
+    sendJson(response, 404, { error: 'Unknown task document.' });
+    return;
+  }
+
+  const sequence = ++proxyRequestSequence;
+  const startedAt = Date.now();
+  logProxyEvent(
+    sequence,
+    `task-stream-start provider=${provider} task=answer-document-question model=${model ?? 'default'} document=${document.id} question="${summarizeTextForLog(question)}"`
+  );
+
+  writeTaskStreamHeaders(response);
+
+  try {
+    const prepared = await prepareDocumentQuestionAnswer(
+      {
+        document,
+        question,
+        provider,
+        ...(model ? { model } : {}),
+        ...(scope ? { scope } : {})
+      },
+      currentConfig,
+      taskStore
+    );
+
+    const result = prepared.unsupportedAnswer
+      ? (() => {
+          if (
+            prepared.unsupportedAnswer?.answerText &&
+            !response.writableEnded &&
+            !response.destroyed
+          ) {
+            writeTaskStreamEvent(response, {
+              type: 'delta',
+              delta: prepared.unsupportedAnswer.answerText
+            });
+          }
+          return prepared.unsupportedAnswer;
+        })()
+      : await (async () => {
+          const preview = new DocumentAnswerPreviewStream();
+          const streamed = await executeTextTaskStream(
+            {
+              provider,
+              ...(model ? { model } : {}),
+              prompt: prepared.streamingPrompt,
+              responseFormat: 'text'
+            },
+            currentConfig,
+            async (delta) => {
+              const previewDelta = preview.push(delta);
+              if (!previewDelta || response.writableEnded || response.destroyed) {
+                return;
+              }
+              writeTaskStreamEvent(response, { type: 'delta', delta: previewDelta });
+            }
+          );
+
+          const citedAnswer = materializeDocumentQuestionAnswer({
+            documentId: document.id,
+            model: streamed.model,
+            evidence: prepared.evidence,
+            responseText: streamed.text
+          });
+          const previewText = preview.getText();
+          if (
+            citedAnswer.answerText.length > previewText.length &&
+            citedAnswer.answerText.startsWith(previewText) &&
+            !response.writableEnded &&
+            !response.destroyed
+          ) {
+            writeTaskStreamEvent(response, {
+              type: 'delta',
+              delta: citedAnswer.answerText.slice(previewText.length)
+            });
+          }
+          return citedAnswer;
+        })();
+
+    const archivedPath = await archiveTaskLlmExchange({
+      actor,
+      document,
+      taskType: 'answer-document-question',
+      provider,
+      model: result.model,
+      stage: 'stream',
+      status: 'succeeded',
+      request: {
+        question,
+        ...(scope ? { scope } : {})
+      },
+      response: result as unknown as Record<string, unknown>
+    });
+    if (archivedPath) {
+      logProxyEvent(sequence, `task-stream-exchange saved task=answer-document-question path=${archivedPath}`);
+    }
+    await taskStore.recordInteraction({
+      actor,
+      documentId: document.id,
+      taskType: 'answer-document-question',
+      provider,
+      model: result.model,
+      status: 'succeeded',
+      inputSummary: {
+        questionChars: question.length,
+        scope: scope?.kind ?? 'document'
+      },
+      outputSummary: {
+        citations: result.citations.length,
+        segments: result.segments.length
+      }
+    });
+
+    if (!response.writableEnded && !response.destroyed) {
+      writeTaskStreamEvent(response, { type: 'complete', result });
+      response.end();
+    }
+
+    logProxyCompletion({
+      sequence,
+      provider: 'task',
+      requestKind: 'answer-document-question/stream',
+      cacheStatus: 'BYPASS',
+      durationMs: Date.now() - startedAt,
+      extras: `status=200 citations=${result.citations.length} segments=${result.segments.length}`
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to answer document question.';
+    const archivedPath = await archiveTaskLlmExchange({
+      actor,
+      document,
+      taskType: 'answer-document-question',
+      provider,
+      ...(model ? { model } : {}),
+      stage: 'stream',
+      status: 'failed',
+      request: {
+        question,
+        ...(scope ? { scope } : {})
+      },
+      error: { message }
+    });
+    if (archivedPath) {
+      logProxyEvent(sequence, `task-stream-exchange-error saved task=answer-document-question path=${archivedPath}`);
+    }
+    await taskStore.recordInteraction({
+      actor,
+      documentId: document.id,
+      taskType: 'answer-document-question',
+      provider,
+      ...(model ? { model } : {}),
+      status: 'failed',
+      inputSummary: {
+        questionChars: question.length,
+        scope: scope?.kind ?? 'document'
+      },
+      outputSummary: { error: message }
+    });
+
+    if (!response.writableEnded && !response.destroyed) {
+      writeTaskStreamEvent(response, { type: 'error', error: message });
+      response.end();
+    }
+
+    logProxyCompletion({
+      sequence,
+      provider: 'task',
+      requestKind: 'answer-document-question/stream',
+      cacheStatus: 'ERROR',
+      durationMs: Date.now() - startedAt,
+      extras: 'status=500'
+    });
+  }
 }
 
 async function handleRelevanceTaskRequest(

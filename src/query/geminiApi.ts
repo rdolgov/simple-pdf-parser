@@ -5,6 +5,7 @@ import {
   DEFAULT_GEMINI_TEXT_MODEL
 } from './geminiModelSelection.js';
 import { fetchWithLlmProxyPolling } from './llmProxyPolling.js';
+import { readServerSentEvents } from './serverSentEvents.js';
 
 export type GeminiContent = string | GeminiContentParts | GeminiContentParts[];
 
@@ -107,6 +108,9 @@ interface GeminiInlineDataResponse {
 interface GoogleGenAiClient {
   models: {
     generateContent(request: GeminiGenerateContentRequest): Promise<GeminiGenerateContentResponse>;
+    generateContentStream?(
+      request: GeminiGenerateContentRequest
+    ): Promise<AsyncIterable<GeminiGenerateContentResponse>>;
   };
 }
 
@@ -173,6 +177,20 @@ export class GeminiAPI {
       contents: prompt,
       ...options
     });
+  }
+
+  async generateTextStream(
+    prompt: string,
+    onDelta: (delta: string) => void | Promise<void>,
+    options?: Omit<GeminiGenerateRequest, 'contents'>
+  ): Promise<GeminiGenerateResult> {
+    return this.generateContentStream(
+      {
+        contents: prompt,
+        ...options
+      },
+      onDelta
+    );
   }
 
   /**
@@ -248,6 +266,77 @@ export class GeminiAPI {
       throw new Error(buildNoTextContentErrorMessage(payload.model, response));
     }
     return { text, raw: response, model: payload.model };
+  }
+
+  async generateContentStream(
+    request: GeminiGenerateRequest,
+    onDelta: (delta: string) => void | Promise<void>,
+    useAlphaClient = false
+  ): Promise<GeminiGenerateResult> {
+    const payload = this.buildRequest(request);
+    let finalResponse: GeminiGenerateContentResponse | null = null;
+    let text = '';
+
+    try {
+      if (this.useRestTransport) {
+        finalResponse = await this.sendRestGenerateContentStream(
+          payload,
+          useAlphaClient ? this.defaultImageApiVersion : this.defaultApiVersion,
+          async (chunk) => {
+            const delta = extractStreamingText(chunk);
+            if (!delta) {
+              return;
+            }
+            text += delta;
+            await onDelta(delta);
+          }
+        );
+      } else {
+        const client = useAlphaClient ? this.clientAlpha : this.client;
+        if (!client) {
+          throw new Error('Gemini client is not initialized');
+        }
+        if (typeof client.models.generateContentStream === 'function') {
+          const stream = await client.models.generateContentStream(payload);
+          for await (const chunk of stream) {
+            finalResponse = chunk;
+            const delta = extractStreamingText(chunk);
+            if (!delta) {
+              continue;
+            }
+            text += delta;
+            await onDelta(delta);
+          }
+        } else {
+          finalResponse = await client.models.generateContent(payload);
+          const fullText = extractText(finalResponse);
+          if (!fullText) {
+            throw new Error(buildNoTextContentErrorMessage(payload.model, finalResponse));
+          }
+          text = fullText;
+          await onDelta(fullText);
+        }
+      }
+    } catch (error) {
+      throw normalizeProviderApiError('Gemini', error);
+    }
+
+    if (!text && finalResponse) {
+      const fullText = extractText(finalResponse);
+      if (fullText) {
+        text = fullText;
+      }
+    }
+
+    if (!text) {
+      throw new Error(buildNoTextContentErrorMessage(payload.model, finalResponse ?? {}));
+    }
+
+    return {
+      text,
+      raw: finalResponse ?? { text },
+      model: payload.model
+    };
   }
 
   /**
@@ -334,6 +423,43 @@ export class GeminiAPI {
     }
 
     return (await response.json()) as GeminiGenerateContentResponse;
+  }
+
+  private async sendRestGenerateContentStream(
+    payload: GeminiGenerateContentRequest,
+    apiVersion: string,
+    onChunk: (chunk: GeminiGenerateContentResponse) => void | Promise<void>
+  ): Promise<GeminiGenerateContentResponse> {
+    const fetchImpl = resolveFetch();
+    let response: Response;
+    try {
+      response = await fetchImpl(buildGeminiStreamGenerateContentUrl(this.endpoint, apiVersion, payload.model, this.apiKey), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(toGeminiRestGenerateContentRequest(payload))
+      });
+    } catch (error) {
+      throw normalizeProviderApiError('Gemini', error);
+    }
+
+    if (!response.ok) {
+      const message = normalizeProviderApiError('Gemini', await safeReadText(response)).message;
+      throw new Error(`Gemini request failed with status ${response.status}: ${message}`);
+    }
+
+    let lastChunk: GeminiGenerateContentResponse | null = null;
+    await readServerSentEvents(response, async (event) => {
+      const parsed = safeParseGeminiChunk(event.data);
+      if (!parsed) {
+        return;
+      }
+      lastChunk = parsed;
+      await onChunk(parsed);
+    });
+
+    return lastChunk ?? { text: '' };
   }
 
   private buildRequest(request: GeminiGenerateRequest): GeminiGenerateContentRequest {
@@ -501,6 +627,26 @@ function normalizeText(value?: string): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function extractStreamingText(response: GeminiGenerateContentResponse): string {
+  const directText = typeof response.text === 'string' ? response.text : '';
+  if (directText.length > 0) {
+    return directText;
+  }
+
+  const nestedText = typeof response.response?.text === 'string' ? response.response.text : '';
+  if (nestedText.length > 0) {
+    return nestedText;
+  }
+
+  const chunks: string[] = [];
+  for (const part of collectContentParts(response)) {
+    if (typeof part.text === 'string' && part.text.length > 0) {
+      chunks.push(part.text);
+    }
+  }
+  return chunks.join('');
+}
+
 function buildGeminiGenerateContentUrl(
   endpoint: string | undefined,
   apiVersion: string,
@@ -514,6 +660,23 @@ function buildGeminiGenerateContentUrl(
   if (apiKey.trim().length > 0) {
     url.searchParams.set('key', apiKey.trim());
   }
+  return url.toString();
+}
+
+function buildGeminiStreamGenerateContentUrl(
+  endpoint: string | undefined,
+  apiVersion: string,
+  model: string,
+  apiKey: string
+): string {
+  const base = normalizeGeminiEndpointBase(endpoint);
+  const normalizedVersion = normalizeGeminiApiVersion(apiVersion, DEFAULT_GEMINI_API_VERSION);
+  const normalizedModel = normalizeGeminiModelId(model);
+  const url = new URL(`${base}/${normalizedVersion}/models/${encodeURIComponent(normalizedModel)}:streamGenerateContent`);
+  if (apiKey.trim().length > 0) {
+    url.searchParams.set('key', apiKey.trim());
+  }
+  url.searchParams.set('alt', 'sse');
   return url.toString();
 }
 
@@ -636,6 +799,18 @@ function normalizeGeminiRestPart(part: unknown): Record<string, unknown> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function safeParseGeminiChunk(value: string): GeminiGenerateContentResponse | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as GeminiGenerateContentResponse;
+    }
+  } catch {
+    // Ignore malformed events.
+  }
+  return null;
 }
 
 function resolveFetch(): typeof fetch {

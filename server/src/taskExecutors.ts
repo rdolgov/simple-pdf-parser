@@ -156,6 +156,73 @@ export async function executeTextTask(
   };
 }
 
+export async function executeTextTaskStream(
+  input: {
+    provider?: TaskTextProvider;
+    model?: string;
+    prompt: string;
+    responseFormat?: 'text' | 'json';
+    enableWebSearch?: boolean;
+  },
+  config: TaskServerProvidersConfig,
+  onDelta: (delta: string) => void | Promise<void>
+): Promise<TaskTextResult> {
+  const provider = input.provider ?? 'gemini';
+  if (provider === 'openai') {
+    if (!config.openAiApiKey) {
+      throw new Error('OPENAI_API_KEY is not configured on the proxy server.');
+    }
+    const client = new OpenAiAPI({
+      apiKey: config.openAiApiKey,
+      endpoint: config.openAiBaseUrl,
+      ...(input.model?.trim() ? { model: input.model.trim() } : {})
+    });
+    const response = await client.generateTextStream(
+      input.prompt,
+      onDelta,
+      input.responseFormat === 'json'
+        ? { generationConfig: { responseFormat: { type: 'json_object' } } }
+        : undefined
+    );
+    return {
+      text: response.text,
+      model: response.model,
+      raw: response.raw
+    };
+  }
+
+  if (provider === 'codex') {
+    const response = await executeTextTask(input, config);
+    if (response.text.length > 0) {
+      await onDelta(response.text);
+    }
+    return response;
+  }
+
+  if (!config.geminiApiKey) {
+    throw new Error('GEMINI_API_KEY is not configured on the proxy server.');
+  }
+  const geminiModel = resolveGeminiTextModel(input.model?.trim() || config.geminiModel);
+  const client = new GeminiAPI({
+    apiKey: config.geminiApiKey,
+    endpoint: config.geminiBaseUrl,
+    model: geminiModel,
+    ...(input.enableWebSearch ? { tools: [createGoogleSearchTool()] } : {})
+  });
+  const response = await client.generateTextStream(
+    input.prompt,
+    onDelta,
+    input.responseFormat === 'json'
+      ? { generationConfig: { responseMimeType: 'application/json' } }
+      : undefined
+  );
+  return {
+    text: response.text,
+    model: response.model,
+    raw: response.raw
+  };
+}
+
 export async function executeImageAnalysisTask(
   input: {
     provider?: TaskImageProvider;
