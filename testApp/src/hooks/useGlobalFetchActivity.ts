@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { parseApiErrorMessage } from '../utils/apiErrorMessage';
 
 export interface GlobalFetchError {
   id: number;
@@ -123,42 +124,6 @@ async function safeReadCloneText(response: Response): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-function parseApiErrorMessage(text: string | null): string | null {
-  if (!text) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== 'object') {
-      return text;
-    }
-    const record = parsed as Record<string, unknown>;
-    const errorObj = record.error && typeof record.error === 'object'
-      ? (record.error as Record<string, unknown>)
-      : record;
-    const message = asNonEmptyString(errorObj.message) ?? asNonEmptyString(record.message);
-    const type = asNonEmptyString(errorObj.type);
-    const param = asNonEmptyString(errorObj.param);
-    const code = asNonEmptyString(errorObj.code);
-    if (!message) {
-      return text;
-    }
-    const details = [type ? `type: ${type}` : null, param ? `param: ${param}` : null, code ? `code: ${code}` : null]
-      .filter(Boolean) as string[];
-    return details.length > 0 ? `${message} (${details.join(', ')})` : message;
-  } catch {
-    return text.length > 300 ? `${text.slice(0, 300)}…` : text;
-  }
-}
-
-function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
 }
 
 function simplifyUrl(value: string): string {

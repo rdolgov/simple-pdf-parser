@@ -4,6 +4,7 @@ import type {
   DocumentCitedAnswerResponse
 } from '../../../src/index';
 import { getLlmProxyAuthToken, getLlmProxyBaseUrl } from '../utils/llmTransportSettings';
+import { parseApiErrorMessage } from '../utils/apiErrorMessage';
 
 export type ProxyTaskTextProvider = 'gemini' | 'openai' | 'codex';
 export type ProxyTaskImageProvider = 'gemini' | 'openai';
@@ -418,12 +419,13 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
 
 async function safeReadError(response: Response): Promise<string> {
   try {
-    const payload = (await response.json()) as { error?: string };
-    if (typeof payload.error === 'string' && payload.error.trim().length > 0) {
-      return payload.error;
+    const text = await response.text();
+    const parsedMessage = parseApiErrorMessage(text);
+    if (parsedMessage) {
+      return parsedMessage;
     }
   } catch {
-    // Ignore JSON parse errors.
+    // Ignore body read errors.
   }
   return `Task request failed with status ${response.status}.`;
 }

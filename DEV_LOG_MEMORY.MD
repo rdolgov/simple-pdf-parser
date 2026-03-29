@@ -190,6 +190,12 @@ Use it as follows:
 - Keep the selected text highlight itself live during the drag, but do not show the anchored action chrome until selection interaction has stopped.
 - Reason: otherwise the toolbar appears to chase the mouse while the user is still selecting, which is visually distracting even if the final anchor is correct.
 
+### 2026-03-28: Client-side API error parsing should understand both `{ error: "..." }` and `{ error: { message: ... } }`
+
+- The task proxy commonly returns top-level string errors like `{ "error": "GEMINI_API_KEY is not configured on the proxy server." }`.
+- Keep the error parsing shared across direct task helpers and the global fetch error dialog so local misconfiguration surfaces the real backend message instead of a generic `HTTP 500 - Internal Server Error`.
+- Reason: without that shared parser, the UI hides the actionable cause of local task failures and makes provider/env issues look like opaque server bugs.
+
 ## Recent Examples
 
 - `pdfs/IRA contribution IRS.pdf`
