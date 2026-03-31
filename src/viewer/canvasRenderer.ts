@@ -249,7 +249,8 @@ export class CanvasRenderer {
   }
 
   private computePageMetrics(page: PDFPage, options: Required<RenderOptions>): PageMetrics {
-    const orientation = this.detectYAxisOrientation(page.textItems);
+    const renderableTextItems = this.getRenderableTextItems(page);
+    const orientation = this.detectYAxisOrientation(renderableTextItems);
     const pageWidth = page.size?.width ?? DEFAULT_PAGE_WIDTH;
     const pageHeight = page.size?.height ?? DEFAULT_PAGE_HEIGHT;
 
@@ -278,16 +279,17 @@ export class CanvasRenderer {
       maxY: pageHeight,
       orientation,
       baselineHeight:
-        (page.textItems.length > 0 ? this.averageLineHeight(page) : 16) * options.scale
+        (renderableTextItems.length > 0 ? this.averageLineHeight(page) : 16) * options.scale
     };
   }
 
   private averageLineHeight(page: PDFPage): number {
-    if (page.textItems.length === 0) {
+    const renderableTextItems = this.getRenderableTextItems(page);
+    if (renderableTextItems.length === 0) {
       return 16;
     }
 
-    const sizes = page.textItems
+    const sizes = renderableTextItems
       .map((item) => resolveTextItemRenderFontSize(item))
       .filter((value) => Number.isFinite(value) && value > 0);
 
@@ -871,7 +873,8 @@ export class CanvasRenderer {
     options: Required<RenderOptions>,
     deviceScale: number
   ): void {
-    const sortedItems = [...page.textItems].sort((left, right) => {
+    const renderableTextItems = this.getRenderableTextItems(page);
+    const sortedItems = [...renderableTextItems].sort((left, right) => {
       const yLeft = left.bounds.minY;
       const yRight = right.bounds.minY;
       if (Math.abs(yLeft - yRight) > 0.01) {
@@ -907,7 +910,7 @@ export class CanvasRenderer {
     );
     this.drawCmexComposites(context, cmexComposites.composites, projectPoint, options);
 
-    const paintItems = page.textItems
+    const paintItems = renderableTextItems
       .map((item, index) => ({ item, index }))
       .sort((left, right) => {
         const leftOrder = left.item.paintOrder ?? left.index;
@@ -1020,7 +1023,9 @@ export class CanvasRenderer {
 
         const projectedWidth = textPlacement.projectedWidth;
         const glyphSpanRun = resolveRenderableGlyphSpanRun(item, {
-          force: embeddedFont?.renderMode === 'glyph-span'
+          force:
+            embeddedFont?.renderMode === 'glyph-span' ||
+            Boolean(item.fontResourceKey && item.glyphSpans && item.glyphSpans.length > 1 && item.text.length > 0)
         });
         const measureTextInput = this.resolveMeasurementText(item, glyphSpanRun, embeddedFont);
         const textMetrics = context.measureText(measureTextInput);
@@ -1074,6 +1079,10 @@ export class CanvasRenderer {
     }
 
     context.restore();
+  }
+
+  private getRenderableTextItems(page: PDFPage): PDFTextItem[] {
+    return page.displayTextItems ?? page.textItems;
   }
 
   private drawCmexComposites(

@@ -196,6 +196,57 @@ Use it as follows:
 - Keep the error parsing shared across direct task helpers and the global fetch error dialog so local misconfiguration surfaces the real backend message instead of a generic `HTTP 500 - Internal Server Error`.
 - Reason: without that shared parser, the UI hides the actionable cause of local task failures and makes provider/env issues look like opaque server bugs.
 
+### 2026-03-28: Compact punctuation preservation must not treat lowercase-to-Uppercase sentence joins as domains
+
+- When repairing punctuation spacing, only preserve dot-joined domain-like tokens when the post-punctuation segment still looks like an in-token continuation, not the start of a new capitalized sentence word.
+- Preserve real abbreviations like `U.S.A` separately, and let paragraph assembly collapse `letter-` plus lowercase continuation lines without inserting a space.
+- Reason: the Transformer abstract needed `mechanism. We`, `entirely. Experiments`, and `English-to-German` restored without breaking genuine compact punctuation tokens.
+
+### 2026-03-28: Mixed prose items should still repair around embedded emails, and front-matter joins need multi-word capitalized recovery
+
+- Do not skip lexical repair for an entire text item just because it contains an email or URL somewhere inside it; only standalone compact tokens should bypass the repair pass.
+- Preserve embedded emails with token-local punctuation guards, then recover merged front-matter labels and affiliations with a combination of connector-aware TitleCase splitting, leading-capitalized-plus-lowercase segmentation, and uppercase-letter-plus-ZIP-code spacing.
+- Reason: `pdfs/Paper reduced size (2).pdf` page 1 needed `Wyss Institute for Biologically Inspired Engineering`, `Corresponding author: michael.levin@tufts.edu`, `Running title`, and `MA 02155` restored from one shared parser path.
+
+### 2026-03-29: Unknown merged tokens must not self-validate, and long prose chains need anchored segmentation
+
+- When deciding whether to split an untrusted merged token, do not let raw within-document frequency counts for that same merged token outweigh a strong segmentation into trusted or lexically anchored words.
+- Leading `I` joins and capitalized common-word joins should use prefix-aware lexical checks (`I propose`, `In contrast`, `The latent`) rather than greedy fixed regex grouping, and long all-letter chains can be split safely when many of their candidate words are anchored by common/trusted vocabulary.
+- Reason: `pdfs/Paper reduced size (2).pdf` still had body-text joins like `Ipresent`, `Ihypothesize`, `Incontrast`, `Thelatent`, `Platonicspace`, `latentspace`, `fishinginregionsofPlatonicspacewehaveneverexploredbefore`, and `interfacesandthestructurestowhichtheypointinthePlatonicspace` after the front-matter fixes; damping self-reinforcing merged-word evidence plus anchored DP segmentation fixed them from one shared parser path.
+
+### 2026-03-29: Large-gap split-word repair must be conservative, and `A`/`I` prefix splits cannot trust document-frequency fragments
+
+- Some PDFs emit broken words with large internal advances (`A ffiliations`, `Regulariz at i on`) rather than tiny suspicious gaps, so the non-suspicious path needs a separate weak-fragment run repair instead of blindly reusing the tiny-gap cluster logic.
+- That repair must skip title-case phrases and ordinary two-word prose unless there is explicit lexical evidence, otherwise it will collapse valid spacing such as `Kai Chen` or `Experiments on two machine`.
+- The `resolveLeadingArticleWords` heuristic should only split `A...` / `I...` forms when the candidate continuation is explicitly trusted, not just count-backed inside the current document; otherwise noisy fragments like `ngressing` can self-validate and re-break `Ingressing`.
+- Reason: the reduced-paper front matter needed `Affiliations`, `Allen`, and `Ingressing` restored without regressing normal prose or author-name spacing, while the same shared path also had to recover NIPS-style fragment runs such as `Regulariz at i on`.
+
+### 2026-03-29: Visible canvas rendering must use a PDF-faithful display text stream, not the semantic repair stream
+
+- Keep two page-level text streams: `displayTextItems` for canvas painting and embedded-font prep, and `textItems` for semantic consumers such as search, selection, and HTML/reflow reconstruction.
+- `displayTextItems` should stop after paint-order assignment and geometric bound refinement; do not run smoothing or lexical boundary repair on the stream used for visible rendering.
+- Reason: PDFs rarely encode explicit word boundaries, so semantic cleanup is inherently heuristic. If the renderer paints the repaired text model, missing/extra-space heuristics become visible rendering defects instead of staying confined to copy/search/reflow behavior.
+
+### 2026-03-29: Visible word-gap fidelity depends on embedded-font activation and family-correct fallback
+
+- Some PDFs use narrow real inter-run gaps that only look like spaces when painted with the original embedded font; if the browser falls back to a wider sans font, those gaps visually collapse even though the raw PDF item positions are unchanged.
+- After adding an embedded `FontFace` to the browser font set, wait briefly for `document.fonts.load(...)` and `document.fonts.ready` before treating the face as ready for canvas painting, but bound that wait so rendering cannot hang indefinitely.
+- If embedded activation still fails, route known serif families such as `Cambria` to a serif fallback stack instead of the generic canvas sans default.
+- Reason: `pdfs/Paper reduced size (2).pdf` page 2 rendered `paradigmholds` and `livingbeings` only because fallback sans glyph shapes erased small but real PDF word gaps; Poppler's native render showed the spaces correctly.
+
+### 2026-03-30: Multi-glyph display runs should use per-glyph placement, not whole-word scale fitting
+
+- For ordinary document text with preserved `glyphSpans`, prefer the glyph-span renderer over whole-word `fillText` scaling even when the font is not in the special exact-outline path.
+- Whole-word `projectedWidth / measuredWidth` scaling can compress the terminal and leading side bearings that visually separate adjacent PDF runs, which makes copied text look correct while the canvas collapses spaces like `Thisisastrue...`.
+- Reason: on `pdfs/Paper reduced size (2).pdf` page 4, the semantic text already had `This is as true...`, but the visible canvas lost the spaces because word-by-word browser layout squeezed already-tight Cambria runs; per-glyph placement matches the PDF advance model more closely.
+
+### 2026-03-30: Display glyph spans must preserve invisible PDF glyph slots, while semantic spans should strip them
+
+- Some PDFs encode visual spacing or undecoded glyph positions as hidden glyph codes inside ordinary text-show strings instead of plain Unicode spaces. Those slots still consume advance in the PDF text matrix even when they decode to `''`.
+- The display stream must keep those empty-text glyph spans so canvas rendering can leave real gaps at the original PDF positions. Dropping them makes the renderer stretch visible letters across the hidden slot or collapse the gap entirely.
+- The semantic stream should strip those empty glyph spans before smoothing and lexical repair so search, selection, and HTML reconstruction do not inherit invisible PDF noise.
+- Reason: `pdfs/Paper reduced size (2).pdf` page 1 and page 4 use hidden Cambria glyph slots inside runs like `alc` and `This`; preserving those slots on `displayTextItems` fixed visible word spacing without letting raw PDF control codes leak into semantic text consumers.
+
 ## Recent Examples
 
 - `pdfs/IRA contribution IRS.pdf`

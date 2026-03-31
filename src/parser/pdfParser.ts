@@ -647,13 +647,15 @@ export class PDFParser {
         colorSpaces: new Map()
       };
       const extracted = this.parseTextStream(rawContent, fallbackContext, objects, rawContent);
-      const finalizedTextItems = this.finalizeTextItems(this.assignPaintOrder(extracted.textItems));
+      const displayTextItems = this.prepareDisplayTextItems(extracted.textItems);
+      const finalizedTextItems = this.finalizeTextItems(this.assignPaintOrder(this.cloneTextItems(extracted.textItems)));
       if (extracted.textItems.length === 0 && extracted.imageItems.length === 0) {
         return { pages: [] };
       }
 
       pages.push({
         number: 1,
+        displayTextItems,
         textItems: finalizedTextItems,
         imageItems: extracted.imageItems,
         lineItems: extracted.lineItems,
@@ -704,7 +706,8 @@ export class PDFParser {
 
       const finalizedPage: PDFPage = {
         number: pageNumber,
-        textItems: this.finalizeTextItems(this.assignPaintOrder(textItems)),
+        displayTextItems: this.prepareDisplayTextItems(textItems),
+        textItems: this.finalizeTextItems(this.assignPaintOrder(this.cloneTextItems(textItems))),
         imageItems,
         lineItems,
         rectItems,
@@ -2450,7 +2453,8 @@ export class PDFParser {
       glyphUnitAdvances,
       font,
       normalizedFontSize,
-      state
+      state,
+      true
     );
 
     return {
@@ -2467,7 +2471,8 @@ export class PDFParser {
     glyphUnitAdvances: number[],
     font: FontResource | undefined,
     fontSize: number,
-    state: TextState
+    state: TextState,
+    preserveInvisibleGlyphs = false
   ): PDFGlyphSpan[] | undefined {
     if (glyphTexts.length === 0 || glyphTexts.length !== glyphUnitAdvances.length) {
       return undefined;
@@ -2481,8 +2486,8 @@ export class PDFParser {
     const spans: PDFGlyphSpan[] = [];
 
     for (let index = 0; index < glyphTexts.length; index += 1) {
-      const text = glyphTexts[index];
-      if (!text) {
+      const text = glyphTexts[index] ?? '';
+      if (!preserveInvisibleGlyphs && text.length === 0) {
         continue;
       }
 
@@ -4219,13 +4224,43 @@ export class PDFParser {
   }
 
   private finalizeTextItems(items: PDFTextItem[]): PDFTextItem[] {
-    const refinedItems = this.refineTextBounds(items);
+    const refinedItems = this.refineTextBounds(this.stripInvisibleGlyphSpans(items));
     if (!this.shouldSmoothText()) {
       return refinedItems;
     }
     const smoothedItems = mergeTextRuns(refinedItems);
     const boundaryRefinedItems = refineLexicalTextBoundaries(smoothedItems);
     return this.refineTextBounds(boundaryRefinedItems);
+  }
+
+  private prepareDisplayTextItems(items: PDFTextItem[]): PDFTextItem[] {
+    return this.refineTextBounds(this.assignPaintOrder(this.cloneTextItems(items)));
+  }
+
+  private stripInvisibleGlyphSpans(items: PDFTextItem[]): PDFTextItem[] {
+    for (const item of items) {
+      if (!item.glyphSpans || item.glyphSpans.length === 0) {
+        continue;
+      }
+
+      const visibleSpans = item.glyphSpans.filter((span) => span.text.length > 0);
+      item.glyphSpans = visibleSpans.length > 0 ? visibleSpans : undefined;
+    }
+
+    return items;
+  }
+
+  private cloneTextItems(items: PDFTextItem[]): PDFTextItem[] {
+    return items.map((item) => ({
+      ...item,
+      bounds: { ...item.bounds },
+      baselineStart: item.baselineStart ? { ...item.baselineStart } : undefined,
+      baselineEnd: item.baselineEnd ? { ...item.baselineEnd } : undefined,
+      glyphSpans: item.glyphSpans?.map((span) => ({ ...span })),
+      type3Glyphs: item.type3Glyphs?.slice(),
+      fontMatrix: item.fontMatrix ? [...item.fontMatrix] as [number, number, number, number, number, number] : undefined,
+      clipPaths: cloneClipPaths(item.clipPaths)
+    }));
   }
 
   private shouldSmoothText(): boolean {

@@ -208,6 +208,9 @@ export interface PDFPathItem {
 
 export interface PDFPage {
   number: number;
+  /** PDF-faithful text items used for visual rendering. */
+  displayTextItems?: PDFTextItem[];
+  /** Semantic text items used for search, selection, and HTML/layout reconstruction. */
   textItems: PDFTextItem[];
   imageItems: PDFImageItem[];
   lineItems: PDFLineItem[];

@@ -178,6 +178,136 @@ describe('CanvasRenderer', () => {
     expect(operations.some((entry) => entry.startsWith('fillText:World'))).toBe(true);
   });
 
+  it('renders display text items instead of semantic text items when both are present', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          displayTextItems: [
+            {
+              text: 'How best to explain',
+              bounds: { minX: 100, minY: 720, maxX: 220, maxY: 732 },
+              fontSize: 12
+            }
+          ],
+          textItems: [
+            {
+              text: 'How best to expla in',
+              bounds: { minX: 100, minY: 720, maxX: 220, maxY: 732 },
+              fontSize: 12
+            }
+          ],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 612, height: 792 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    expect(contextImpl.operations.some((entry) => entry.startsWith('fillText:How best to explain'))).toBe(true);
+    expect(contextImpl.operations.some((entry) => entry.startsWith('fillText:How best to expla in'))).toBe(false);
+  });
+
+  it('renders embedded-font multi-glyph display runs through glyph spans instead of whole-word fillText', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          displayTextItems: [
+            {
+              text: 'This',
+              bounds: { minX: 100, minY: 720, maxX: 124, maxY: 732 },
+              baselineStart: { x: 100, y: 723 },
+              baselineEnd: { x: 124, y: 723 },
+              font: 'Cambria',
+              fontResourceKey: 'TT4',
+              fontSize: 12,
+              glyphSpans: [
+                { text: 'T', advance: 6 },
+                { text: 'h', advance: 6 },
+                { text: 'i', advance: 4 },
+                { text: 's', advance: 8 }
+              ]
+            }
+          ],
+          textItems: [],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 612, height: 792 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    expect(contextImpl.operations.some((entry) => entry.startsWith('fillText:This'))).toBe(false);
+    expect(contextImpl.operations.filter((entry) => entry.startsWith('fillText:T')).length).toBeGreaterThan(0);
+    expect(contextImpl.operations.filter((entry) => entry.startsWith('fillText:h')).length).toBeGreaterThan(0);
+    expect(contextImpl.operations.filter((entry) => entry.startsWith('fillText:i')).length).toBeGreaterThan(0);
+    expect(contextImpl.operations.filter((entry) => entry.startsWith('fillText:s')).length).toBeGreaterThan(0);
+  });
+
+  it('keeps invisible PDF glyph-slot advances when rendering embedded-font display runs', () => {
+    const contextImpl = new MockContext();
+    const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);
+
+    const layout: PDFLayout = {
+      pages: [
+        {
+          number: 1,
+          displayTextItems: [
+            {
+              text: 'ab',
+              bounds: { minX: 100, minY: 720, maxX: 130, maxY: 732 },
+              baselineStart: { x: 100, y: 723 },
+              baselineEnd: { x: 130, y: 723 },
+              font: 'Cambria',
+              fontResourceKey: 'TT4',
+              fontSize: 12,
+              glyphSpans: [
+                { text: 'a', advance: 10 },
+                { text: '', advance: 10 },
+                { text: 'b', advance: 10 }
+              ]
+            }
+          ],
+          textItems: [],
+          imageItems: [],
+          lineItems: [],
+          rectItems: [],
+          size: { width: 612, height: 792 }
+        }
+      ]
+    };
+
+    const document = new PDFDocument(layout);
+    const renderer = new CanvasRenderer({ pagePadding: 8, scale: 1 });
+
+    renderer.render(canvas, document, 1);
+
+    expect(contextImpl.operations.some((entry) => entry === 'translate:20,0')).toBe(true);
+    expect(contextImpl.operations.some((entry) => entry === 'translate:10,0')).toBe(false);
+    expect(contextImpl.operations.filter((entry) => entry.startsWith('fillText:a@'))).toHaveLength(1);
+    expect(contextImpl.operations.filter((entry) => entry.startsWith('fillText:b@'))).toHaveLength(1);
+    expect(contextImpl.operations.some((entry) => entry.startsWith('fillText:ab@'))).toBe(false);
+  });
+
   it('renders CMEX brace construction fragments as vector braces', () => {
     const contextImpl = new MockContext();
     const canvas = new MockCanvas(contextImpl as unknown as CanvasRenderingContext2D);

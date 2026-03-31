@@ -433,8 +433,8 @@ function isLikelySplitWord(prevText: string, nextText: string, gap: number, avgC
 }
 
 function formsProtectedCompactToken(prevText: string, nextText: string): boolean {
-  const left = prevText.replace(/\s+$/, '');
-  const right = nextText.replace(/^\s+/, '');
+  const left = getTrailingCompactTokenCandidate(prevText);
+  const right = getLeadingCompactTokenCandidate(nextText);
   if (left.length === 0 || right.length === 0) {
     return false;
   }
@@ -444,12 +444,34 @@ function formsProtectedCompactToken(prevText: string, nextText: string): boolean
   }
 
   const combined = `${left}${right}`;
+  if (/^(?:[A-Za-z]\.){2,}[A-Za-z]?$/.test(combined)) {
+    return true;
+  }
+
+  if (/^(?:https?:\/\/|www\.)/i.test(combined)) {
+    return true;
+  }
+
+  if (combined.includes('@')) {
+    return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+(?:\.[A-Za-z0-9.-]+)*$/i.test(combined);
+  }
+
+  if (!/^[a-z0-9]/.test(right)) {
+    return false;
+  }
+
   return (
-    /(?:https?:\/\/|www\.|[A-Za-z0-9._%+-]+(?:\.[A-Za-z0-9._%+-]+)+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)/i.test(
-      combined
-    ) &&
+    /[A-Za-z0-9._%+-]+(?:\.[A-Za-z0-9._%+-]+)+(?:\/[^\s]*)?/i.test(combined) &&
     !/\s/.test(combined)
   );
+}
+
+function getTrailingCompactTokenCandidate(text: string): string {
+  return text.replace(/\s+$/, '').match(/(\S+)$/)?.[1] ?? '';
+}
+
+function getLeadingCompactTokenCandidate(text: string): string {
+  return text.replace(/^\s+/, '').match(/^(\S+)/)?.[1] ?? '';
 }
 
 function prependSpaceIfNeeded(previousText: string, currentText: string): string {

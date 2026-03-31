@@ -38,4 +38,23 @@ describe('resolveRenderableGlyphSpanRun', () => {
 
     expect(resolveRenderableGlyphSpanRun(item)).toBeUndefined();
   });
+
+  it('preserves invisible PDF glyph slots so display rendering can keep their advances', () => {
+    const item = createTextItem({
+      text: 'ab',
+      font: 'Cambria',
+      fontResourceKey: 'TT4',
+      fontSize: 12,
+      glyphSpans: [
+        { text: 'a', advance: 5 },
+        { text: '', advance: 4 },
+        { text: 'b', advance: 5 }
+      ]
+    });
+
+    const run = resolveRenderableGlyphSpanRun(item, { force: true });
+
+    expect(run?.spans).toEqual(item.glyphSpans);
+    expect(run?.totalAdvance).toBe(14);
+  });
 });

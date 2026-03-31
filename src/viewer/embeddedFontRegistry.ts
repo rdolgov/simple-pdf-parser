@@ -1,6 +1,10 @@
 import type { PDFEmbeddedFontResource, PDFTextItem } from '../types.js';
 import { PDFDocument } from '../pdfDocument.js';
-import { canRegisterEmbeddedFontsInCurrentScope, getGlobalFontSet } from './canvasEnvironment.js';
+import {
+  canRegisterEmbeddedFontsInCurrentScope,
+  getGlobalFontSet,
+  waitForGlobalFontFamilyActivation
+} from './canvasEnvironment.js';
 import { shouldPreferType1COutlineRendering } from './diagramFontPolicy.js';
 import { buildSyntheticOpenTypeFromType1C } from './type1COpenTypeBuilder.js';
 import { parseType1CFont } from './type1CFontProgram.js';
@@ -69,7 +73,7 @@ function collectEmbeddedFontKeysForPages(
       continue;
     }
 
-    for (const item of page.textItems) {
+    for (const item of page.displayTextItems ?? page.textItems) {
       if (!item.fontResourceKey || fontKeys.has(item.fontResourceKey)) {
         continue;
       }
@@ -158,6 +162,7 @@ async function registerEmbeddedFont(
     const fontFace = new FontFace(family, toArrayBuffer(resource.data));
     await fontFace.load();
     getBrowserFontSet()?.add?.(fontFace);
+    await waitForGlobalFontFamilyActivation(family);
     return { family, renderMode: 'text', sourceKind: 'truetype' };
   }
 
@@ -202,6 +207,7 @@ async function registerEmbeddedFont(
     const fontFace = new FontFace(family, toArrayBuffer(synthetic.buffer));
     await fontFace.load();
     getBrowserFontSet()?.add?.(fontFace);
+    await waitForGlobalFontFamilyActivation(family);
     return {
       family,
       renderMode: 'glyph-span',

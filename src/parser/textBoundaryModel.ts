@@ -14,6 +14,10 @@ interface BoundaryPlan {
   words: string[];
 }
 
+interface ScoreWordOptions {
+  ignoreFrequencyEvidence?: boolean;
+}
+
 const COMMON_WORDS = new Set([
   'a', 'about', 'above', 'across', 'after', 'again', 'against', 'all', 'along', 'also',
   'among', 'an', 'and', 'another', 'any', 'are', 'around', 'as', 'at', 'be', 'because',
@@ -25,7 +29,7 @@ const COMMON_WORDS = new Set([
   'the', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'those',
   'therefore', 'through', 'thus', 'to', 'under', 'up', 'use', 'using', 'we',
   'were', 'what', 'when', 'where', 'which', 'while', 'who', 'why', 'with',
-  'way', 'ways',
+  'way', 'ways', 'does',
   'within', 'without', 'would', 'write', 'you'
 ]);
 
@@ -248,9 +252,12 @@ function refineItemText(
   const repairedCapitalizedJoins = repairCapitalizedWordJoins(repairedPunctuation);
   const repairedRecurringPatterns = repairRecurringFrontMatterPatterns(repairedCapitalizedJoins);
   if (!hasSuspiciousSpaces) {
-    const repairedAttachedJoins = repairAttachedWordJoins(repairedRecurringPatterns, fontKey, lexicon);
+    const repairedCapitalizedPrefixes = repairCapitalizedPrefixSplitWords(repairedRecurringPatterns, fontKey, lexicon);
+    const repairedSplitWords = repairLikelySplitWordClusters(repairedCapitalizedPrefixes, fontKey, lexicon);
+    const repairedWeakRuns = repairWeakFragmentRuns(repairedSplitWords, fontKey, lexicon);
+    const repairedAttachedJoins = repairAttachedWordJoins(repairedWeakRuns, fontKey, lexicon);
     const repairedMergedPhrases = repairMergedWordPhrases(repairedAttachedJoins, fontKey, lexicon);
-    return repairDigitWordJoins(repairedMergedPhrases, fontKey, lexicon);
+    return repairUppercaseDigitJoins(repairDigitWordJoins(repairedMergedPhrases, fontKey, lexicon));
   }
 
   const repairedClusters = repairUncertainWordClusters(repairedRecurringPatterns, fontKey, lexicon);
@@ -263,7 +270,7 @@ function refineItemText(
     lexicon
   );
   const repairedMergedPhrases = repairMergedWordPhrases(mergedRuns, fontKey, lexicon);
-  return repairDigitWordJoins(repairedMergedPhrases, fontKey, lexicon);
+  return repairUppercaseDigitJoins(repairDigitWordJoins(repairedMergedPhrases, fontKey, lexicon));
 }
 
 function refineSegment(
@@ -299,9 +306,14 @@ function refineSegment(
   if (originalWords.length === 1) {
     const singleWord = originalWords[0] ?? '';
     if (isProtectedTitleCaseWordToken(singleWord) && !resolveLeadingArticleWords(singleWord, fontKey, lexicon)) {
-      return segment;
+      const leadingCapitalizedWords = resolveLeadingCapitalizedWordPlusLowercaseWords(singleWord, fontKey, lexicon);
+      if (!leadingCapitalizedWords) {
+        return segment;
+      }
+      return `${leadingCapitalizedWords.join(' ')}${trailingWhitespace}`;
     }
     if (
+      resolveLeadingCapitalizedWordPlusLowercaseWords(singleWord, fontKey, lexicon) ||
       resolveCapitalizedCaseBoundaryWords(singleWord, fontKey, lexicon) ||
       resolveAttachedConnectorSuffixWords(singleWord, fontKey, lexicon)
     ) {
@@ -755,6 +767,202 @@ function repairUncertainWordClusters(
   fontKey: string,
   lexicon: BoundaryLexicon
 ): string {
+  return repairWordClusters(text, fontKey, lexicon, isUncertainBoundary);
+}
+
+function repairLikelySplitWordClusters(
+  text: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string {
+  return repairWordClusters(text, fontKey, lexicon, isLikelySplitWordBoundary);
+}
+
+function repairCapitalizedPrefixSplitWords(
+  text: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string {
+  const tokens = tokenizeWordSeparators(text);
+  let changed = false;
+
+  for (let index = 0; index < tokens.length - 2; index += 1) {
+    const previous = tokens[index];
+    const separator = tokens[index + 1];
+    const next = tokens[index + 2];
+    if (
+      previous?.kind !== 'word' ||
+      separator?.kind !== 'sep' ||
+      !/^\s+$/.test(separator.value) ||
+      next?.kind !== 'word' ||
+      !/^[A-Z][a-z]?$/.test(previous.value) ||
+      !/^[a-z]{2,}$/.test(next.value)
+    ) {
+      continue;
+    }
+
+    if (isBackedLexiconWord(next.value, fontKey, lexicon) || isTrustedLexiconWord(next.value.toLowerCase())) {
+      continue;
+    }
+
+    const mergedWord = `${previous.value}${next.value}`;
+    if (!isAcceptedCapitalizedBoundaryWord(mergedWord, fontKey, lexicon)) {
+      continue;
+    }
+
+    tokens.splice(index, 3, { kind: 'word', value: mergedWord });
+    changed = true;
+  }
+
+  return changed ? tokens.map((token) => token.value).join('') : text;
+}
+
+function repairWeakFragmentRuns(
+  text: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string {
+  const tokens = tokenizeWordSeparators(text);
+  let changed = false;
+
+  let replaced = true;
+  while (replaced) {
+    replaced = false;
+
+    for (let start = 0; start < tokens.length; start += 1) {
+      if (tokens[start]?.kind !== 'word') {
+        continue;
+      }
+
+      let replacedAtStart = false;
+      for (const runLength of [5, 4, 3, 2]) {
+        const end = findWordRunEnd(tokens, start, runLength);
+        if (end === -1 || !hasOnlyWhitespaceSeparators(tokens, start, end)) {
+          continue;
+        }
+
+        const words = readWordRun(tokens, start, end);
+        if (!shouldRepairWeakFragmentRun(words, fontKey, lexicon)) {
+          continue;
+        }
+
+        const joined = words.join('');
+        const hasSingleLetterFragment = words.some((word) => word.length === 1);
+        const joinedIsExplicitlyKnown =
+          isTrustedLexiconWord(joined.toLowerCase()) ||
+          isBackedLexiconWord(joined, fontKey, lexicon);
+        if (words.length >= 3 && hasSingleLetterFragment && joinedIsExplicitlyKnown) {
+          tokens.splice(start, end - start + 1, { kind: 'word', value: joined });
+          changed = true;
+          replaced = true;
+          replacedAtStart = true;
+          break;
+        }
+
+        const candidate = findBestAllowedClusterSegmentation(joined, fontKey, lexicon);
+        if (!candidate || candidate.words.length >= words.length) {
+          continue;
+        }
+
+        const originalScore = scoreClusterSegmentation(words, fontKey, lexicon);
+        const candidateMergedWord = candidate.words.length === 1 ? candidate.words[0] : undefined;
+        const candidateIsExplicitlyKnown =
+          candidateMergedWord
+            ? (
+              isTrustedLexiconWord(candidateMergedWord.toLowerCase()) ||
+              isBackedLexiconWord(candidateMergedWord, fontKey, lexicon)
+            )
+            : false;
+        if (
+          candidate.words.length === 1 &&
+          words.length >= 3 &&
+          hasSingleLetterFragment &&
+          candidateIsExplicitlyKnown
+        ) {
+          tokens.splice(start, end - start + 1, ...buildWordTokens(candidate.words));
+          changed = true;
+          replaced = true;
+          replacedAtStart = true;
+          break;
+        }
+
+        const requiredImprovement =
+          candidate.words.length === 1 && words.length >= 3 && hasSingleLetterFragment
+            ? -3
+            : 0.5;
+        if (candidate.score <= originalScore + requiredImprovement) {
+          continue;
+        }
+
+        tokens.splice(start, end - start + 1, ...buildWordTokens(candidate.words));
+        changed = true;
+        replaced = true;
+        replacedAtStart = true;
+        break;
+      }
+
+      if (replacedAtStart) {
+        break;
+      }
+    }
+  }
+
+  return changed ? tokens.map((token) => token.value).join('') : text;
+}
+
+function shouldRepairWeakFragmentRun(
+  words: string[],
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): boolean {
+  if (words.length < 2 || words.length > 5) {
+    return false;
+  }
+
+  if (isLikelyProtectedTitleCasePhrase(words) || words.slice(1).some((word) => /^[A-Z][a-z]+$/.test(word))) {
+    return false;
+  }
+
+  let weakFragmentCount = 0;
+  for (const word of words) {
+    const backed = isBackedLexiconWord(word, fontKey, lexicon) || isTrustedShortBoundaryWord(word);
+    const score = scoreWord(word, fontKey, lexicon);
+    if (word.length === 1) {
+      weakFragmentCount += 1;
+      continue;
+    }
+
+    if (!backed && score < 4) {
+      weakFragmentCount += 1;
+    }
+  }
+
+  if (weakFragmentCount === 0) {
+    return false;
+  }
+
+  if (words.length === 2) {
+    const mergedWord = words.join('');
+    const mergedExplicitlyKnown =
+      isTrustedLexiconWord(mergedWord.toLowerCase()) ||
+      isBackedLexiconWord(mergedWord, fontKey, lexicon);
+    return mergedExplicitlyKnown || weakFragmentCount >= 2 || words.some((word) => word.length === 1);
+  }
+
+  return true;
+}
+
+function repairWordClusters(
+  text: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon,
+  shouldRepairBoundary: (
+    previousWord: string,
+    nextWord: string,
+    fontKey: string,
+    lexicon: BoundaryLexicon
+  ) => boolean
+): string {
   const tokens = tokenizeWordSeparators(text);
   let changed = false;
 
@@ -772,7 +980,7 @@ function repairUncertainWordClusters(
         continue;
       }
 
-      if (!isUncertainBoundary(left.value, right.value, fontKey, lexicon)) {
+      if (!shouldRepairBoundary(left.value, right.value, fontKey, lexicon)) {
         continue;
       }
 
@@ -785,7 +993,7 @@ function repairUncertainWordClusters(
           !previousLeft ||
           !previousRight ||
           !hasOnlyWhitespaceSeparators(tokens, previousLeft.tokenIndex, previousRight.tokenIndex) ||
-          !isUncertainBoundary(previousLeft.value, previousRight.value, fontKey, lexicon)
+          !shouldRepairBoundary(previousLeft.value, previousRight.value, fontKey, lexicon)
         ) {
           break;
         }
@@ -799,7 +1007,7 @@ function repairUncertainWordClusters(
           !nextLeft ||
           !nextRight ||
           !hasOnlyWhitespaceSeparators(tokens, nextLeft.tokenIndex, nextRight.tokenIndex) ||
-          !isUncertainBoundary(nextLeft.value, nextRight.value, fontKey, lexicon)
+          !shouldRepairBoundary(nextLeft.value, nextRight.value, fontKey, lexicon)
         ) {
           break;
         }
@@ -848,6 +1056,30 @@ function repairUncertainWordClusters(
   }
 
   return changed ? tokens.map((token) => token.value).join('') : text;
+}
+
+function isLikelySplitWordBoundary(
+  previousWord: string,
+  nextWord: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): boolean {
+  if (isLikelyProtectedTitleCasePhrase([previousWord, nextWord])) {
+    return false;
+  }
+
+  const mergedWord = `${previousWord}${nextWord}`;
+  const previousBacked = isBackedLexiconWord(previousWord, fontKey, lexicon) || isTrustedShortBoundaryWord(previousWord);
+  const nextBacked = isBackedLexiconWord(nextWord, fontKey, lexicon) || isTrustedShortBoundaryWord(nextWord);
+  const mergedExplicitlyKnown =
+    isTrustedLexiconWord(mergedWord.toLowerCase()) ||
+    isBackedLexiconWord(mergedWord, fontKey, lexicon);
+  if (!mergedExplicitlyKnown || scoreBigram(previousWord, nextWord, fontKey, lexicon) > 0) {
+    return false;
+  }
+
+  return isUncertainBoundary(previousWord, nextWord, fontKey, lexicon) &&
+    (!previousBacked || !nextBacked);
 }
 
 function mergeStrongSplitWordRuns(
@@ -1088,6 +1320,16 @@ function splitAttachedWordToken(
     return leadingArticleWords.join(' ');
   }
 
+  const leadingCapitalizedCommonWords = resolveLeadingCapitalizedCommonWordPlusWords(word, fontKey, lexicon);
+  if (leadingCapitalizedCommonWords) {
+    return leadingCapitalizedCommonWords.join(' ');
+  }
+
+  const leadingCapitalizedWords = resolveLeadingCapitalizedWordPlusLowercaseWords(word, fontKey, lexicon);
+  if (leadingCapitalizedWords) {
+    return leadingCapitalizedWords.join(' ');
+  }
+
   const casedBoundaryWords = resolveCapitalizedCaseBoundaryWords(word, fontKey, lexicon);
   if (casedBoundaryWords) {
     return casedBoundaryWords.join(' ');
@@ -1096,6 +1338,15 @@ function splitAttachedWordToken(
   const connectorSuffixWords = resolveAttachedConnectorSuffixWords(word, fontKey, lexicon);
   if (connectorSuffixWords) {
     return connectorSuffixWords.join(' ');
+  }
+
+  if (isProtectedTitleCaseWordToken(word)) {
+    return word;
+  }
+
+  const mergedPhraseWords = resolvePlausibleMergedPhraseWords(word, fontKey, lexicon);
+  if (mergedPhraseWords) {
+    return mergedPhraseWords.join(' ');
   }
 
   return word;
@@ -1111,15 +1362,143 @@ function resolveCapitalizedCaseBoundaryWords(
   }
 
   const parts = word.split(/(?<=[a-z])(?=[A-Z])/u);
-  if (parts.length < 2 || parts.length > 4) {
+  if (parts.length < 2 || parts.length > 6) {
     return undefined;
   }
 
-  if (parts.some((part) => !isAcceptedCapitalizedBoundaryWord(part, fontKey, lexicon))) {
+  const resolvedParts: string[] = [];
+  for (const part of parts) {
+    const connectorSuffixWords = resolveAttachedConnectorSuffixWords(part, fontKey, lexicon);
+    if (connectorSuffixWords) {
+      resolvedParts.push(...connectorSuffixWords);
+      continue;
+    }
+    if (!isAcceptedCapitalizedBoundaryWord(part, fontKey, lexicon)) {
+      return undefined;
+    }
+    resolvedParts.push(part);
+  }
+
+  return resolvedParts.length >= 2 && resolvedParts.length <= 7 ? resolvedParts : undefined;
+}
+
+function resolveLeadingCapitalizedWordPlusLowercaseWords(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string[] | undefined {
+  if (!/^[A-Z][a-z]{7,}$/.test(word) || /[a-z][A-Z]/.test(word)) {
     return undefined;
   }
 
-  return parts;
+  const originalWordScore = scoreMergedPhraseOriginalWord(word, fontKey, lexicon);
+  let bestWords: string[] | undefined;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (let offset = 4; offset <= word.length - 4; offset += 1) {
+    const left = word.slice(0, offset);
+    const right = word.slice(offset);
+    if (!/^[A-Z][a-z]{3,}$/.test(left) || !/^[a-z]{4,}$/.test(right)) {
+      continue;
+    }
+
+    if (!isAcceptedCapitalizedBoundaryWord(left, fontKey, lexicon)) {
+      continue;
+    }
+
+    if (!isBackedLexiconWord(left, fontKey, lexicon) && left.length < 6) {
+      continue;
+    }
+
+    const rightPlan = findBestSegmentation(right, new Set<number>(), fontKey, lexicon);
+    if (!rightPlan || rightPlan.words.length === 0 || rightPlan.words.length > 3) {
+      continue;
+    }
+
+    if (rightPlan.words.some((candidate) => !isAcceptedMergedPhraseWord(candidate, fontKey, lexicon, true))) {
+      continue;
+    }
+
+    const rightHasAnchoredWord = rightPlan.words.some((candidate) =>
+      isBackedLexiconWord(candidate, fontKey, lexicon) || candidate.length >= 6
+    );
+    if (!rightHasAnchoredWord) {
+      continue;
+    }
+
+    const firstRightWord = rightPlan.words[0];
+    if (!firstRightWord) {
+      continue;
+    }
+
+    const splitScore =
+      scoreWord(left, fontKey, lexicon) +
+      scoreSegmentation(rightPlan.words, new Set<number>(), fontKey, lexicon) +
+      scoreBoundary(left, firstRightWord, false, fontKey, lexicon);
+    if (splitScore <= originalWordScore + 0.25) {
+      continue;
+    }
+
+    if (splitScore > bestScore) {
+      bestScore = splitScore;
+      bestWords = [left, ...rightPlan.words];
+    }
+  }
+
+  return bestWords;
+}
+
+function resolveLeadingCapitalizedCommonWordPlusWords(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string[] | undefined {
+  if (!/^[A-Z][a-z]{3,}$/.test(word) || /[a-z][A-Z]/.test(word)) {
+    return undefined;
+  }
+
+  let bestWords: string[] | undefined;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (let offset = 2; offset <= Math.min(6, word.length - 2); offset += 1) {
+    const leadingWord = word.slice(0, offset);
+    const normalizedLeadingWord = leadingWord.toLowerCase();
+    if (!COMMON_WORDS.has(normalizedLeadingWord) && !TITLE_CASE_CONNECTOR_WORDS.has(normalizedLeadingWord)) {
+      continue;
+    }
+
+    const remainder = word.slice(offset);
+    const remainderPlan = findBestSegmentation(remainder, new Set<number>(), fontKey, lexicon);
+    if (!remainderPlan || remainderPlan.words.length === 0 || remainderPlan.words.length > 6) {
+      continue;
+    }
+
+    if (remainderPlan.words.some((candidate) => !isAcceptedMergedPhraseWord(candidate, fontKey, lexicon, true))) {
+      continue;
+    }
+
+    if (!remainderPlan.words.some((candidate) => isBackedLexiconWord(candidate, fontKey, lexicon) || isTrustedLexiconWord(candidate.toLowerCase()))) {
+      continue;
+    }
+
+    const firstRightWord = remainderPlan.words[0];
+    if (!firstRightWord) {
+      continue;
+    }
+
+    const splitScore =
+      scoreWord(leadingWord, fontKey, lexicon) +
+      scoreSegmentation(remainderPlan.words, new Set<number>(), fontKey, lexicon) +
+      scoreBoundary(leadingWord, firstRightWord, false, fontKey, lexicon);
+    if (splitScore < scoreMergedPhraseOriginalWord(word, fontKey, lexicon) - 0.25) {
+      continue;
+    }
+
+    if (splitScore > bestScore) {
+      bestScore = splitScore;
+      bestWords = [leadingWord, ...remainderPlan.words];
+    }
+  }
+
+  return bestWords;
 }
 
 function resolveAttachedConnectorSuffixWords(
@@ -1182,29 +1561,31 @@ function repairMergedWordPhrases(
     if (
       token?.kind !== 'word' ||
       token.value.length < 8 ||
-      isProtectedTitleCaseWordToken(token.value) ||
       isTrustedLexiconWord(token.value.toLowerCase())
     ) {
       continue;
     }
 
-    const candidate = findBestSegmentation(token.value, new Set<number>(), fontKey, lexicon);
-    if (
-      !candidate ||
-      candidate.words.length < 2 ||
-      candidate.words.length > 4 ||
-      candidate.words.some((word) => !isBackedLexiconWord(word, fontKey, lexicon))
-    ) {
+    const leadingCapitalizedWords = resolveLeadingCapitalizedWordPlusLowercaseWords(token.value, fontKey, lexicon);
+    if (leadingCapitalizedWords) {
+      tokens.splice(index, 1, ...buildWordTokens(leadingCapitalizedWords));
+      changed = true;
+      index += leadingCapitalizedWords.length - 1;
       continue;
     }
 
-    if (candidate.score <= scoreWord(token.value, fontKey, lexicon) + 1) {
+    if (isProtectedTitleCaseWordToken(token.value)) {
       continue;
     }
 
-    tokens.splice(index, 1, ...buildWordTokens(candidate.words));
+    const candidateWords = resolvePlausibleMergedPhraseWords(token.value, fontKey, lexicon);
+    if (!candidateWords) {
+      continue;
+    }
+
+    tokens.splice(index, 1, ...buildWordTokens(candidateWords));
     changed = true;
-    index += candidate.words.length - 1;
+    index += candidateWords.length - 1;
   }
 
   return changed ? tokens.map((token) => token.value).join('') : text;
@@ -1254,6 +1635,10 @@ function repairDigitWordJoins(
   );
 }
 
+function repairUppercaseDigitJoins(text: string): string {
+  return text.replace(/\b([A-Z]{2,})(\d{4,})\b/g, '$1 $2');
+}
+
 function scoreSegmentation(
   words: string[],
   originalBoundaries: Set<number>,
@@ -1278,10 +1663,19 @@ function scoreSegmentation(
   return score;
 }
 
-function scoreWord(word: string, fontKey: string, lexicon: BoundaryLexicon): number {
+function scoreWord(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon,
+  options: ScoreWordOptions = {}
+): number {
   const normalized = word.toLowerCase();
-  const fontCount = lexicon.fontWordCounts.get(fontKey)?.get(normalized) ?? 0;
-  const globalCount = lexicon.globalWordCounts.get(normalized) ?? 0;
+  const fontCount = options.ignoreFrequencyEvidence
+    ? 0
+    : (lexicon.fontWordCounts.get(fontKey)?.get(normalized) ?? 0);
+  const globalCount = options.ignoreFrequencyEvidence
+    ? 0
+    : (lexicon.globalWordCounts.get(normalized) ?? 0);
   const isCommon = COMMON_WORDS.has(normalized);
   const isTechnical = TECHNICAL_WORDS.has(normalized);
   const isSupplemental = SUPPLEMENTAL_TRUSTED_WORDS.has(normalized);
@@ -1395,13 +1789,13 @@ function scoreClusterSegmentation(
 function scoreClusterWord(word: string, fontKey: string, lexicon: BoundaryLexicon): number {
   let score = scoreWord(word, fontKey, lexicon);
 
-  if (!isBackedLexiconWord(word, fontKey, lexicon)) {
+  if (!isAllowedClusterCandidateWord(word, fontKey, lexicon)) {
     score -= 10;
   }
 
-  if (word.length <= 2) {
+  if (word.length <= 2 && !isTrustedShortBoundaryWord(word)) {
     score -= 10;
-  } else if (word.length <= 3) {
+  } else if (word.length <= 3 && !isTrustedShortBoundaryWord(word)) {
     score -= 5;
   }
 
@@ -1640,9 +2034,10 @@ function isTrustedLexiconWord(word: string): boolean {
 }
 
 function containsProtectedUrlLikeText(text: string): boolean {
+  const trimmed = text.trim();
   return (
-    /(?:https?:\/\/|www\.|[A-Za-z0-9._%+-]+\/[A-Za-z0-9._%+-]+)/i.test(text) ||
-    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/.test(text)
+    /^(?:https?:\/\/|www\.|[A-Za-z0-9._%+-]+\/[A-Za-z0-9._%+-]+)/i.test(trimmed) ||
+    /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(trimmed)
   );
 }
 
@@ -1650,11 +2045,14 @@ function shouldPreserveCompactPunctuation(text: string, punctuationOffset: numbe
   const tokenStart = findTokenBoundary(text, punctuationOffset, -1);
   const tokenEnd = findTokenBoundary(text, punctuationOffset + 1, 1);
   const token = text.slice(tokenStart, tokenEnd);
+  const rightChar = text[punctuationOffset + 1] ?? '';
 
   return (
     /:\/\//.test(token) ||
     /^www\./i.test(token) ||
-    /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+(?:\/[^\s]*)?$/.test(token)
+    /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+(?:\.[A-Za-z0-9.-]+)*$/i.test(token) ||
+    (/[a-z0-9]/.test(rightChar) && /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+(?:\/[^\s]*)?$/.test(token)) ||
+    /^(?:[A-Za-z]\.){2,}[A-Za-z]?$/.test(token)
   );
 }
 
@@ -1684,7 +2082,7 @@ function isBackedLexiconWord(word: string, fontKey: string, lexicon: BoundaryLex
 }
 
 function isAllowedClusterCandidateWord(word: string, fontKey: string, lexicon: BoundaryLexicon): boolean {
-  return isBackedLexiconWord(word, fontKey, lexicon) || isTrustedShortBoundaryWord(word);
+  return isAcceptedMergedPhraseWord(word, fontKey, lexicon, true);
 }
 
 function isTrustedShortBoundaryWord(word: string): boolean {
@@ -1934,13 +2332,16 @@ function shouldMergeWordRun(
   const merged = words.join('');
   const normalizedMerged = merged.toLowerCase();
   const mergedScore = scoreWord(merged, fontKey, lexicon);
+  const mergedStructuralScore = isTrustedLexiconWord(normalizedMerged)
+    ? mergedScore
+    : scoreWord(merged, fontKey, lexicon, { ignoreFrequencyEvidence: true });
   const hasWeakFragment = words.some((word) => word.length <= 5 || scoreWord(word, fontKey, lexicon) < 8);
   const isExplicitKnownWord = isTrustedLexiconWord(normalizedMerged);
   const mergedFontCount = lexicon.fontWordCounts.get(fontKey)?.get(normalizedMerged) ?? 0;
   const mergedGlobalCount = lexicon.globalWordCounts.get(normalizedMerged) ?? 0;
   const hasCountBackedMergedWord = mergedFontCount >= 2 || mergedGlobalCount >= 3;
 
-  if (!hasWeakFragment || mergedScore < 9) {
+  if (!hasWeakFragment || mergedStructuralScore < 9) {
     return false;
   }
 
@@ -1960,7 +2361,7 @@ function shouldMergeWordRun(
   }
 
   const originalScore = scoreSegmentation(words, originalBoundaries, fontKey, lexicon);
-  return mergedScore > originalScore + 1.25;
+  return mergedStructuralScore > originalScore + 1.25;
 }
 
 function hasAllCapsAcronymWords(segment: string): boolean {
@@ -2030,14 +2431,19 @@ function resolveLeadingArticleWords(
   fontKey: string,
   lexicon: BoundaryLexicon
 ): string[] | undefined {
-  const leadingArticleMatch = word.match(/^A([a-z]{5,})$/);
+  const leadingArticleMatch = word.match(/^([AI])([a-z]{4,})$/);
   if (!leadingArticleMatch) {
     return undefined;
   }
 
-  const remainder = leadingArticleMatch[1] ?? '';
-  if (isBackedLexiconWord(remainder, fontKey, lexicon)) {
-    return ['A', remainder];
+  const leadingWord = leadingArticleMatch[1] ?? '';
+  const remainder = leadingArticleMatch[2] ?? '';
+  const remainderTrusted = isTrustedLexiconWord(remainder.toLowerCase());
+  const canKeepRemainderWhole =
+    remainderTrusted &&
+    isAcceptedMergedPhraseWord(remainder, fontKey, lexicon, true);
+  if (canKeepRemainderWhole) {
+    return [leadingWord, remainder];
   }
 
   const remainderPlan = findBestSegmentation(remainder, new Set(), fontKey, lexicon);
@@ -2047,15 +2453,132 @@ function resolveLeadingArticleWords(
 
   if (
     remainderPlan.words.some(
-      (candidate) => !isBackedLexiconWord(candidate, fontKey, lexicon) && !isTrustedShortBoundaryWord(candidate)
+      (candidate) => !isAcceptedMergedPhraseWord(candidate, fontKey, lexicon, true)
     )
   ) {
     return undefined;
   }
 
-  if (remainderPlan.score < scoreWord(remainder, fontKey, lexicon) + 1) {
+  if (remainderPlan.score < scoreWord(remainder, fontKey, lexicon, { ignoreFrequencyEvidence: true }) + 0.25) {
     return undefined;
   }
 
-  return ['A', ...remainderPlan.words];
+  if (
+    !isTrustedLexiconWord((remainderPlan.words[0] ?? '').toLowerCase())
+  ) {
+    return undefined;
+  }
+
+  return [leadingWord, ...remainderPlan.words];
+}
+
+function resolvePlausibleMergedPhraseWords(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): string[] | undefined {
+  if (!/^[A-Za-z]{5,}$/.test(word)) {
+    return undefined;
+  }
+
+  const candidate = findBestSegmentation(word, new Set<number>(), fontKey, lexicon);
+  if (!candidate || candidate.words.length < 2 || candidate.words.length > 12) {
+    return undefined;
+  }
+
+  const hasBoundaryCue = hasTrustedBoundaryCue(candidate.words);
+  const hasStrongMultiwordAnchors = hasStrongAnchoredMultiwordPhrase(candidate.words, fontKey, lexicon);
+  if (candidate.words.length > 6 && !hasStrongMultiwordAnchors) {
+    return undefined;
+  }
+
+  if (
+    candidate.words.some((candidateWord) => !isAcceptedMergedPhraseWord(candidateWord, fontKey, lexicon, hasBoundaryCue))
+  ) {
+    return undefined;
+  }
+
+  const originalWordScore = scoreMergedPhraseOriginalWord(word, fontKey, lexicon);
+  const requiredImprovement = hasBoundaryCue || hasStrongMultiwordAnchors ? 0 : 0.5;
+  if (candidate.score <= originalWordScore + requiredImprovement) {
+    return undefined;
+  }
+
+  if (
+    !hasBoundaryCue &&
+    candidate.words.every((candidateWord) => !isBackedLexiconWord(candidateWord, fontKey, lexicon))
+  ) {
+    return undefined;
+  }
+
+  return candidate.words;
+}
+
+function hasTrustedBoundaryCue(words: string[]): boolean {
+  return words.some((word) => {
+    const normalized = word.toLowerCase();
+    return (
+      normalized.length <= 5 &&
+      (COMMON_WORDS.has(normalized) || TITLE_CASE_CONNECTOR_WORDS.has(normalized))
+    );
+  });
+}
+
+function hasStrongAnchoredMultiwordPhrase(
+  words: string[],
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): boolean {
+  let boundaryCueCount = 0;
+  let anchoredWordCount = 0;
+
+  for (const word of words) {
+    const normalized = word.toLowerCase();
+    if (COMMON_WORDS.has(normalized) || TITLE_CASE_CONNECTOR_WORDS.has(normalized)) {
+      boundaryCueCount += 1;
+    }
+    if (isBackedLexiconWord(word, fontKey, lexicon) || isTrustedLexiconWord(normalized)) {
+      anchoredWordCount += 1;
+    }
+  }
+
+  return boundaryCueCount >= 2 && anchoredWordCount >= words.length - 2;
+}
+
+function isAcceptedMergedPhraseWord(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon,
+  allowLooseMediumWord = false
+): boolean {
+  const normalized = word.toLowerCase();
+  if (
+    isTrustedLexiconWord(normalized) ||
+    isBackedLexiconWord(word, fontKey, lexicon) ||
+    isTrustedShortBoundaryWord(word)
+  ) {
+    return true;
+  }
+
+  if (!hasPlausibleWordShape(normalized)) {
+    return false;
+  }
+
+  const structuralScore = scoreWord(word, fontKey, lexicon, { ignoreFrequencyEvidence: true });
+  if (word.length >= 6) {
+    return structuralScore >= 0;
+  }
+
+  return allowLooseMediumWord && word.length >= 4 && structuralScore >= -1.5;
+}
+
+function scoreMergedPhraseOriginalWord(
+  word: string,
+  fontKey: string,
+  lexicon: BoundaryLexicon
+): number {
+  const normalized = word.toLowerCase();
+  return isTrustedLexiconWord(normalized)
+    ? scoreWord(word, fontKey, lexicon)
+    : scoreWord(word, fontKey, lexicon, { ignoreFrequencyEvidence: true });
 }

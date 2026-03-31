@@ -193,6 +193,43 @@ describe('mergeTextRuns', () => {
     expect(merged[0]?.text).toBe('michael.levin@tufts.edu');
   });
 
+  it('preserves compact email tokens even when the surrounding run contains prose and punctuation', () => {
+    const items: PDFTextItem[] = [
+      {
+        text: '*Correspondingauthor: michael.',
+        font: 'Cambria',
+        fontResourceKey: 'F1',
+        fontSize: 12,
+        bounds: { minX: 90.25, minY: 466.79, maxX: 257.4, maxY: 478.79 },
+        baselineStart: { x: 90.25, y: 468.79 },
+        baselineEnd: { x: 257.4, y: 468.79 }
+      },
+      {
+        text: 'levin@tufts.',
+        font: 'Cambria',
+        fontResourceKey: 'F1',
+        fontSize: 12,
+        bounds: { minX: 257.4, minY: 466.79, maxX: 319.21, maxY: 478.79 },
+        baselineStart: { x: 257.4, y: 468.79 },
+        baselineEnd: { x: 319.21, y: 468.79 }
+      },
+      {
+        text: 'edu',
+        font: 'Cambria',
+        fontResourceKey: 'F1',
+        fontSize: 12,
+        bounds: { minX: 319.21, minY: 466.79, maxX: 338.34, maxY: 478.79 },
+        baselineStart: { x: 319.21, y: 468.79 },
+        baselineEnd: { x: 338.34, y: 468.79 }
+      }
+    ];
+
+    const merged = mergeTextRuns(items);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.text).toBe('*Correspondingauthor: michael.levin@tufts.edu');
+  });
+
   it('merges ultra-tight title fragments so later lexical repair can restore missing spaces', () => {
     const items: PDFTextItem[] = [
       {

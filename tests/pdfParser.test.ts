@@ -2,6 +2,37 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { PDFDocument } from '../src/pdfDocument.js';
+import { PDFParser } from '../src/parser/pdfParser.js';
+import type { PDFPage } from '../src/types.js';
+
+function loadReducedPaperFirstPage(): PDFPage {
+  const fixtureUrl = new URL('../pdfs/Paper reduced size (2).pdf', import.meta.url);
+  const buffer = readFileSync(fixtureUrl);
+  const stop = Symbol('stop');
+  let capturedPage: PDFPage | undefined;
+
+  try {
+    new PDFParser({
+      onPageParsed: ({ page, pageNumber }) => {
+        if (pageNumber !== 1) {
+          return;
+        }
+        capturedPage = page;
+        throw stop;
+      }
+    }).parse(buffer);
+  } catch (error) {
+    if (error !== stop) {
+      throw error;
+    }
+  }
+
+  if (!capturedPage) {
+    throw new Error('Failed to parse reduced-paper page 1.');
+  }
+
+  return capturedPage;
+}
 
 describe('PDFParser', () => {
   it('extracts text items with bounds from a simple PDF page', () => {
@@ -513,6 +544,24 @@ ET
 
     expect(indexRun).toBeDefined();
     expect(indexRun!.glyphSpans?.map((span) => span.text)).toEqual(['1', ' ', '2', ' ', '3']);
+  });
+
+  it('preserves invisible glyph slots on display text items while keeping semantic glyph spans clean', () => {
+    const page = loadReducedPaperFirstPage();
+
+    const displayKeywordFragment = page.displayTextItems?.find(
+      (item) =>
+        item.text === 'alc' &&
+        item.bounds.minY >= 368 &&
+        item.bounds.maxY <= 381 &&
+        item.fontResourceKey === 'TT4'
+    );
+    const semanticKeywordLine = page.textItems.find((item) => item.text.includes('basal cognition, diverse intelligence'));
+
+    expect(displayKeywordFragment).toBeDefined();
+    expect(displayKeywordFragment!.glyphSpans?.some((span) => span.text === '' && span.advance > 0)).toBe(true);
+    expect(semanticKeywordLine).toBeDefined();
+    expect(semanticKeywordLine!.glyphSpans?.some((span) => span.text === '')).toBe(false);
   });
 
   it('decodes the MacKay page-18 product operator instead of a literal CMEX fallback Y', () => {

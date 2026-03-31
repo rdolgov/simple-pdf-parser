@@ -222,4 +222,123 @@ describe('text boundary model', () => {
     expect(refined[3]?.text).toBe('Genetics and');
     expect(refined[4]?.text).toBe('McKay');
   });
+
+  it('repairs sentence punctuation without breaking compact domains or abbreviations', () => {
+    const items: PDFTextItem[] = [
+      buildItem(
+        'attention mechanism.We propose a new simple network architecture',
+        Array.from('attention mechanism.We propose a new simple network architecture').map((char) => ({
+          text: char,
+          advance: char === ' ' ? 2.5 : 5
+        })),
+        220
+      ),
+      buildItem(
+        'entirely.Experiments on two machine translation tasks',
+        Array.from('entirely.Experiments on two machine translation tasks').map((char) => ({
+          text: char,
+          advance: char === ' ' ? 2.5 : 5
+        })),
+        200
+      ),
+      buildItem('www.cambridge.org', Array.from('www.cambridge.org').map((char) => ({ text: char, advance: 5 })), 180),
+      buildItem('U.S.A', Array.from('U.S.A').map((char) => ({ text: char, advance: 5 })), 160)
+    ];
+
+    const refined = refineLexicalTextBoundaries(items);
+
+    expect(refined[0]?.text).toBe('attention mechanism. We propose a new simple network architecture');
+    expect(refined[1]?.text).toBe('entirely. Experiments on two machine translation tasks');
+    expect(refined[2]?.text).toBe('www.cambridge.org');
+    expect(refined[3]?.text).toBe('U.S.A');
+  });
+
+  it('repairs reduced-paper front-matter joins without re-breaking merged emails', () => {
+    const items: PDFTextItem[] = [
+      buildItem('WyssInstituteforBiologicallyInspiredEngineering', wordGlyphs('WyssInstituteforBiologicallyInspiredEngineering'), 140),
+      buildItem('Correspondingauthor', wordGlyphs('Correspondingauthor'), 120),
+      buildItem('Runningtitle', wordGlyphs('Runningtitle'), 100),
+      buildItem('Ingressingcognitivepatterns', wordGlyphs('Ingressingcognitivepatterns'), 80),
+      buildItem('basalcognition', wordGlyphs('basalcognition'), 60),
+      buildItem('diverseintelligence', wordGlyphs('diverseintelligence'), 40),
+      buildItem(
+        'MA02155',
+        Array.from('MA02155').map((char) => ({
+          text: char,
+          advance: 5
+        })),
+        20
+      ),
+      buildItem('*Correspondingauthor: michael.levin@tufts.edu', wordGlyphs('*Correspondingauthor: michael.levin@tufts.edu'), 0)
+    ];
+
+    const refined = refineLexicalTextBoundaries(items);
+
+    expect(refined[0]?.text).toBe('Wyss Institute for Biologically Inspired Engineering');
+    expect(refined[1]?.text).toBe('Corresponding author');
+    expect(refined[2]?.text).toBe('Running title');
+    expect(refined[3]?.text).toBe('Ingressing cognitive patterns');
+    expect(refined[4]?.text).toBe('basal cognition');
+    expect(refined[5]?.text).toBe('diverse intelligence');
+    expect(refined[6]?.text).toBe('MA 02155');
+    expect(refined[7]?.text).toBe('*Corresponding author: michael.levin@tufts.edu');
+  });
+
+  it('merges capitalized prefix splits and weak fragment runs without collapsing normal prose spacing', () => {
+    const items: PDFTextItem[] = [
+      buildItem('A ffiliations', wordGlyphs('A ffiliations'), 180),
+      buildItem('I ngressing', wordGlyphs('I ngressing'), 160),
+      buildItem('expla in', wordGlyphs('expla in'), 150),
+      buildItem('Regulariz at i on', wordGlyphs('Regulariz at i on'), 140),
+      buildItem('convolut i on', wordGlyphs('convolut i on'), 120),
+      buildItem('Experiments on two machine translation tasks', wordGlyphs('Experiments on two machine translation tasks'), 100)
+    ];
+
+    const refined = refineLexicalTextBoundaries(items);
+
+    expect(refined[0]?.text).toBe('Affiliations');
+    expect(refined[1]?.text).toBe('Ingressing');
+    expect(refined[2]?.text).toBe('explain');
+    expect(refined[3]?.text).toBe('Regularization');
+    expect(refined[4]?.text).toBe('convolution');
+    expect(refined[5]?.text).toBe('Experiments on two machine translation tasks');
+  });
+
+  it('repairs reduced-paper body-text joins across first-person verbs and long Platonic-space chains', () => {
+    const items: PDFTextItem[] = [
+      buildItem('Ipresent', wordGlyphs('Ipresent'), 140),
+      buildItem('Ihypothesize', wordGlyphs('Ihypothesize'), 120),
+      buildItem('Ihavesaid', wordGlyphs('Ihavesaid'), 100),
+      buildItem('Ithinktheorganicistpositionisright', wordGlyphs('Ithinktheorganicistpositionisright'), 80),
+      buildItem('Incontrast', wordGlyphs('Incontrast'), 60),
+      buildItem('Thelatent', wordGlyphs('Thelatent'), 40),
+      buildItem('physicalworld', wordGlyphs('physicalworld'), 20),
+      buildItem('richlatent', wordGlyphs('richlatent'), 0),
+      buildItem('intothePlatonicspaceallowing', wordGlyphs('intothePlatonicspaceallowing'), -20),
+      buildItem(
+        'fishinginregionsofPlatonicspacewehaveneverexploredbefore',
+        wordGlyphs('fishinginregionsofPlatonicspacewehaveneverexploredbefore'),
+        -40
+      ),
+      buildItem(
+        'interfacesandthestructurestowhichtheypointinthePlatonicspace',
+        wordGlyphs('interfacesandthestructurestowhichtheypointinthePlatonicspace'),
+        -60
+      )
+    ];
+
+    const refined = refineLexicalTextBoundaries(items);
+
+    expect(refined[0]?.text).toBe('I present');
+    expect(refined[1]?.text).toBe('I hypothesize');
+    expect(refined[2]?.text).toBe('I have said');
+    expect(refined[3]?.text).toBe('I think the organicist position is right');
+    expect(refined[4]?.text).toBe('In contrast');
+    expect(refined[5]?.text).toBe('The latent');
+    expect(refined[6]?.text).toBe('physical world');
+    expect(refined[7]?.text).toBe('rich latent');
+    expect(refined[8]?.text).toBe('into the Platonic space allowing');
+    expect(refined[9]?.text).toBe('fishing in regions of Platonic space we have never explored before');
+    expect(refined[10]?.text).toBe('interfaces and the structures to which they point in the Platonic space');
+  });
 });

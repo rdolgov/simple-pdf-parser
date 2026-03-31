@@ -36,6 +36,22 @@ export function resolveCanvasFontFallback(fontName: string | undefined, fallback
     return `${MONOSPACE_FALLBACK_STACK}, ${fallbackFamily}`;
   }
 
+  if (
+    /cambria|times|georgia|garamond|palatino|bookman|baskerville|bodoni|didot|constantia|minion|serif/.test(
+      normalized
+    )
+  ) {
+    return `${SERIF_FALLBACK_STACK}, ${fallbackFamily}`;
+  }
+
+  if (/arial|helvetica|calibri|verdana|tahoma|sans/.test(normalized)) {
+    return `${SANS_FALLBACK_STACK}, ${fallbackFamily}`;
+  }
+
+  if (/courier|consolas|menlo|monaco|mono/.test(normalized)) {
+    return `${MONOSPACE_FALLBACK_STACK}, ${fallbackFamily}`;
+  }
+
   if (/symbol|dingbat|emoji|icons?/.test(normalized)) {
     return `${SYMBOL_FALLBACK_STACK}, ${fallbackFamily}`;
   }

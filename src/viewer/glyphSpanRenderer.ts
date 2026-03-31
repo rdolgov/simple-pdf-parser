@@ -21,7 +21,7 @@ export function resolveRenderableGlyphSpanRun(
     return undefined;
   }
 
-  const spans = item.glyphSpans.filter((span) => span.text.length > 0 && Number.isFinite(span.advance) && span.advance > 0);
+  const spans = item.glyphSpans.filter((span) => Number.isFinite(span.advance) && span.advance > 0);
   if (spans.length === 0 || (!options.force && spans.length <= 1)) {
     return undefined;
   }

@@ -274,6 +274,114 @@ describe('PDF layout integration', () => {
     });
   });
 
+  it('restores reduced-paper affiliation and keyword spacing on page 1', () => {
+    const document = loadPaperReducedDocument();
+    const page = document.getPage(1);
+    const layout = convertLayoutToHtml({ pages: document.pages });
+
+    expect(page).toBeDefined();
+
+    const pageText = page!.textItems.map((item) => item.text).join('\n');
+    const htmlPage = layout.pages[0];
+    const pageParagraphText = htmlPage.content
+      .flatMap((block) => block.type === 'paragraph' ? [block.text] : [])
+      .join('\n');
+
+    expect(pageText).toContain('Allen Discovery Center at Tufts University, Medford, MA 02155, USA.');
+    expect(pageText).toContain('Wyss Institute for Biologically Inspired Engineering, Harvard University, Boston,');
+    expect(pageText).toContain('MA 02115, USA.');
+    expect(pageText).toContain('*Corresponding author: michael.levin@tufts.edu');
+    expect(pageText).toContain('Running title');
+    expect(pageText).toContain('Ingressing cognitive patterns');
+    expect(pageText).toContain('basal cognition, diverse intelligence, forms, developmental');
+    expect(pageText).not.toContain('WyssInstituteforBiologicallyInspiredEngineering');
+    expect(pageText).not.toContain('Correspondingauth or');
+    expect(pageText).not.toContain('Runningtitle');
+    expect(pageText).not.toContain('basalcogn it i on');
+    expect(pageText).not.toContain('diverseintelligence');
+    expect(pageParagraphText).toContain('Wyss Institute for Biologically Inspired Engineering');
+    expect(pageParagraphText).toContain('*Corresponding author: michael.levin@tufts.edu');
+    expect(pageParagraphText).toContain('Running title: Ingressing cognitive patterns');
+    expect(pageParagraphText).toContain('Keywords: basal cognition, diverse intelligence, forms, developmental');
+  });
+
+  it('restores reduced-paper body-text spacing across later prose pages', () => {
+    const document = loadPaperReducedDocument();
+    const page2 = document.getPage(2);
+    const page5 = document.getPage(5);
+    const page13 = document.getPage(13);
+    const page20 = document.getPage(20);
+    const page26 = document.getPage(26);
+    const page31 = document.getPage(31);
+    const page34 = document.getPage(34);
+
+    expect(page2).toBeDefined();
+    expect(page5).toBeDefined();
+    expect(page13).toBeDefined();
+    expect(page20).toBeDefined();
+    expect(page26).toBeDefined();
+    expect(page31).toBeDefined();
+    expect(page34).toBeDefined();
+
+    const page2Text = page2!.textItems.map((item) => item.text).join('\n');
+    const page5Text = page5!.textItems.map((item) => item.text).join('\n');
+    const page13Text = page13!.textItems.map((item) => item.text).join('\n');
+    const page20Text = page20!.textItems.map((item) => item.text).join('\n');
+    const page26Text = page26!.textItems.map((item) => item.text).join('\n');
+    const page31Text = page31!.textItems.map((item) => item.text).join('\n');
+    const page34Text = page34!.textItems.map((item) => item.text).join('\n');
+
+    expect(page2Text).toContain('I present a sketch of a framework and research roadmap');
+    expect(page2Text).toContain('I explore the implications of the following');
+    expect(page2Text).toContain('I propose');
+    expect(page2Text).toContain('I hypothesize');
+    expect(page2Text).toContain('physical world');
+    expect(page2Text).toContain('Platonic space');
+    expect(page2Text).toContain('latent space');
+    expect(page2Text).toContain('key regions');
+    expect(page2Text).not.toContain('Ipresent');
+    expect(page2Text).not.toContain('Iexplore');
+    expect(page2Text).not.toContain('Ipropose');
+    expect(page2Text).not.toContain('Ihypothesize');
+    expect(page2Text).not.toContain('physicalworld');
+    expect(page2Text).not.toContain('Platonicspace');
+    expect(page2Text).not.toContain('latentspace');
+    expect(page2Text).not.toContain('keyregions');
+
+    expect(page5Text).toContain('I make no effort to hew close to the specific');
+    expect(page5Text).toContain('that seem the most helpful for driving forward advances in research');
+    expect(page5Text).toContain('physical world');
+    expect(page5Text).toContain('that life takes. These');
+    expect(page5Text).not.toContain('Imake');
+    expect(page5Text).not.toContain('thatseemthe');
+    expect(page5Text).not.toContain('physicalworld');
+    expect(page5Text).not.toContain('thatlife');
+
+    expect(page13Text).toContain('non-physical latent space of patterns');
+    expect(page13Text).toContain('In contrast, I propose a');
+    expect(page13Text).toContain('rich latent space of patterns');
+    expect(page13Text).not.toContain('Incontrast');
+    expect(page13Text).not.toContain('Iproposea');
+    expect(page13Text).not.toContain('richlatent');
+
+    expect(page20Text).toContain('What does this model mean, in practical terms? The latent space is known to');
+    expect(page20Text).toContain('entry-point in to the Platonic space');
+    expect(page20Text).not.toContain('Thelatent');
+    expect(page20Text).not.toContain('intothePlatonicspace');
+
+    expect(page26Text).toContain('I think the organicist position is right');
+    expect(page26Text).not.toContain('Ithinktheorganicistpositionisright');
+
+    expect(page31Text).toContain('fishing in regions of Platonic space we have never explored before');
+    expect(page31Text).toContain('physical world');
+    expect(page31Text).not.toContain('fishinginregionsofPlatonicspacewehaveneverexploredbefore');
+
+    expect(page34Text).toContain('interfaces and the structures to which they point in the Platonic space.');
+    expect(page34Text).toContain('physical world.');
+    expect(page34Text).not.toContain('interfacesandthestructurestowhichtheypointinthePlatonicspace');
+    expect(page34Text).not.toContain('physicalworld');
+  });
+
   it('keeps word2vec page-1 title-case names and title words intact', () => {
     const document = loadWordEmbeddingsDocument();
     const page = document.getPage(1);
@@ -292,6 +400,34 @@ describe('PDF layout integration', () => {
     expect(pageText).not.toContain('KaiChen');
     expect(pageText).not.toContain('GregCorr a do');
     expect(pageText).not.toContain('JeffreyDe an');
+  });
+
+  it('restores abstract sentence spacing and hyphenated line joins on the transformer paper front matter', () => {
+    const document = loadAttentionPaperDocument();
+    const page = document.getPage(1);
+    const layout = convertLayoutToHtml({ pages: document.pages });
+
+    expect(page).toBeDefined();
+
+    const pageText = page!.textItems.map((item) => item.text).join('\n');
+    const abstractBlock = layout.pages[0]?.content.find(
+      (block) => block.type === 'paragraph' && block.text.startsWith('The dominant sequence transduction models')
+    );
+
+    expect(pageText).toContain('mechanism. We propose');
+    expect(pageText).toContain('entirely. Experiments');
+    expect(pageText).not.toContain('mechanism.We');
+    expect(pageText).not.toContain('entirely.Experiments');
+    expect(abstractBlock).toMatchObject({
+      type: 'paragraph'
+    });
+
+    if (abstractBlock?.type === 'paragraph') {
+      expect(abstractBlock.text).toContain('attention mechanism. We propose');
+      expect(abstractBlock.text).toContain('convolutions entirely. Experiments');
+      expect(abstractBlock.text).toContain('English-to-German translation task');
+      expect(abstractBlock.text).not.toContain('English- to-German');
+    }
   });
 
   it('assigns deeper bounds to TeX radical glyphs before rendering', () => {

@@ -337,7 +337,7 @@ function collectParagraph(
   }
 
   const mergedBounds = mergeBounds(paragraphLines.map((line) => line.bounds));
-  const text = paragraphLines.map((line) => line.text.trim()).join(' ');
+  const text = joinParagraphLines(paragraphLines);
   const spans = paragraphLines.flatMap((line) => line.spans);
   const averageFont = spans.reduce((sum, span) => sum + (span.fontSize ?? estimateSpanFontSize(span)), 0);
   const fontAverage = spans.length > 0 ? averageFont / spans.length : fontStats.average;
@@ -604,4 +604,36 @@ function mergeAndOrderBlocks(
     return compareNumbers(a.bounds.minX, b.bounds.minX);
   });
   return combined;
+}
+
+function joinParagraphLines(lines: InternalLine[]): string {
+  let result = '';
+
+  for (const line of lines) {
+    const trimmed = line.text.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    if (!result) {
+      result = trimmed;
+      continue;
+    }
+
+    if (shouldJoinHyphenatedParagraphLine(result, trimmed)) {
+      result += trimmed;
+      continue;
+    }
+
+    result += ` ${trimmed}`;
+  }
+
+  return result;
+}
+
+function shouldJoinHyphenatedParagraphLine(previousText: string, nextText: string): boolean {
+  const normalizedPrevious = previousText.trimEnd();
+  const normalizedNext = nextText.trimStart();
+
+  return /[A-Za-z]-$/.test(normalizedPrevious) && /^[a-z]/.test(normalizedNext);
 }
