@@ -2,6 +2,18 @@
 
 Lightweight TypeScript library for extracting text runs and basic layout metadata from PDF files without third-party parsing dependencies. The focus is on a modular architecture that can evolve toward full PDF specification coverage.
 
+## Immersive PDF viewer
+
+I have a long list of papers I want to read, including some outside my field. Often I can follow the paper until one equation, paragraph, or table slows me down. I want to understand that part and then pick up the author's argument where I left off. This browser viewer is an experiment in putting that help right next to the original page.
+
+![A research paper with a saved conversation beside a passage about model dimensions, a diagram explaining the output layer, and a sortable comparison table with chart controls.](docs/immersive-pdf-viewer.png)
+
+- **Discuss a passage.** Ask a question about a specific section, follow up in the same thread, and return to the saved conversation later. In the screenshot, I asked why the paper uses 512 dimensions.
+- **Explore a figure or table.** Ask for a visual explanation of a difficult passage, sort a table by a column, or switch to a chart to see how the values compare.
+- **Find the source of an answer.** Ask a question about the whole document. The viewer uses retrieval-augmented generation (RAG) to find relevant passages and answer with citations. Select a citation to jump to the passage and see it highlighted.
+
+I'd like to extend this to more parts of a paper and to other document formats, so readers can explore unfamiliar material while keeping the author's original work in view.
+
 ## Getting Started
 
 ```bash
